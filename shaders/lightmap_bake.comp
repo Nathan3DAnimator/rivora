@@ -1,0 +1,168 @@
+#version 460
+// The lightmap bake (gi_bake.c): the GI itself, left to converge. The atlas's texels are the surface cache's (gi_cache.c:
+// charts sized by the largest face, points pushed in from the edges, the atlas steps per texel).
+// pc.pass 2 (once): which texels are inside another mesh (a quarter of 16 rays see backs: a wall's end buried in the next
+// wall, the foot of a wall under the floor) and the walls around each texel (short rays along the atlas axes: a wall
+// standing on the surface; gi.glsl atlas_read never takes a texel's light past one).
+// pc.pass 0: a few cosine-distributed rays per valid texel, against the Static meshes only; a hit is lit by the lights
+// (shadow rays) and by the lightmap itself where it has one (the bounces add up pass after pass: multiple bounce, at
+// the texel's detail, not the 2 m probes' blur), else by the probes; a miss sees the sky. Rays that meet backs are not
+// counted (as dark they darkened the corners).
+// pc.pass 1: the running mean into the lightmap images (L0: E / pi, premultiplied by validity; L1: the luminance-weighted
+// mean direction; the walls).
+#include "common.glsl"
+#include "weather.glsl"
+#include "gi.glsl"
+#include "atmosphere.glsl"
+#include "rt.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 3) uniform sampler2D u_probe_irr;
+layout(set = 0, binding = 4) uniform sampler2D u_probe_dist;
+layout(set = 0, binding = 9) uniform sampler2D u_lightmap0;
+layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D u_lm0;
+layout(set = 0, binding = 12, rgba16f) uniform writeonly image2D u_lm1;
+layout(set = 0, binding = 39, rgba16f) uniform writeonly image2D u_lmwalls;
+
+// pos + covered, normal + valid, the world step of one texel along the atlas x, along y, the walls
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer GBuf { vec4 v[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer AccumBuf { vec4 v[]; }; // rgb+count, dir+lum
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BakeParams {
+    uvec2 gbuf, accum;
+    uint width, height, samples_done, rays;
+};
+#define GB 5u
+
+uint hash(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+float rnd(inout uint s) { s = hash(s); return float(s >> 8) / 16777216.0; }
+
+mat3 basis(vec3 n) {
+    vec3 t = abs(n.z) < 0.999 ? normalize(cross(vec3(0, 0, 1), n)) : vec3(1, 0, 0);
+    return mat3(t, cross(n, t), n);
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    BakeParams bp = BakeParams(pc.instances);
+    uint pass = pc.pass & 15u; // (Q16) the band's first row above: a bake in the game does the atlas a band at a time
+    uvec2 px = gl_GlobalInvocationID.xy + uvec2(0u, pc.pass >> 4);
+    if (px.x >= bp.width || px.y >= bp.height) return;
+    uint idx = px.y * bp.width + px.x;
+    GBuf g = GBuf(bp.gbuf);
+    AccumBuf acc = AccumBuf(bp.accum);
+    vec4 pv = g.v[idx * GB], nv = g.v[idx * GB + 1u];
+
+    if (pass == 2u) {
+        if (pv.w == 0.0) return;
+        vec3 n = normalize(nv.xyz);
+        mat3 tbn = basis(n);
+        uint back = 0u;
+        for (uint r = 0u; r < 16u; r++) { // stratified cosine directions
+            float u1 = (float(r >> 2) + 0.5) / 4.0, u2 = (float(r & 3u) + 0.5) / 4.0 + 0.125 * float(r >> 2);
+            float rr = sqrt(u1), ph = 6.2831853 * u2;
+            vec3 d = tbn * vec3(rr * cos(ph), rr * sin(ph), sqrt(max(1.0 - u1, 0.0)));
+            Hit h = trace_closest_mask(f, pv.xyz + n * 1.0, d, 1e6, RT_MASK_STATIC);
+            if (h.hit && !h.front) back++;
+        }
+        g.v[idx * GB + 1u].w = back * 4u > 16u ? 0.0 : 1.0;
+        // the walls: a ray along each atlas axis, 1 cm above the surface, one and a half texels long
+        vec3 du = g.v[idx * GB + 2u].xyz, dv = g.v[idx * GB + 3u].xyz;
+        vec4 walls = vec4(0.0);
+        for (int k = 0; k < 4; k++) {
+            vec3 ax = k < 2 ? du : dv;
+            float len = length(ax);
+            if (len < 1e-4) continue;
+            float tmax = 1.5 * len;
+            Hit h = trace_closest_mask(f, pv.xyz + n * 1.0, ax / len * ((k & 1) == 0 ? 1.0 : -1.0), tmax, RT_MASK_STATIC);
+            if (h.hit) walls[k] = 1.0 - (h.front ? h.t / tmax : 0.0); // a back: started inside, the wall is right here
+        }
+        g.v[idx * GB + 4u] = walls;
+        return;
+    }
+
+    if (pass == 0u) {
+        if (pv.w == 0.0 || nv.w == 0.0) return;
+        vec3 n = normalize(nv.xyz);
+        mat3 tbn = basis(n);
+        uint seed = hash(idx * 9781u + pc.pad * 6271u + hash(f.frame_index)) | 1u; // pc.pad: the samples done so far
+        vec4 sum = vec4(0.0), dir = vec4(0.0);
+        for (uint r = 0u; r < bp.rays; r++) {
+            float u1 = rnd(seed), u2 = rnd(seed), rr = sqrt(u1), ph = 6.2831853 * u2;
+            vec3 d = tbn * vec3(rr * cos(ph), rr * sin(ph), sqrt(max(1.0 - u1, 0.0)));
+            Hit h = trace_closest_mask(f, pv.xyz + n * 1.0, d, 1e6, RT_MASK_STATIC);
+            vec3 L;
+            if (!h.hit) {
+                L = sky_clouds(f, d, false) * f.gi_params.y;
+            } else if (!h.front) {
+                continue; // the inside of another mesh: not light, not darkness
+            } else {
+                vec3 diff = h.base * (1.0 - h.metal);
+                vec3 e = direct_irradiance_mask(f, h.pos, h.normal, RT_MASK_STATIC) / PI;
+                Instance hi = InstanceBuf(f.instances).i[h.inst];
+                if ((hi.ids.y & INST_LIGHTMAP) != 0u) {
+                    // its indirect light only past 10 cm: in a concave corner two walls' texels a centimeter apart read
+                    // each other's (gi_cache.comp does the same)
+                    if (h.t > 10.0) e += lightmap_read(u_lightmap0, hi.lightmap_st, h.uv2) * GI_LOAD;
+                } else if ((f.gi_flags & GI_PROBES) != 0u) {
+                    e += probe_irradiance(f, u_probe_irr, u_probe_dist, h.pos, h.normal, -d);
+                }
+                L = diff * e + ((f.gi_flags & GI_NO_EMISSIVE) != 0u ? vec3(0.0) : h.glow); // (a Lighting Level's bake: the base has it)
+            }
+            L = min(L, vec3(32.0 / pre_exposure(f))); // fireflies: 32 on screen
+            float lum = dot(L, vec3(0.2126, 0.7152, 0.0722));
+            sum += vec4(L, 1.0);
+            dir += vec4(d * lum, lum);
+        }
+        acc.v[idx * 2u] += sum;
+        acc.v[idx * 2u + 1u] += dir;
+        return;
+    }
+
+    // pass 1: the mean, premultiplied by validity (atlas_read weighs it: the gutters and the buried texels stay out).
+    // Denoised over the texels of the same surface (same plane and normal, no wall between, valid), the kernel sized by the
+    // rays averaged so far: wide and strong while they are few (a Preview bake, a room lit through one opening: its noise
+    // read as smoky blotches), narrow once converged; a neighbour much brighter or darker than the noise allows weighs
+    // less (a shadow's edge stays). The light of a wall's far side, another island of the atlas or a buried texel never enters.
+    float valid = pv.w != 0.0 && nv.w != 0.0 ? 1.0 : 0.0;
+    vec4 s = acc.v[idx * 2u], d = acc.v[idx * 2u + 1u];
+    vec3 l0 = s.w > 0.0 ? s.rgb / s.w : vec3(0.0);
+    vec3 l1 = d.w > 0.0 ? d.xyz / d.w : vec3(0.0); // its length: how directional the light is
+    if (s.w <= 0.0) valid = 0.0; // every ray met backs
+    if (valid > 0.0) {
+        vec3 n = normalize(nv.xyz);
+        vec4 walls = g.v[idx * GB + 4u];
+        float tl = max(length(g.v[idx * GB + 2u].xyz), length(g.v[idx * GB + 3u].xyz));
+        float spp = max(s.w, 1.0);
+        int R = spp < 700.0 ? 4 : spp < 1600.0 ? 3 : 2;
+        float var = spp < 700.0 ? 5.0 : spp < 1600.0 ? 3.0 : 1.8; // the gaussian's variance (texels²)
+        float lp = dot(l0, vec3(0.2126, 0.7152, 0.0722));
+        float tol = max(lp, 1e-5) * (12.0 / sqrt(spp)) + 1e-5; // the mean's noise (a ray through an opening: several times the mean)
+        vec4 sum = vec4(l0, 1.0);
+        float reach = (float(R) + 1.0) * tl;
+        for (int y = -R; y <= R; y++)
+            for (int x = -R; x <= R; x++) {
+                if (x == 0 && y == 0) continue;
+                // a wall within 1.5 texels on that side: nothing past it
+                float wx = x > 0 ? walls.x : walls.y, wy = y > 0 ? walls.z : walls.w;
+                if ((wx > 0.0 && float(abs(x)) >= 1.5 * (1.0 - wx)) || (wy > 0.0 && float(abs(y)) >= 1.5 * (1.0 - wy))) continue;
+                ivec2 q = ivec2(px) + ivec2(x, y);
+                if (q.x < 0 || q.y < 0 || q.x >= int(bp.width) || q.y >= int(bp.height)) continue;
+                uint qi = uint(q.y) * bp.width + uint(q.x);
+                vec4 qp = g.v[qi * GB], qn = g.v[qi * GB + 1u], qs = acc.v[qi * 2u];
+                if (qp.w == 0.0 || qn.w == 0.0 || qs.w <= 0.0) continue;
+                vec3 dp = qp.xyz - pv.xyz;
+                if (dot(qn.xyz, n) < 0.9 || abs(dot(dp, n)) > 0.5 * tl + 0.5 || dot(dp, dp) > reach * reach) continue;
+                vec3 lq = qs.rgb / qs.w;
+                float dl = (dot(lq, vec3(0.2126, 0.7152, 0.0722)) - lp) / tol;
+                float wgt = exp(-float(x * x + y * y) / (2.0 * var)) / (1.0 + dl * dl);
+                sum += vec4(lq, 1.0) * wgt;
+            }
+        l0 = sum.rgb / sum.w;
+    }
+    imageStore(u_lm0, ivec2(px), vec4(l0 * GI_STORE * valid, valid));
+    imageStore(u_lm1, ivec2(px), vec4(l1, 1.0));
+    imageStore(u_lmwalls, ivec2(px), pv.w != 0.0 ? g.v[idx * GB + 4u] : vec4(0.0));
+}

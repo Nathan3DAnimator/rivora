@@ -1,0 +1,7 @@
+Fontes do editor (Q1, notas-dev/temas.md), todas sob a SIL Open Font License 1.1 (OFL-*.txt nesta pasta):
+- Inter (Rasmus Andersson) - Inter-Regular.ttf e Inter-SemiBold.ttf: a interface.
+- Sora (Jonathan Barnbrook, Julian Moncada) - Sora-SemiBold.ttf: titulos.
+- JetBrains Mono (JetBrains) - JetBrainsMono-Regular.ttf: codigo e numeros.
+Origem: github.com/google/fonts (ofl/inter, ofl/sora, ofl/jetbrainsmono), fontes variaveis instanciadas
+(fontTools varLib.instancer: Inter wght 400/600 opsz 14, Sora wght 600, JetBrains Mono wght 400) e reduzidas ao
+latim (U+0020-017F, pontuacao, setas, formas geometricas). Embutidas no executavel pelo tools/embed_bin.cmake.

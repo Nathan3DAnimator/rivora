@@ -1,0 +1,211 @@
+#version 460
+// The particles' simulation and cull (particles.c): a thread per slot of an emitter. Its birth comes from its slot (particles.glsl
+// p_birth): a new one is spawned where the emitter's shape says, an old one moves by the forces of this frame's dt.
+// The pool is the emitter's own range; nothing else is read or written (no atomics, no free list).
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#include "common.glsl"
+#include "particles.glsl"
+
+layout(local_size_x = 64) in;
+
+// A divergence-free field (the curl of sines: swirls without sources or sinks), cheap enough for millions
+vec3 curl_field(vec3 p, float s, float t) {
+    vec3 q = p * s;
+    vec3 a = vec3(sin(q.y + t) * cos(q.z * 1.3), sin(q.z - t * 0.7) * cos(q.x * 1.1), sin(q.x + t * 1.3) * cos(q.y * 0.9));
+    // the curl of (a.x, a.y, a.z) as a potential: its partial derivatives by hand
+    float dax_dy = cos(q.y + t) * cos(q.z * 1.3), dax_dz = -1.3 * sin(q.y + t) * sin(q.z * 1.3);
+    float day_dz = cos(q.z - t * 0.7) * cos(q.x * 1.1), day_dx = -1.1 * sin(q.z - t * 0.7) * sin(q.x * 1.1);
+    float daz_dx = cos(q.x + t * 1.3) * cos(q.y * 0.9), daz_dy = -0.9 * sin(q.x + t * 1.3) * sin(q.y * 0.9);
+    return vec3(daz_dy - day_dz, dax_dz - daz_dx, day_dx - dax_dy);
+}
+
+// A point of the emitter's shape (its space) and the direction away from it (the outward velocity, a mesh's normal)
+void spawn_shape(Emitter e, vec4 r, vec4 r2, out vec3 p, out vec3 outward) {
+    uint s = e.shape_kind;
+    p = vec3(0.0), outward = vec3(0.0, 0.0, 1.0);
+    if (s == PSHAPE_SPHERE) {
+        float z = r.x * 2.0 - 1.0, phi = r.y * 6.2831853, rr = sqrt(max(1.0 - z * z, 0.0));
+        outward = vec3(rr * cos(phi), rr * sin(phi), z);
+        p = outward * e.shape_p.x * pow(r.z, 1.0 / 3.0) * (e.shape_p.y > 0.5 ? 0.0 : 1.0) + outward * (e.shape_p.y > 0.5 ? e.shape_p.x : 0.0);
+    } else if (s == PSHAPE_BOX) {
+        p = (vec3(r.x, r.y, r.z) * 2.0 - 1.0) * e.shape_p.xyz;
+        outward = normalize(p + vec3(1e-3));
+    } else if (s == PSHAPE_CONE) { // along +Z, the angle around it
+        float a = radians(e.shape_p.x) * sqrt(r.x), phi = r.y * 6.2831853;
+        outward = vec3(sin(a) * cos(phi), sin(a) * sin(phi), cos(a));
+        p = outward * e.shape_p.y * r.z;
+    } else if (s == PSHAPE_DISC) {
+        float rad = e.shape_p.x * sqrt(r.x), phi = r.y * 6.2831853;
+        p = vec3(rad * cos(phi), rad * sin(phi), 0.0);
+        outward = vec3(0.0, 0.0, 1.0);
+    } else if (s == PSHAPE_CYLINDER) { // around +Z, from 0 to its height; on its side when surface only
+        float rad = e.shape_p.x * (e.shape_p.z > 0.5 ? 1.0 : sqrt(r.x)), phi = r.y * 6.2831853;
+        outward = vec3(cos(phi), sin(phi), 0.0);
+        p = vec3(outward.xy * rad, e.shape_p.y * r.z);
+    } else if (s == PSHAPE_TORUS) { // a ring around +Z: a point in (or on) its tube
+        float phi = r.y * 6.2831853, th = r.z * 6.2831853, rr = e.shape_p.y * (e.shape_p.z > 0.5 ? 1.0 : sqrt(r.x));
+        vec3 ring = vec3(cos(phi), sin(phi), 0.0);
+        outward = ring * cos(th) + vec3(0.0, 0.0, sin(th));
+        p = ring * e.shape_p.x + outward * rr;
+    } else if (s >= PSHAPE_MESH_FACES && s <= PSHAPE_MESH_VOLUME && e.shape_tris > 0u) { // a triangle by area (the cumulative areas), a point in it
+        ShapeBuf sb = ShapeBuf(e.shape);
+        uint lo = 0u, hi = e.shape_tris - 1u;
+        while (lo < hi) {
+            uint mid = (lo + hi) >> 1u;
+            if (sb.t[mid].a.w < r.x) lo = mid + 1u;
+            else hi = mid;
+        }
+        ShapeTri t = sb.t[lo];
+        outward = normalize(cross(t.b.xyz - t.a.xyz, t.c.xyz - t.a.xyz) + vec3(0.0, 0.0, 1e-6));
+        if (s == PSHAPE_MESH_VERTS) {
+            p = r.y < 0.333 ? t.a.xyz : r.y < 0.666 ? t.b.xyz : t.c.xyz;
+        } else {
+            float u = r.y, v = r.z;
+            if (u + v > 1.0) u = 1.0 - u, v = 1.0 - v;
+            p = t.a.xyz + (t.b.xyz - t.a.xyz) * u + (t.c.xyz - t.a.xyz) * v;
+            if (s == PSHAPE_MESH_VOLUME) p = mix(e.shape_p.xyz, p, pow(r2.w, 1.0 / 3.0)); // (inside: toward its center)
+        }
+    }
+}
+
+void spawn(Emitter e, uint i, uint k, float age, inout Particle q) {
+    vec4 r = p_rand4(e.seed, i, k), r2 = p_rand4(e.seed ^ 0xA511E9B3u, i, k), r3 = p_rand4(e.seed ^ 0x63D83595u, i, k);
+    vec3 p, outward;
+    spawn_shape(e, r2, r3, p, outward);
+    // the velocity: the direction in a cone, its speed less up to the random part, outward, along a mesh's normal
+    vec3 d = normalize(e.vel_dir.xyz + vec3(0.0, 0.0, 1e-6));
+    float ca = radians(e.vel_p.x) * sqrt(r3.x), phi = r3.y * 6.2831853;
+    vec3 tx = normalize(abs(d.z) < 0.99 ? cross(d, vec3(0.0, 0.0, 1.0)) : cross(d, vec3(1.0, 0.0, 0.0))), ty = cross(d, tx);
+    vec3 dir = d * cos(ca) + (tx * cos(phi) + ty * sin(phi)) * sin(ca);
+    vec3 v = dir * e.vel_dir.w * (1.0 - e.vel_p.y * r3.z) + outward * e.vel_p.z;
+    if (e.shape_kind >= PSHAPE_MESH_FACES) v += outward * e.vel_p.w;
+    if ((e.flags & PF_LOCAL) == 0u) { // the world's pool: the emitter's place and turn now
+        vec4 q4 = vec4(p, 1.0);
+        p = vec3(dot(e.rows[0], q4), dot(e.rows[1], q4), dot(e.rows[2], q4));
+        v = p_dir_to_world(e, v);
+    }
+    // born age seconds ago: where it is now (gravity's part included)
+    vec3 g = (e.flags & PF_GRAVITY) != 0u ? e.gravity.xyz : vec3(0.0);
+    q.pos = p + v * age + 0.5 * g * age * age;
+    q.vel = v + g * age;
+}
+
+// A slot's frame: born (spawned), moved, or dead. Returns whether it lives (q: its state now)
+bool step(Emitter e, uint i, out Particle q) {
+    ParticleBuf pb = ParticleBuf(e.pool);
+    q = pb.p[e.base + i];
+    float b;
+    uint k;
+    bool born = p_birth(e, i, b, k);
+    vec4 r = born ? p_rand4(e.seed, i, k) : vec4(0.0);
+    float life = p_life(e, r), age = e.time - b;
+    if (!born || age >= life || age < 0.0) {
+        if (q.k != 0xFFFFFFFFu || q.birth > -1e29) { q.k = 0xFFFFFFFFu; q.birth = -1e30; pb.p[e.base + i] = q; }
+        return false;
+    }
+    if (q.k != k || q.birth != b) { // a new birth in this slot
+        q.k = k, q.birth = b;
+        spawn(e, i, k, age, q);
+        pb.p[e.base + i] = q;
+        return true;
+    }
+    float dt = min(e.dt, age);
+    vec3 v = q.vel, a = vec3(0.0);
+    // the forces (the emitter's space when local: gravity and wind turned into it)
+    bool local = (e.flags & PF_LOCAL) != 0u;
+    mat3 to_local = transpose(mat3(normalize(vec3(e.rows[0].x, e.rows[1].x, e.rows[2].x)), normalize(vec3(e.rows[0].y, e.rows[1].y, e.rows[2].y)),
+                                   normalize(vec3(e.rows[0].z, e.rows[1].z, e.rows[2].z))));
+    if ((e.flags & PF_GRAVITY) != 0u) a += local ? to_local * e.gravity.xyz : e.gravity.xyz;
+    if ((e.flags & PF_CURL) != 0u) a += curl_field(q.pos, 1.0 / max(e.curl.y, 1.0), e.time * e.curl.z) * e.curl.x;
+    if ((e.flags & PF_BROWNIAN) != 0u) a += (p_rand4(e.seed ^ floatBitsToUint(e.time), i, k).xyz * 2.0 - 1.0) * e.curl.w;
+    if ((e.flags & PF_VORTEX) != 0u) { // around the axis through the emitter, pulled toward it
+        vec3 c = local ? vec3(0.0) : vec3(e.rows[0].w, e.rows[1].w, e.rows[2].w);
+        vec3 ax = normalize((local ? e.vortex_axis.xyz : p_dir_to_world(e, e.vortex_axis.xyz)) + vec3(0.0, 0.0, 1e-6));
+        vec3 rel = q.pos - c, radial = rel - ax * dot(rel, ax);
+        float rl = length(radial);
+        if (rl > 1e-3) a -= radial / rl * e.vortex.y; // (pulled toward the axis; the turn after the move: an orbit, not a fling)
+    }
+    if ((e.flags & PF_ATTRACT) != 0u) { // toward a point of the emitter (inside its radius), gone within its kill radius
+        vec4 q4 = vec4(e.attract.xyz, 1.0);
+        vec3 c = local ? e.attract.xyz : vec3(dot(e.rows[0], q4), dot(e.rows[1], q4), dot(e.rows[2], q4));
+        vec3 to = c - q.pos;
+        float dl = length(to);
+        if (e.attract2.y > 0.0 && dl < e.attract2.y) { q.k = 0xFFFFFFFFu; q.birth = -1e30; pb.p[e.base + i] = q; return false; }
+        if (dl > 1e-3 && (e.attract2.x <= 0.0 || dl < e.attract2.x)) a += to / dl * e.attract.w;
+    }
+    v += a * dt;
+    if ((e.flags & PF_WIND) != 0u) { // toward the wind's velocity
+        vec3 wv = local ? to_local * e.wind.xyz : e.wind.xyz;
+        v += (wv - v) * (1.0 - exp(-e.wind.w * dt));
+    }
+    if ((e.flags & PF_DRAG) != 0u) v *= exp(-e.gravity.w * dt);
+    if ((e.flags & PF_LIMIT) != 0u) {
+        float sp = length(v);
+        if (e.limits.x > 0.0 && sp > e.limits.x) v *= e.limits.x / sp;
+        else if (sp < e.limits.y && sp > 1e-4) v *= e.limits.y / sp;
+    }
+    vec3 np = q.pos + v * dt;
+    if ((e.flags & PF_VORTEX) != 0u) { // Niagara's Vortex Velocity: the place turned around the axis at the rate (deg/s)
+        vec3 c = local ? vec3(0.0) : vec3(e.rows[0].w, e.rows[1].w, e.rows[2].w);
+        vec3 ax = normalize((local ? e.vortex_axis.xyz : p_dir_to_world(e, e.vortex_axis.xyz)) + vec3(0.0, 0.0, 1e-6));
+        float ang = radians(e.vortex.x) * dt, cs = cos(ang), sn = sin(ang);
+        vec3 rel = np - c;
+        np = c + rel * cs + cross(ax, rel) * sn + ax * dot(ax, rel) * (1.0 - cs);
+    }
+    if ((e.flags & PF_COLLIDE) != 0u && !local && np.z < e.collide.x) { // the ground: bounced (its friction on the slide)
+        if (e.collide.w > 0.5) { q.k = 0xFFFFFFFFu; q.birth = -1e30; pb.p[e.base + i] = q; return false; }
+        np.z = e.collide.x + (e.collide.x - np.z) * e.collide.y;
+        v.z = -v.z * e.collide.y;
+        v.xy *= 1.0 - e.collide.z;
+    }
+    if ((e.flags & PF_KILLBOX) != 0u) {
+        vec3 wp = p_to_world(e, np);
+        bool inside = all(greaterThanEqual(wp, e.killbox_min.xyz)) && all(lessThanEqual(wp, e.killbox_max.xyz));
+        if (inside == (e.killbox_min.w > 0.5)) { q.k = 0xFFFFFFFFu; q.birth = -1e30; pb.p[e.base + i] = q; return false; }
+    }
+    q.pos = np, q.vel = v;
+    pb.p[e.base + i] = q;
+    return true;
+}
+
+// The frame of a slot, then its cull in the same thread (one read and one write of the particle): alive, in the view and
+// over a quarter pixel, into the quad, point or mesh list (a mesh particle small on screen is drawn as a sprite of its
+// color: millions of meshes seen from far cost what sprites cost). Appended a subgroup at a time (one atomic each)
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    Emitter e = EmitterBuf(pc.instances).e;
+    uint i = gl_GlobalInvocationID.x;
+    Particle q;
+    bool alive = i < e.capacity && step(e, i, q);
+    bool sprite = false, mesh = false, point = false;
+    if (alive) {
+        vec4 r = p_rand4(e.seed, i, q.k);
+        float life = p_life(e, r), a = (e.time - q.birth) / max(life, 1e-4);
+        vec3 w = p_to_world(e, q.pos);
+        float size = p_size(e, r, a) * p_speed_size(e, (e.flags & PF_LOCAL) != 0u ? p_dir_to_world(e, q.vel) : q.vel);
+        float rad = size * ((e.flags & PF_MESH) != 0u ? max(e.mesh_scale.w, 1.0) : 1.0);
+        bool inside = true;
+        for (int k = 0; k < 6; k++) inside = inside && dot(f.cull_planes[k].xyz, w) + f.cull_planes[k].w > -rad;
+        float dist = max(length(w - f.camera_pos.xyz), 1.0);
+        float px = view_ortho(f) ? rad * f.cull_params.x : rad / dist * f.cull_params.x;
+        if (inside && px > 0.125 && a < 1.0) {
+            mesh = (e.flags & PF_MESH) != 0u && px >= e.render2.x;
+            point = !mesh && px * 2.0 <= e.point_px && (e.flags & PF_VELOCITY_ALIGN) == 0u; // (its spin would not show)
+            sprite = !mesh && !point;
+        }
+    }
+    UintBuf args = UintBuf(e.args);
+    uvec4 bs = subgroupBallot(sprite), bm = subgroupBallot(mesh), bp = subgroupBallot(point);
+    uint ns = subgroupBallotBitCount(bs), nm = subgroupBallotBitCount(bm), np = subgroupBallotBitCount(bp);
+    uint base_s = 0u, base_m = 0u, base_p = 0u;
+    if (subgroupElect()) {
+        if (ns > 0u) base_s = atomicAdd(args.v[0], ns * 6u) / 6u; // (the quads: 6 vertices each)
+        if (nm > 0u) base_m = atomicAdd(args.v[5], nm);           // (the meshes: an instance each)
+        if (np > 0u) base_p = atomicAdd(args.v[9], np);           // (the points: a vertex each)
+    }
+    base_s = subgroupBroadcastFirst(base_s), base_m = subgroupBroadcastFirst(base_m), base_p = subgroupBroadcastFirst(base_p);
+    if (sprite) UintBuf(e.list_sprite).v[base_s + subgroupBallotExclusiveBitCount(bs)] = i;
+    if (mesh) UintBuf(e.list_mesh).v[base_m + subgroupBallotExclusiveBitCount(bm)] = i;
+    if (point) UintBuf(e.list_point).v[base_p + subgroupBallotExclusiveBitCount(bp)] = i;
+}

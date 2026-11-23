@@ -1,0 +1,79 @@
+#version 460
+// Fire drawn (A14, fire.glsl, fire.c): after the opaque scene and its lights (before the translucent ones), each pixel's
+// ray through every fire's box marched to the scene's depth: the flame's light by its temperature (a black body: dark
+// red at 800 K, orange, yellow-white over 1500 K), the smoke darkening what is behind it and lit by the sun through the
+// smoke before it (the shadow, fire_sim.comp pass 6) and by the sky; the start of the march turned per pixel and frame
+// (TSR averages it). Over the color (pre-exposed): color * transmittance + light.
+#include "common.glsl"
+#include "fire.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 8, rgba16f) uniform image2D o_hdr;
+layout(set = 0, binding = 21) uniform sampler2D u_depth; // (one sample, reversed Z: 0 the far plane)
+
+vec3 world_at(FrameBuf f, vec2 px, vec2 size, float d) {
+    vec4 w = f.tsr_inv * vec4((px / size) * 2.0 - 1.0, d, 1.0);
+    return w.xyz / w.w;
+}
+vec3 to_local(FireInfo F, vec3 p) { return vec3(dot(F.inv[0], vec4(p, 1.0)), dot(F.inv[1], vec4(p, 1.0)), dot(F.inv[2], vec4(p, 1.0))); }
+
+void main() {
+    ivec2 isize = imageSize(o_hdr);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= isize.x || p.y >= isize.y) return;
+    FrameBuf f = FrameBuf(pc.frame);
+    vec2 size = vec2(isize), px = vec2(p) + 0.5;
+    float dep = texelFetch(u_depth, p, 0).r;
+    vec3 o = world_at(f, px, size, 1.0), far = world_at(f, px, size, 0.5);
+    vec3 dir = normalize(far - o);
+    float tmax = dep > 0.0 ? length(world_at(f, px, size, dep) - o) : 1e8;
+    FireVec4 B = FireVec4(pc.vertices);
+    uint nf = pc.pass;
+    vec3 L = vec3(0.0);
+    float Tr = 1.0;
+    float jit = fract(52.9829189 * fract(dot(px + float(f.frame_index & 63u) * vec2(47.0, 17.0), vec2(0.06711056, 0.00583715))));
+    int sun_i = int(f.sun_radiance.w);
+    vec3 sun = sun_i >= 0 ? f.lights[sun_i].radiance : vec3(0.0);
+    vec3 amb = f.sky_params.x > 0.0 ? sh_irradiance(f, vec3(0.0, 0.0, 1.0)) / PI : vec3(0.0);
+    for (uint k = 0u; k < nf && k < 16u; k++) {
+        FireInfo F = FireInfoBuf(pc.instances).f[k];
+        // the ray in the grid's cells (cubic: one scale), its box [0, dims]
+        vec3 lo = to_local(F, o), ld = to_local(F, o + dir) - lo;
+        float sc = length(ld); // (cm of the actor's space per cm of the world's)
+        // (the box: x, y centered on the actor, z from a fifth of its height below it: the actor, its light, inside the flame)
+        vec3 half_w = vec3(float(F.dims.x) * 0.5, float(F.dims.y) * 0.5, float(F.dims.z) * 0.2) * F.cell;
+        vec3 co = (lo + half_w) / F.cell, cd = ld / F.cell;
+        vec3 inv = 1.0 / vec3(abs(cd.x) > 1e-9 ? cd.x : 1e-9, abs(cd.y) > 1e-9 ? cd.y : 1e-9, abs(cd.z) > 1e-9 ? cd.z : 1e-9);
+        vec3 t0 = (vec3(0.0) - co) * inv, t1 = (vec3(F.dims.xyz) - co) * inv;
+        vec3 tn = min(t0, t1), tx = max(t0, t1);
+        float a = max(max(tn.x, tn.y), max(tn.z, 0.0)), b = min(min(tx.x, tx.y), min(tx.z, tmax));
+        if (b <= a) continue;
+        uint N = fire_n(F), field = F.dims.w + 2u * N + (1u - uint(F.cur + 0.5)) * N; // (this frame's result)
+        float cm_per_t = 1.0; // (t is in world cm)
+        int steps = clamp(int((b - a) * sc / (F.cell * 0.75)), 8, 96);
+        float dt = (b - a) / float(steps);
+        float ds = dt * cm_per_t;
+        vec3 sunc = F.sun.w > 0.5 ? sun : vec3(0.0);
+        for (int s = 0; s < steps; s++) {
+            float t = a + (float(s) + jit) * dt;
+            vec4 v = fire_sample(B, F, field, co + cd * t);
+            float sig = v.y * F.look.y; // the smoke's extinction (1/cm)
+            float T = v.x;
+            // the flame: its soot glowing as a black body; real flames' soot sits at 1200-1900 K (the gas's hotter cores
+            // are clear), so the light is the soot's: clamped there, a dim red at the edges, orange, yellow at the core
+            float flame = smoothstep(650.0, 1300.0, T);
+            float Te = clamp(T, 900.0, 1900.0);
+            vec3 e = flame > 0.0 ? blackbody(Te) * (F.look.x * 0.1 * min(blackbody_level(Te), 4.0) * flame) : vec3(0.0); // (nits a cm)
+            vec3 scat = sig * F.look.z * (sunc * v.w / (4.0 * PI) + amb * 0.25);
+            float tr = exp(-sig * ds);
+            // (the light of this step, through the part of it that stays: e and scat integrated over the step)
+            vec3 src = e + scat;
+            L += Tr * src * (sig > 1e-6 ? (1.0 - tr) / sig : ds);
+            Tr *= tr;
+            if (Tr < 0.003) break;
+        }
+    }
+    if (Tr >= 0.9999 && dot(L, L) == 0.0) return;
+    vec4 h = imageLoad(o_hdr, p);
+    imageStore(o_hdr, p, vec4(min(h.rgb * Tr + L * pre_exposure(f), vec3(60000.0)), h.a));
+}

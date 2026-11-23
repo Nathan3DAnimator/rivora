@@ -1,0 +1,13 @@
+# (2026-11-23) --import-folder's test: no texture named: Barrel_BaseColor, _Normal, _ORM beside it
+mtllib barrel.mtl
+o Barrel
+v 0 0 0
+v 1 0 0
+v 1 1 0
+v 0 1 0
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 1
+usemtl M_Barrel
+f 1/1 2/2 3/3 4/4

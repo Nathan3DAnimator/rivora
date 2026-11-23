@@ -1,0 +1,50 @@
+// (Q8, notas-dev/fisica.md "Corpos rígidos profissionais") The descriptions of the rigid bodies', joints' and Physical
+// Materials' controls (the same form as ui_tips_table.c; a file of its own so the branches don't collide).
+#include "ui_tips.h"
+
+#define T(label, en, pt) { label, { en, pt } }
+
+const UiTip g_ui_tips_q8[] = {
+    T("Physical Material", "The body's Physical Material (an asset: friction, bounce, density, how they combine): over Friction and Restitution above; its density gives the mass when Mass is 0.", "O Material Físico do corpo (um asset: atrito, quique, densidade, como se combinam): vale sobre Atrito e Restituição acima; a densidade dá a massa quando Massa é 0."),
+    T("Use CCD", "Continuous collision: the body is swept from where it was to where it goes each step and stops at the first wall, however thin (bullets, fast balls). Bodies faster than half their size a step are swept against the level anyway.", "Colisão contínua: o corpo é varrido de onde estava até onde vai a cada passo e para na primeira parede, por mais fina que seja (balas, bolas rápidas). Corpos mais rápidos que metade do tamanho por passo já são varridos contra o cenário."),
+    T("Max Angular Velocity (0: any)", "The fastest it may spin (degrees a second; 0: no limit but the engine's).", "O mais rápido que pode girar (graus por segundo; 0: sem limite além do da engine)."),
+    T("Cone and Twist", "A ball joint held inside a cone (Swing 1 x Swing 2) with a twist limit: shoulders, necks, chains.", "Uma junta esférica dentro de um cone (Balanço 1 x Balanço 2) com limite de torção: ombros, pescoços, correntes."),
+    T("6DOF", "Physics Constraint whole: each of the six axes Free, Limited or Locked, soft limits, linear and angular drives.", "O Physics Constraint inteiro: cada um dos seis eixos Livre, Limitado ou Travado, limites moles, drives linear e angular."),
+    T("Linear X", "How the constraint lets body 1 move along its X: Free, Limited (within Linear Limit) or Locked.", "Como a junta deixa o corpo 1 andar no X dela: Livre, Limitado (dentro do Limite Linear) ou Travado."),
+    T("Linear Y", "How the constraint lets body 1 move along its Y: Free, Limited or Locked.", "Como a junta deixa o corpo 1 andar no Y dela: Livre, Limitado ou Travado."),
+    T("Linear Z", "How the constraint lets body 1 move along its Z: Free, Limited or Locked.", "Como a junta deixa o corpo 1 andar no Z dela: Livre, Limitado ou Travado."),
+    T("Twist (X)", "The turn around the constraint's X: Free, Limited (Twist Limit) or Locked.", "O giro em volta do X da junta: Livre, Limitado (Limite de Torção) ou Travado."),
+    T("Swing 1 (Z)", "The swing around the constraint's Z: Free, Limited (Swing 1 Limit) or Locked. Both swings Limited: a cone.", "O balanço em volta do Z da junta: Livre, Limitado (Limite de Balanço 1) ou Travado. Os dois balanços Limitados: um cone."),
+    T("Swing 2 (Y)", "The swing around the constraint's Y: Free, Limited (Swing 2 Limit) or Locked.", "O balanço em volta do Y da junta: Livre, Limitado (Limite de Balanço 2) ou Travado."),
+    T("Linear Limit", "How far body 1 may go each way along its Limited linear axes (cm).", "Até onde o corpo 1 pode ir para cada lado nos eixos lineares Limitados (cm)."),
+    T("Twist Limit", "The most it may twist each way around X (degrees; Limited, or the cone's twist).", "O máximo que pode torcer para cada lado em volta do X (graus; Limitado, ou a torção do cone)."),
+    T("Swing 1 Limit", "The cone's half angle around Z (degrees): the two swings make an ellipse.", "O meio ângulo do cone em volta do Z (graus): os dois balanços formam uma elipse."),
+    T("Swing 2 Limit", "The cone's half angle around Y (degrees).", "O meio ângulo do cone em volta do Y (graus)."),
+    T("Soft Linear Limit", "The linear limits are springs: past them it is pulled back (Limit Frequency, Limit Damping) instead of stopped dead.", "Os limites lineares viram molas: passando deles é puxado de volta (Frequência e Amortecimento do Limite) em vez de parar seco."),
+    T("Soft Angular Limit", "The angular limits (twist, cone) are springs.", "Os limites angulares (torção, cone) viram molas."),
+    T("Limit Frequency", "The soft limits' spring (Hz): higher is stiffer.", "A mola dos limites moles (Hz): maior é mais dura."),
+    T("Limit Damping", "The soft limits' damping ratio: 1 comes back without bouncing, less bounces.", "O amortecimento dos limites moles: 1 volta sem quicar, menos quica."),
+    T("Linear Position Drive", "A spring pulls body 1 to Position Target in the constraint's frame (Drive Frequency, Drive Damping: mass-free).", "Uma mola puxa o corpo 1 até a Posição Alvo no quadro da junta (Frequência e Amortecimento do Drive: sem depender da massa)."),
+    T("Position Target", "Where the linear drive pulls body 1 (cm, in the constraint's frame).", "Para onde o drive linear puxa o corpo 1 (cm, no quadro da junta)."),
+    T("Linear Velocity Drive", "Drives body 1 at Velocity Target (cm/s): a motor along the free axes.", "Leva o corpo 1 na Velocidade Alvo (cm/s): um motor nos eixos livres."),
+    T("Velocity Target", "The linear drive's speed (cm/s, in the constraint's frame).", "A velocidade do drive linear (cm/s, no quadro da junta)."),
+    T("Max Force (0: any)", "The most the linear drive pushes (kg cm/s2; 0: as strong as needed).", "O máximo que o drive linear empurra (kg cm/s2; 0: o quanto precisar)."),
+    T("Angular Orientation Drive", "A spring turns body 1 to Orientation Target (a SLERP drive).", "Uma mola gira o corpo 1 até a Orientação Alvo (um drive SLERP)."),
+    T("Orientation Target", "The angular drive's goal: pitch, yaw, roll in the constraint's frame (degrees).", "O alvo do drive angular: pitch, yaw, roll no quadro da junta (graus)."),
+    T("Angular Velocity Drive", "Spins body 1 at Angular Velocity Target: a motor on the free angles.", "Gira o corpo 1 na Velocidade Angular Alvo: um motor nos ângulos livres."),
+    T("Angular Velocity Target", "The angular drive's speed around the constraint's X, Y, Z (deg/s).", "A velocidade do drive angular em volta do X, Y, Z da junta (graus/s)."),
+    T("Max Torque (0: any)", "The most the angular drive twists (kg cm2/s2; 0: as strong as needed).", "O máximo que o drive angular torce (kg cm2/s2; 0: o quanto precisar)."),
+    T("Drive Frequency", "The drives' spring (Hz; 0: rigid). 2 Hz a gentle pull, 10 Hz a firm one.", "A mola dos drives (Hz; 0: rígida). 2 Hz um puxão suave, 10 Hz um firme."),
+    T("Drive Damping", "The drives' damping ratio: 1 arrives without overshooting.", "O amortecimento dos drives: 1 chega sem passar do ponto."),
+    T("Force / Torque", "What the constraint held in the last step: its pull and its twist (playing).", "O que a junta segurou no último passo: a força e a torção (no Play)."),
+    T("Break Torque (0: never)", "The twist that breaks it (kg cm2/s2).", "A torção que a quebra (kg cm2/s2)."),
+    T("Physics Quality", "The physics' preset: Epic 120 steps a second with 4 solver substeps (the stiffest stacks), High 90 x 4, Medium 60 x 4 (Box2D's own default: a tall pile sinks a few cm more), Low 60 x 2 (the cheapest: piles sink and bounce more). The same on every machine (it's the project's, not the player's graphics).", "O preset da física: Épico 120 passos por segundo com 4 sub-passos do solver (as pilhas mais firmes), Alto 90 x 4, Médio 60 x 4 (o padrão do próprio Box2D: uma pilha alta afunda uns cm a mais), Baixo 60 x 2 (o mais barato: pilhas afundam e quicam mais). Igual em toda máquina (é do projeto, não dos gráficos do jogador)."),
+    T("Physics Rate", "The physics' fixed steps a second (Hz). 120: the default and Epic; 60 halves the physics' cost (with many bodies awake at once: thousands).", "Os passos fixos da física por segundo (Hz). 120: o padrão e o Épico; 60 corta pela metade o custo da física (com muitos corpos acordados ao mesmo tempo: milhares)."),
+    T("Solver Substeps", "The physics solver's substeps in each 120 Hz step (4: 480 Hz). More: taller stacks and stiffer chains stand still, at more cost.", "Os sub-passos do solver da física em cada passo de 120 Hz (4: 480 Hz). Mais: pilhas mais altas e correntes mais duras ficam paradas, custando mais."),
+    T("Friction Combine", "How two materials' frictions meet (the higher mode of the two wins).", "Como os atritos de dois materiais se juntam (vale o modo mais alto dos dois)."),
+    T("Restitution Combine", "How two materials' bounces meet.", "Como as restituições de dois materiais se juntam."),
+    T("##preset", "Starts from a real material's values.", "Começa dos valores de um material real."),
+    T("##physmat", "The body's Physical Material: click to pick one, or drop it from the Content Browser.", "O Material Físico do corpo: clique para escolher, ou solte do Navegador de Conteúdo."),
+    T("##motion", "This axis of the 6DOF: Free (moves at will), Limited (within its limit) or Locked.", "Este eixo do 6DOF: Livre (anda à vontade), Limitado (dentro do limite) ou Travado."),
+};
+const int g_ui_tip_q8_count = (int)(sizeof g_ui_tips_q8 / sizeof g_ui_tips_q8[0]);

@@ -1,0 +1,41 @@
+#version 460
+// The Hi-Z (two-phase occlusion, cull.comp): a min-depth pyramid of the prepass in a buffer (reversed Z: the minimum
+// is the farthest, so a texel says "everything here is at least this near"). pc.pass 0: level 0, the prepass's depth
+// at half resolution (with MSAA, its MIN resolve: the farthest sample); pc.pass L: level L from L - 1, 2x2 texels (3 at an odd edge, so
+// none is skipped).
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 21) uniform sampler2D u_depth;
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    UintBuf hz = UintBuf(f.hiz);
+    uint level = pc.pass;
+    // this level's and the previous one's size and offset in the buffer
+    uint w = f.hiz_w, h = f.hiz_h, at = 0u, pw = w, ph = h, pat = 0u;
+    for (uint l = 0u; l < level; l++) {
+        pw = w; ph = h; pat = at;
+        at += w * h;
+        w = max(1u, (w + 1u) / 2u);
+        h = max(1u, (h + 1u) / 2u);
+    }
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= w || p.y >= h) return;
+    float d;
+    if (level == 0u) { // half the depth's resolution: its 2x2 texels (3 at an odd edge)
+        ivec2 ds = textureSize(u_depth, 0);
+        ivec2 q0 = ivec2(p) * 2, q1 = min(q0 + ivec2(p.x == w - 1u && (ds.x & 1) == 1 ? 2 : 1, p.y == h - 1u && (ds.y & 1) == 1 ? 2 : 1), ds - 1);
+        d = 1.0;
+        for (int y = q0.y; y <= q1.y; y++)
+            for (int x = q0.x; x <= q1.x; x++) d = min(d, texelFetch(u_depth, ivec2(x, y), 0).r);
+    } else {
+        uint x0 = p.x * 2u, y0 = p.y * 2u;
+        uint x1 = min(x0 + ((p.x == w - 1u && (pw & 1u) == 1u) ? 2u : 1u), pw - 1u);
+        uint y1 = min(y0 + ((p.y == h - 1u && (ph & 1u) == 1u) ? 2u : 1u), ph - 1u);
+        d = 1.0;
+        for (uint y = y0; y <= y1; y++)
+            for (uint x = x0; x <= x1; x++) d = min(d, uintBitsToFloat(hz.v[pat + y * pw + x]));
+    }
+    hz.v[at + p.y * w + p.x] = floatBitsToUint(d);
+}

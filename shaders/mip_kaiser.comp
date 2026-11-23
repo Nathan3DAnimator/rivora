@@ -1,0 +1,55 @@
+#version 460
+// A baked texture's next mip (material.c tex_mips): the level above halved by a Kaiser-windowed sinc (beta 4, 8 taps a
+// side: sharper than the 2x2 box of a blit, which turned a checker's thin lines grey a mip early and blurred a floor a
+// few meters away), in linear space for the base color (stored as sRGB: the box averaged it dark), tiling (wrap) or
+// clamped (a UDIM tile). The result into a buffer, copied into the level (the bake's textures have one storage view).
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_mat_tex[];
+// flags: bit 0 sRGB color, bit 1 wrap (else clamp), bit 2 half floats (RGBA16F: 8 bytes a texel, else RGBA8: 4)
+layout(push_constant, scalar) uniform MipPush { uvec2 out_addr; uint tex, src_level, w, h, sw, sh, flags; } pc;
+layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer Out8 { uint t[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 8) writeonly buffer Out16 { uvec2 t[]; };
+
+const float K[8] = float[8](-0.012423, -0.042995, 0.11692, 0.438498, 0.438498, 0.11692, -0.042995, -0.012423);
+
+vec3 to_linear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
+vec3 to_srgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.w) || p.y >= int(pc.h)) return;
+    ivec2 ssz = ivec2(pc.sw, pc.sh);
+    bool srgb = (pc.flags & 1u) != 0u, wrap = (pc.flags & 2u) != 0u;
+    // a source of one texel on an axis (a 1xN texture's tail): that axis taken whole
+    ivec2 base = p * 2 - 3;
+    vec4 acc = vec4(0.0);
+    float ws = 0.0;
+    for (int j = 0; j < 8; j++) {
+        int y = ssz.y > 1 ? base.y + j : 0;
+        y = wrap ? (y % ssz.y + ssz.y) % ssz.y : clamp(y, 0, ssz.y - 1);
+        float wy = ssz.y > 1 ? K[j] : 0.125;
+        for (int i = 0; i < 8; i++) {
+            int x = ssz.x > 1 ? base.x + i : 0;
+            x = wrap ? (x % ssz.x + ssz.x) % ssz.x : clamp(x, 0, ssz.x - 1);
+            float w = wy * (ssz.x > 1 ? K[i] : 0.125);
+            vec4 c = texelFetch(u_mat_tex[nonuniformEXT(pc.tex)], ivec2(x, y), int(pc.src_level));
+            if (srgb) c.rgb = to_linear(c.rgb);
+            acc += c * w, ws += w;
+        }
+    }
+    vec4 r = acc / max(ws, 1e-6);
+    uint at = uint(p.y) * pc.w + uint(p.x);
+    if ((pc.flags & 4u) != 0u) {
+        r = max(r, vec4(0.0)); // (the negative lobes: no ringing below black)
+        Out16(pc.out_addr).t[at] = uvec2(packHalf2x16(r.xy), packHalf2x16(r.zw));
+    } else {
+        r = clamp(r, 0.0, 1.0);
+        if (srgb) r.rgb = to_srgb(r.rgb);
+        Out8(pc.out_addr).t[at] = packUnorm4x8(r);
+    }
+}

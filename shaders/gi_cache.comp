@@ -1,0 +1,249 @@
+#version 460
+// The surface cache (gi_cache.c, notas-dev/gi.md): real-time radiosity on the surfaces themselves. Every mesh near the
+// camera has a chart of a texel atlas (~25 cm per texel, its UV2), each texel a point of its surface in mesh space (it
+// follows a Movable mesh). A share of the texels is updated each frame:
+//   direct:   every light at the texel, with a shadow ray (exact; what a ray that hits this texel sees lit)
+//   indirect: a few cosine rays; a hit on a cached surface reads that surface's direct + indirect from the atlas (no
+//             shadow rays there, and the bounces add up update after update: multiple bounce), a hit elsewhere its
+//             probes and lights, a miss the sky. The rays start on the surface: they can't see through a closed wall
+//             (the 2 m probes did: light leaking through walls), only through a real gap.
+// History per texel with a noise-aware weight (fast only where the light really changed: no flicker from noise), and
+// the texel's validity (inside another mesh: its rays see backs) premultiplied, so a bilinear read skips such texels.
+// pc.pass 0: the slot -> chart table (CacheSt) from this allocation's entries; 1: the update.
+// A Movable actor moving right now stays out of the cache's rays: one walking or falling on a floor made its texels go
+// invalid, count it as a wall and hold its shadow a few updates late (blocks flickering around its feet); the contact GI
+// (gi.glsl contact_gi) shades it per pixel, at once. Standing still it is seen like any wall (rt.glsl RT_STILL_ONLY)
+#define RT_STILL_ONLY
+#include "common.glsl"
+#include "weather.glsl"
+#include "gi.glsl"
+#include "atmosphere.glsl"
+#define MAT_SET 1 // (2026-11-17, Q4: the Light Functions read their materials)
+#include "mat_common.glsl"
+#include "lightfn.glsl"
+#include "rt.glsl"
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 3) uniform sampler2D u_probe_irr;
+layout(set = 0, binding = 4) uniform sampler2D u_probe_dist;
+layout(set = 0, binding = 22) uniform sampler2D u_cache_direct;
+layout(set = 0, binding = 23) uniform sampler2D u_cache_indirect;
+layout(set = 0, binding = 24, rgba16f) uniform image2D u_direct;   // rgb: direct E / pi; a: the indirect's noise
+layout(set = 0, binding = 25, rgba16f) uniform image2D u_indirect; // rgb: indirect E / pi times a; a: validity
+layout(set = 0, binding = 26, rgba16f) uniform image2D u_meta;    // r: the indirect's noise; g: updates averaged; b: deviations in a row; a: the fast mean (luminance)
+// the walls around the texel (gi.glsl cache_read): 1 - the distance to one / 1.5 texels along +x, -x, +y, -y of the atlas
+layout(set = 0, binding = 37, rgba16f) uniform image2D u_walls;
+// the indirect filtered (pass 3): what the pixels and the bounces read (binding 23 samples it); u_indirect keeps the raw history
+layout(set = 0, binding = 50, rgba16f) uniform image2D u_ind_filtered;
+
+struct CacheTexel { vec3 lpos; uint slot; vec3 lnrm; uint xy; vec3 ldu; float pad0; vec3 ldv; float pad1; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer TexelBuf { CacheTexel t[]; };
+struct CacheEntry { uint slot; uint pad0, pad1, pad2; vec4 st; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer EntryBuf { CacheEntry e[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer CacheStW { vec4 st[]; };
+
+uint hash(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    uint i = gl_GlobalInvocationID.x;
+    if (pc.pass == 0u) { // the table: this allocation's charts (the rest of it was cleared)
+        EntryBuf eb = EntryBuf(pc.instances);
+        if (i < pc.pad) CacheStW(f.cache_st).st[eb.e[i].slot] = eb.e[i].st;
+        return;
+    }
+    // pass 3: the indirect filtered in the atlas (a 5x5 edge-aware blur inside the texel's own chart, never past a wall),
+    // the weights by each neighbor's confidence (the updates it has averaged): a young texel (a chart that just came
+    // in, its few rays, its bounces not arrived yet) takes its light from the settled ones around it instead of showing
+    // as a dark, noisy blot ("the light still loading"); a settled one keeps its detail (the luminance edge-stop at a few
+    // times its own noise). The texels updated this frame (pass 1's share: pc.instances.x the first, pc.pad the count, its
+    // top bit the filter off; bit 30: pass 2's moving texels listed at the address pc.instances), right after their
+    // update: what the pixels read changes only when a texel does
+    if (pc.pass == 3u) {
+        if (i >= (pc.pad & 0x3FFFFFFFu) || f.cache_count == 0u) return;
+        uint t3 = (pc.pad & 0x40000000u) != 0u ? UintBuf(pc.instances).v[i] : (pc.instances.x + i) % f.cache_count;
+        CacheTexel ct = TexelBuf(f.cache_texels).t[t3];
+        ivec2 px = ivec2(ct.xy & 0xFFFFu, ct.xy >> 16);
+        vec4 c = imageLoad(u_indirect, px);
+        if (c.a <= 0.0 || (pc.pad & 0x80000000u) != 0u) { // (no light yet stays so: the pixels fall back to the probes; pad 1: the filter off, REALENGINE_GI_FILTER=0)
+            imageStore(u_ind_filtered, px, c);
+            return;
+        }
+        vec4 st = CacheStW(f.cache_st).st[ct.slot];
+        float atlas = f.cache_params.x;
+        ivec2 lo = ivec2(floor(st.zw * atlas)), hi = max(ivec2(ceil((st.zw + st.xy) * atlas)) - 1, lo);
+        vec4 mc = imageLoad(u_meta, px);
+        float ccnt = mc.g, cl = c.a > 0.0 ? dot(c.rgb / c.a, vec3(0.2126, 0.7152, 0.0722)) : 0.0;
+        // the edge-stop: settled texels at 4 sigma of their noise; young ones (unreliable themselves) barely stop
+        float sig = max(mc.r, 0.05 * cl) * (ccnt < 8.0 ? 16.0 : 4.0) + 1e-6;
+        int step = ccnt < 4.0 ? 2 : 1;
+        vec4 sum = vec4(0.0);
+        float wsum = 0.0;
+        for (int y = -2; y <= 2; y++)
+            for (int x = -2; x <= 2; x++) {
+                ivec2 q = clamp(px + ivec2(x, y) * step, lo, hi);
+                vec4 v = imageLoad(u_indirect, q);
+                if (v.a <= 0.0) continue;
+                vec2 o = vec2(px - q);
+                if ((x != 0 || y != 0) && (!atlas_lends(u_cache_walls, q, o) || !atlas_lends(u_cache_walls, px, -o))) continue;
+                float cn = imageLoad(u_meta, q).g;
+                float l = dot(v.rgb / v.a, vec3(0.2126, 0.7152, 0.0722));
+                float w = exp(-0.35 * float(x * x + y * y)) * clamp(cn / 8.0, 0.08, 1.0);
+                if (x != 0 || y != 0) w *= exp(-abs(l - cl) / sig);
+                sum += v * w;
+                wsum += w;
+            }
+        imageStore(u_ind_filtered, px, wsum > 0.0 ? sum / wsum : c);
+        return;
+    }
+    // pass 2: the texels of the Movable actors moving right now (pc.pad of them listed at the address pc.instances:
+    // gi_cache_record, one dispatch for all of them), every frame; pass 1: a share of all of them
+    if (pc.pass == 2u ? i >= pc.pad : i >= f.cache_n) return;
+    uint ti = pc.pass == 2u ? UintBuf(pc.instances).v[i] : (f.cache_first + i) % f.cache_count;
+    CacheTexel ct = TexelBuf(f.cache_texels).t[ti];
+    Instance inst = InstanceBuf(f.instances).i[ct.slot];
+    if ((inst.ids.y & INST_ALIVE) == 0u) return;
+    if (pc.pass == 2u && (inst.ids.y & INST_MOVING) == 0u) return; // standing still: the share of pass 1 is enough
+    ivec2 px = ivec2(ct.xy & 0xFFFFu, ct.xy >> 16);
+    vec4 lp = vec4(ct.lpos, 1.0);
+    vec3 p = vec3(dot(inst.row0, lp), dot(inst.row1, lp), dot(inst.row2, lp));
+    vec3 a = vec3(inst.row0.x, inst.row1.x, inst.row2.x), b = vec3(inst.row0.y, inst.row1.y, inst.row2.y),
+         c = vec3(inst.row0.z, inst.row1.z, inst.row2.z);
+    vec3 n = normalize(cross(b, c) * ct.lnrm.x + cross(c, a) * ct.lnrm.y + cross(a, b) * ct.lnrm.z);
+
+    // Direct: exact, every update (one ray per shadow-casting light, up to 4)
+    vec3 direct = direct_irradiance_budget(f, p, n, RT_MASK_SHADOW, 4u) / PI;
+
+    // Indirect: cosine rays, a new rotation each update (stratified over the rays of one update)
+    uint nr = f.cache_rays;
+    float cnt_now = imageLoad(u_meta, px).g;
+    if (cnt_now < 4.0) nr *= 2u; // (a young texel: twice the rays on its first updates, a cleaner start for the filter to spread)
+    vec3 t = normalize(abs(n.z) < 0.999 ? cross(n, vec3(0.0, 0.0, 1.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
+    vec3 bt = cross(n, t);
+    uint seed = hash(ti * 9781u + f.frame_index * 6271u);
+    float rot = float(seed & 0xFFFFu) / 65536.0;
+    float jit = float(seed >> 16) / 65536.0;
+    vec3 sum = vec3(0.0);
+    uint back = 0u;
+    for (uint r = 0u; r < nr; r++) {
+        float u1 = (float(r) + jit) / float(nr), u2 = fract(float(r) * 0.618034 + rot);
+        float rr = sqrt(u1), phi = 6.2831853 * u2;
+        vec3 d = normalize(t * (rr * cos(phi)) + bt * (rr * sin(phi)) + n * sqrt(max(1.0 - u1, 0.0)));
+        Hit h = trace_closest(f, p + n * 1.0, d, 1e6);
+        if (!h.hit) {
+            sum += sky_clouds(f, d, false) * f.gi_params.y;
+        } else if (!h.front) {
+            back++;
+        } else {
+            vec3 hd = h.base * (1.0 - h.metal);
+            vec4 hst = CacheStW(f.cache_st).st[h.inst];
+            vec3 e = vec3(0.0);
+            bool cached = false;
+            if (hst.x > 0.0) {
+                vec2 uv = h.uv2 * hst.xy + hst.zw;
+                // a surface with a chart: never the probes (they leak); both reads weighed by validity and never across a
+                // buried texel (gi.glsl cache_read: no light through a wall standing on that surface)
+                e = cache_read(u_cache_direct, uv, f.cache_params.x) * GI_LOAD;
+                // its indirect light only past 10 cm: in a concave corner two walls' texels a centimeter apart read each
+                // other's, and every update compounded it
+                if (h.t > 10.0) e += cache_read(u_cache_indirect, uv, f.cache_params.x) * f.gi_params.x * GI_LOAD;
+                cached = true;
+            }
+            if (!cached) { // not cached (far, or a texel not ready): its lights (one shadow ray) and probes
+                e = direct_irradiance_budget(f, h.pos, h.normal, RT_MASK_SHADOW, 1u) / PI;
+                if ((f.gi_flags & GI_PROBES) != 0u) e += probe_irradiance(f, u_probe_irr, u_probe_dist, h.pos, h.normal, -d) * f.gi_params.x;
+                else if (f.sky_params.x > 0.0) e += sh_irradiance(f, h.normal) / PI;
+            }
+            sum += hd * e + h.glow;
+        }
+    }
+    // E / pi (cosine sampling: the mean radiance). Rays that met the inside of another mesh (a corner where two walls
+    // cross) are left out, not counted as dark: that darkened the corners
+    vec3 ind = nr > back ? sum / float(nr - back) : vec3(0.0);
+    // a quarter of its rays see backs: the texel is partly inside another mesh (a corner where walls and floor meet);
+    // its few remaining rays would weigh too much (a bright speck there), the neighbors fill it in
+    float valid = back * 4u > nr ? 0.0 : 1.0;
+
+    // History: the running mean of every update since the light last changed (1, 1/2, 1/3... of weight: the first one
+    // lights the texel at once, the next ones only refine it), up to cache_params.y updates (then a moving mean that
+    // changes under 1% an update: no flicker). meta: the noise (the running deviation of the indirect's luminance) and
+    // the count. A change well above the noise (a light switched, moved, an object passing) starts the mean over.
+    vec4 oi = imageLoad(u_indirect, px);
+    vec4 meta = imageLoad(u_meta, px);
+    float noise = meta.r, cnt = meta.g, streak = meta.b, fast = meta.a;
+    float lum = dot(ind, vec3(0.2126, 0.7152, 0.0722)) * GI_STORE;
+    vec3 ind_s = ind * GI_STORE;
+    float cnt0 = cnt; // 0: a new texel (its walls get measured on its first updates)
+    if (oi.a <= 0.0 || cnt < 0.5) { // a texel that was never written (a new chart): no history
+        // (a resampled chart, gi_cache.c: its light counts as a few updates, not as nothing)
+        cnt = oi.a > 0.0 ? 4.0 : 0.0;
+        noise = lum * 0.5;
+        streak = 0.0;
+        fast = lum;
+    } else {
+        // Drift: a fast mean (a quarter per update) beside the long one. The long one holds every update since the light
+        // last changed: a chart that just got its texels averages its first, darker updates (fewer bounces had arrived)
+        // and brightened over seconds (a room you walk into); a slow change never trips the 3-in-a-row test. When the fast
+        // mean sits well off the long one (beyond its own noise: 3 sigma of a 1/4 mean), the history halves, again each
+        // update while the drift lasts: it lands in a few updates; a lone outlier halves it once (harmless)
+        // (the sample clamped to 3 noise around the long mean: 8 rays are heavy-tailed, one on a small bright patch threw the
+        // fast mean off; a real change still drags it to the edge of that window, past the threshold)
+        float olum0 = dot(oi.rgb / oi.a, vec3(0.2126, 0.7152, 0.0722));
+        fast = mix(fast, clamp(lum, olum0 - 3.0 * noise, olum0 + 3.0 * noise), 0.25);
+        if (abs(fast - olum0) > 2.0 * noise + 0.04 * olum0 + 1e-7) cnt = max(8.0, floor(cnt * 0.5));
+        // an event (render.c: a Movable actor started or stopped moving here): what its rays see changed, by a little a
+        // texel (its shadow, its bounce): a short history while it lasts, or the old shadow stays as a mark for seconds
+        for (uint e = 0u; e < f.cache_nevents; e++) {
+            vec3 dc = p - f.cache_events[e].xyz;
+            if (dot(dc, dc) < f.cache_events[e].w * f.cache_events[e].w) { cnt = min(cnt, 3.0); fast = lum; }
+        }
+        // 8 rays are heavy-tailed (a few of them on a small bright patch): one sample far off is noise; three in a row off
+        // the same way are a change (a light switched or moved, the next bounce arriving): the mean starts over
+        vec3 old = oi.rgb / oi.a;
+        float olum = dot(old, vec3(0.2126, 0.7152, 0.0722));
+        float d = lum - olum;
+        bool off = abs(d) > 3.0 * noise + 0.05 * olum + 1e-7;
+        streak = off ? (streak * d > 0.0 ? streak + sign(d) : sign(d)) : 0.0;
+        if (abs(streak) >= 3.0) { // the mean shortened to a quarter: a real change keeps doing this and lands fast
+            cnt = max(1.0, floor(cnt * 0.25));
+            streak = 0.0;
+        }
+        noise = mix(abs(d), noise, 0.9);
+    }
+    // a Movable actor's texel: a short history (it turns and moves: the light on it changes; a few frames of rays, read
+    // wide: cache_indirect_soft)
+    if ((inst.ids.y & INST_MOVING) != 0u) cnt = min(cnt, 7.0);
+    float hyst = cnt / (cnt + 1.0);
+    // warm-up: the first updates of a texel follow its light closely (half and half) instead of averaging every update
+    // since the start: the bounces arrive update after update, and a mean of all of them kept the early dark ones for
+    // seconds (the blotches of light "still loading"); the filter (pass 3) takes the noise of the short history
+    // (not a Movable actor's: its short history already follows, half and half there was the flicker of an idle character)
+    if (cnt0 < 8.0 && (inst.ids.y & INST_MOVING) == 0u) hyst = min(hyst, 0.5);
+    vec4 newi = vec4(ind_s * valid, valid);
+    imageStore(u_indirect, px, mix(newi, oi, hyst));
+    imageStore(u_direct, px, vec4(direct * GI_STORE * valid, valid)); // premultiplied like the indirect (cache_read)
+
+    // The walls: a short ray from the texel along each atlas axis, 1 cm above the surface, one and a half texels long. A wall
+    // standing on this surface (one floor for two rooms, one long wall past an inner wall) cuts it; the reads never take
+    // a texel's light past one (a wall thinner than a texel, a texel straddling it: the light of the far side stays there)
+    // (walls rarely move: measured on a new texel's first updates, then one update in 8)
+    if (cnt0 < 2.0 || cnt < 2.0 || ((ti + f.frame_index) & 7u) == 0u) {
+        vec3 du = vec3(dot(inst.row0.xyz, ct.ldu), dot(inst.row1.xyz, ct.ldu), dot(inst.row2.xyz, ct.ldu));
+        vec3 dv = vec3(dot(inst.row0.xyz, ct.ldv), dot(inst.row1.xyz, ct.ldv), dot(inst.row2.xyz, ct.ldv));
+        vec4 walls = vec4(0.0);
+        for (int k = 0; k < 4; k++) {
+            vec3 ax = k < 2 ? du : dv;
+            float len = length(ax);
+            if (len < 1e-4) continue;
+            float tmax = 1.5 * len;
+            Hit h = trace_closest(f, p + n * 1.0, ax / len * ((k & 1) == 0 ? 1.0 : -1.0), tmax);
+            // a back face: the ray started inside (a wall closer than the ray's tmin): the wall is right here
+            if (h.hit) walls[k] = 1.0 - (h.front ? h.t / tmax : 0.0);
+        }
+        imageStore(u_walls, px, walls);
+    }
+    imageStore(u_meta, px, vec4(noise, min(cnt + 1.0, f.cache_params.y), streak, fast));
+}

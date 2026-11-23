@@ -1,0 +1,149 @@
+#version 460
+// The local lights' ray traced shadows filtered (render.c, after the main pass; relatório #113 first, then the many
+// lights: notas-dev/luz.md "Muitas luzes com sombra"). mesh.frag (RE_RT, GI_SHADOW_SPLIT) leaves each pixel's
+// shadow-casting local lights out of its color: binding 53 holds their light unshadowed (rgb, pre-exposed and fogged like
+// the color) and its luminance times the raw visibility of the two lights it picked (a). With MSAA the resolve averages
+// both, so a / luminance is the samples' visibility weighted by their light. The filter is that ratio over the neighbors
+// (a bilateral by depth, separable) and over the frames:
+//   pass 0: across x, the weighted means of a and of the luminance into binding 54;
+//   pass 1: across y, the ratio; blended with last frame's (reprojected: bindings 61, 62); the color gets rgb * that.
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 8, rgba16f) uniform image2D o_hdr;
+layout(set = 0, binding = 21) uniform sampler2D u_depth; // one sample (MSAA: resolved, each pixel's farthest)
+layout(set = 0, binding = 53) uniform sampler2D u_split;
+layout(set = 0, binding = 82) uniform sampler2D u_scene_copy; // (2026-11-16) the scene before the glass (the SSR's copy)
+layout(set = 0, binding = 84) uniform sampler2D u_oit_refr;   // ... the glass's weighted offsets (mesh.frag RE_TRANSLUCENT o_refr)
+layout(set = 0, binding = 54, rgba16f) uniform image2D u_sum; // (Q4: rgba, the OIT pass's colored transmittance in gba)
+layout(set = 0, binding = 61, r16f) uniform image2D u_hist0; // the many lights' visibility, last frame's or this one's (pc.pad 1: which)
+layout(set = 0, binding = 62, r16f) uniform image2D u_hist1;
+
+// the window: RADIUS taps each side a pass, by the project's Shadow Denoise (Project Settings > Rendering, 2026-11-10):
+// Low 2 (5x5), Medium 3 (7x7: as before), High 5, Epic 7 (15x15); the gaussian widens with it. The history (below)
+// averages more frames on High and Epic
+#define RADIUS_MAX 7
+int denoise_level(FrameBuf f) { return clamp(int(f.style[3].x + 0.5), 0, 3); }
+int radius_of(int lv) { return lv == 0 ? 2 : lv == 1 ? 3 : lv == 2 ? 5 : 7; }
+
+float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+// The same surface: the reversed depth's relative change (1/z: the distance's), a few percent; a grazing floor changes
+// faster, so the limit grows with the window's offset
+float depth_w(float d, float dc, int k) {
+    float rel = abs(d - dc) / max(dc, 1e-9);
+    float lim = 0.02 + 0.01 * float(abs(k));
+    return rel < lim ? 1.0 - rel / lim : 0.0;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(o_hdr);
+    if (p.x >= size.x || p.y >= size.y) return;
+    if (pc.pass == 2u) { // the brightness weighted MSAA resolve turned back (GI_AA_WEIGHTED: common.glsl aa_encode)
+        vec4 h = imageLoad(o_hdr, p);
+        imageStore(o_hdr, p, vec4(min(aa_decode(h), vec3(60000.0)), 1.0));
+        return;
+    }
+    if (pc.pass == 3u) { // render.c's OIT pass: binding 53 the weighted sums, 54's r the revealage (1: nothing translucent)
+        vec4 rs4 = imageLoad(u_sum, p);
+        float rv = rs4.r;
+        if (rv >= 0.9999) return;
+        vec3 tint = clamp(rs4.gba, 0.0, 1.0); // (2026-11-17, Q4) what the glass in front leaves of each color (absorption, its tint)
+        vec4 acc = texelFetch(u_split, p, 0);
+        vec3 mean = acc.rgb / max(acc.a, 1e-5);
+        vec4 h = imageLoad(o_hdr, p);
+        FrameBuf fr = FrameBuf(pc.frame);
+        if ((fr.gi_flags & GI_REFRACT) != 0u) { // (2026-11-16) refractive glass: what is behind, read where the glass bends it
+            vec4 rs = texelFetch(u_oit_refr, p, 0);
+            if (abs(rs.x) + abs(rs.y) > 1e-7 * acc.a) {
+                vec2 off = rs.xy / max(acc.a, 1e-5), uv = (vec2(p) + 0.5) / vec2(size) + off;
+                float rg = clamp(rs.z / max(acc.a, 1e-5), 0.0, 1.0), disp = rs.w / max(acc.a, 1e-5);
+                // rough glass: a small disc of taps around it (frosted), wider as it gets rougher
+                vec2 rad = vec2(rg * rg * 0.03) * vec2(float(size.y) / float(size.x), 1.0);
+                vec3 bg = vec3(0.0);
+                const vec2 tap[5] = vec2[5](vec2(0.0), vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0));
+                int nt = rg > 0.08 ? 5 : 1;
+                for (int k = 0; k < nt; k++) {
+                    vec2 q = clamp(uv + tap[k] * rad, vec2(0.0), vec2(1.0));
+                    // (dispersion: the red bent less, the blue more, as a prism)
+                    bg += disp > 1e-3 ? vec3(textureLod(u_scene_copy, clamp(q - off * disp * 0.06, 0.0, 1.0), 0.0).r, textureLod(u_scene_copy, q, 0.0).g,
+                                             textureLod(u_scene_copy, clamp(q + off * disp * 0.06, 0.0, 1.0), 0.0).b)
+                                      : textureLod(u_scene_copy, q, 0.0).rgb;
+                }
+                h.rgb = bg / float(nt);
+            }
+        }
+        imageStore(o_hdr, p, vec4(min(h.rgb * tint * rv + mean * (1.0 - rv), vec3(60000.0)), 1.0));
+        return;
+    }
+    float dc = texelFetch(u_depth, p, 0).r;
+    FrameBuf f = FrameBuf(pc.frame);
+    int lv = denoise_level(f), rad = radius_of(lv);
+    float sig = 4.5 * float(rad * rad) / 9.0; // (the gaussian's 2 sigma^2: as wide for the window)
+    if (pc.pass == 0u) {
+        float sa = 0.0, sl = 0.0, sw = 0.0;
+        for (int k = -RADIUS_MAX; k <= RADIUS_MAX; k++) {
+            if (abs(k) > rad) continue;
+            ivec2 q = ivec2(clamp(p.x + k, 0, size.x - 1), p.y);
+            vec4 s = texelFetch(u_split, q, 0);
+            float l = lum(s.rgb);
+            if (l <= 0.0) continue;
+            float w = exp(-float(k * k) / sig) * depth_w(texelFetch(u_depth, q, 0).r, dc, k);
+            sa += w * s.a, sl += w * l, sw += w;
+        }
+        imageStore(u_sum, p, sw > 0.0 ? vec4(sa / sw, sl / sw, 0.0, 0.0) : vec4(0.0)); // (means: half floats end at 65504)
+        return;
+    }
+    vec4 c = texelFetch(u_split, p, 0);
+    float lc = lum(c.rgb);
+    bool odd = (pc.pad & 1u) != 0u; // (reads [odd], writes [!odd])
+    if (lc <= 0.0) { // no shadow-casting light here: no history either
+        if (odd) imageStore(u_hist0, p, vec4(-1.0));
+        else imageStore(u_hist1, p, vec4(-1.0));
+        return;
+    }
+    float sa = 0.0, sl = 0.0;
+    float nmn = 1.0, nmx = 0.0; // (the neighborhood's range of this frame's visibility: the history's box below)
+    int box = lv >= 2 ? 2 : 1; // (High, Epic: a wider box, the frames average more of the noise)
+    for (int k = -RADIUS_MAX; k <= RADIUS_MAX; k++) {
+        if (abs(k) > rad) continue;
+        ivec2 q = ivec2(p.x, clamp(p.y + k, 0, size.y - 1));
+        vec2 s = imageLoad(u_sum, q).xy;
+        float w = exp(-float(k * k) / sig) * depth_w(texelFetch(u_depth, q, 0).r, dc, k);
+        sa += w * s.x, sl += w * s.y;
+        if (abs(k) <= box && w > 0.0 && s.y > 0.0) {
+            float r = clamp(s.x / s.y, 0.0, 1.0);
+            nmn = min(nmn, r), nmx = max(nmx, r);
+        }
+    }
+    float vis = clamp(sl > 0.0 ? sa / sl : c.a / lc, 0.0, 1.0);
+    nmn = min(nmn, vis), nmx = max(nmx, vis);
+    // Over the frames (the many lights' picks and rays change every frame: mesh.frag): this point's visibility last frame
+    // (its world position by last frame's view, from the depth), held near this frame's filtered one (a moved shadow lags
+    // by at most that), and blended. The filter alone left blotches of its own size, which the TSR's clip box keeps
+    if ((pc.pad & 2u) == 0u) {
+        vec2 ndc = (vec2(p) + 0.5) / vec2(size) * 2.0 - 1.0;
+        vec4 wp = f.tsr_inv * vec4(ndc, max(dc, 1e-7), 1.0);
+        wp /= wp.w;
+        vec4 b = f.tsr_prev_vp * wp;
+        vec2 pp = (b.xy / max(b.w, 1e-6) * 0.5 + 0.5) * vec2(size);
+        if (b.w > 1e-4 && all(greaterThanEqual(pp, vec2(0.0))) && all(lessThan(pp, vec2(size)))) {
+            float h = odd ? imageLoad(u_hist1, ivec2(pp)).r : imageLoad(u_hist0, ivec2(pp)).r;
+            // (2026-11-10, "a sombra tá com ghosting") held inside the neighborhood's range of this frame (the TAA's box),
+            // not just +-0.25 of this pixel: a shadow that moved left its old place lit all around, so the old shadow is
+            // gone at once; inside a noisy penumbra the range is wide and the frames still average. A history the box
+            // had to move far (disoccluded, a moving caster) gives way faster
+            if (h >= 0.0) {
+                float hc = clamp(h, nmn - 0.02, nmx + 0.02);
+                float keep = lv == 0 ? 0.2 : lv == 1 ? 0.1 : lv == 2 ? 0.07 : 0.05; // (the share of this frame: less, more frames averaged)
+                vis = mix(hc, vis, abs(h - hc) > 0.1 ? 0.5 : keep);
+            }
+        }
+    }
+    if (odd) imageStore(u_hist0, p, vec4(vis));
+    else imageStore(u_hist1, p, vec4(vis));
+    vec4 h = imageLoad(o_hdr, p);
+    h.rgb = min(h.rgb + c.rgb * vis, vec3(60000.0));
+    imageStore(o_hdr, p, h);
+}

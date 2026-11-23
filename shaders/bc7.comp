@@ -1,0 +1,132 @@
+#version 460
+// A baked texture's mip compressed to BC7 (material.c tex_to_bc7; notas-dev/materiais.md "BC7"): one thread a 4x4 block,
+// mode 6 (RGBA together, one subset, 7-bit endpoints with a p-bit each, 4-bit indices): the endpoints along the block's
+// principal axis (power iteration), refit by least squares to the indices once, each p-bit picked by its error. 16 bytes a
+// block: 1 byte a texel against RGBA8's 4 (the memory and the bandwidth of the reads a quarter).
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_mat_tex[];
+layout(push_constant, scalar) uniform Bc7Push { uvec2 out_addr; uint tex, level, bw, bh, w, h; } pc;
+layout(buffer_reference, scalar, buffer_reference_align = 16) writeonly buffer BlockBuf { uvec4 b[]; };
+
+const float W4[16] = float[16](0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64);
+
+vec4 g_c[16];
+
+// an endpoint (0..255 each channel) to 7 bits plus a shared p-bit, the one with the smaller error
+void quantize(vec4 e, out uvec4 q, out uint p) {
+    float best = 1e30;
+    q = uvec4(0u), p = 0u;
+    for (uint pb = 0u; pb < 2u; pb++) {
+        uvec4 qq = uvec4(clamp(round((e - float(pb)) * 0.5), 0.0, 127.0));
+        vec4 r = vec4(qq * 2u + pb) - e;
+        float err = dot(r, r);
+        if (err < best) best = err, q = qq, p = pb;
+    }
+}
+
+// each texel's index (the nearest of the 16 weights along the quantized endpoints); the total error
+float indices(vec4 a, vec4 b, out uint idx[16]) {
+    vec4 d = b - a;
+    float dd = max(dot(d, d), 1e-6), err = 0.0;
+    for (int i = 0; i < 16; i++) {
+        float t = clamp(dot(g_c[i] - a, d) / dd, 0.0, 1.0) * 64.0;
+        uint k = uint(clamp(round(t * 15.0 / 64.0), 0.0, 15.0));
+        // (the weights aren't even: the neighbor may be nearer)
+        if (k > 0u && abs(W4[k - 1u] - t) < abs(W4[k] - t)) k--;
+        if (k < 15u && abs(W4[k + 1u] - t) < abs(W4[k] - t)) k++;
+        idx[i] = k;
+        vec4 r = floor(((64.0 - W4[k]) * a + W4[k] * b + 32.0) / 64.0) - g_c[i];
+        err += dot(r, r);
+    }
+    return err;
+}
+
+void put_bits(inout uvec4 o, inout uint pos, uint v, uint n) {
+    for (uint i = 0u; i < n; i++, pos++)
+        if (((v >> i) & 1u) != 0u) o[pos >> 5u] |= 1u << (pos & 31u);
+}
+
+void main() {
+    uvec2 bxy = gl_GlobalInvocationID.xy;
+    if (bxy.x >= pc.bw || bxy.y >= pc.bh) return;
+    // the texels (a mip smaller than a block repeats its edge)
+    vec4 mn = vec4(255.0), mx = vec4(0.0), mean = vec4(0.0);
+    for (int i = 0; i < 16; i++) {
+        ivec2 p = min(ivec2(bxy * 4u) + ivec2(i & 3, i >> 2), ivec2(pc.w, pc.h) - 1);
+        g_c[i] = round(texelFetch(u_mat_tex[nonuniformEXT(pc.tex)], p, int(pc.level)) * 255.0);
+        mn = min(mn, g_c[i]), mx = max(mx, g_c[i]), mean += g_c[i];
+    }
+    mean *= 1.0 / 16.0;
+    // the principal axis: the covariance's leading eigenvector (power iteration from the box's diagonal)
+    mat4 cov = mat4(0.0);
+    for (int i = 0; i < 16; i++) {
+        vec4 d = g_c[i] - mean;
+        cov += outerProduct(d, d);
+    }
+    vec4 axis = mx - mn;
+    for (int it = 0; it < 8; it++) {
+        vec4 a2 = cov * axis;
+        float l = length(a2);
+        if (l < 1e-6) break;
+        axis = a2 / l;
+    }
+    float al = length(axis);
+    axis = al > 1e-6 ? axis / al : vec4(0.0);
+    float t0 = 1e30, t1 = -1e30;
+    for (int i = 0; i < 16; i++) {
+        float t = dot(g_c[i] - mean, axis);
+        t0 = min(t0, t), t1 = max(t1, t);
+    }
+    vec4 e0 = clamp(mean + axis * t0, 0.0, 255.0), e1 = clamp(mean + axis * t1, 0.0, 255.0);
+    if (al <= 1e-6) e0 = e1 = mean; // (a flat block)
+    uvec4 q0, q1;
+    uint p0, p1, idx[16];
+    quantize(e0, q0, p0), quantize(e1, q1, p1);
+    vec4 a = vec4(q0 * 2u + p0), b = vec4(q1 * 2u + p1);
+    float err = indices(a, b, idx);
+    // a refit: the endpoints that best fit those indices (least squares), kept when the error drops
+    {
+        float A = 0.0, B = 0.0, C = 0.0;
+        vec4 X = vec4(0.0), Y = vec4(0.0);
+        for (int i = 0; i < 16; i++) {
+            float w = W4[idx[i]] / 64.0, v = 1.0 - w;
+            A += v * v, B += v * w, C += w * w, X += v * g_c[i], Y += w * g_c[i];
+        }
+        float det = A * C - B * B;
+        if (abs(det) > 1e-4) {
+            vec4 f0 = clamp((C * X - B * Y) / det, 0.0, 255.0), f1 = clamp((A * Y - B * X) / det, 0.0, 255.0);
+            uvec4 r0, r1;
+            uint s0, s1, idx2[16];
+            quantize(f0, r0, s0), quantize(f1, r1, s1);
+            vec4 a2 = vec4(r0 * 2u + s0), b2 = vec4(r1 * 2u + s1);
+            float err2 = indices(a2, b2, idx2);
+            if (err2 < err) {
+                q0 = r0, q1 = r1, p0 = s0, p1 = s1;
+                for (int i = 0; i < 16; i++) idx[i] = idx2[i];
+            }
+        }
+    }
+    // the anchor (texel 0) keeps its index's top bit 0: the endpoints swapped, the indices mirrored
+    if (idx[0] >= 8u) {
+        uvec4 tq = q0; q0 = q1; q1 = tq;
+        uint tp = p0; p0 = p1; p1 = tp;
+        for (int i = 0; i < 16; i++) idx[i] = 15u - idx[i];
+    }
+    uvec4 o = uvec4(0u);
+    uint pos = 0u;
+    put_bits(o, pos, 1u << 6u, 7u); // mode 6
+    for (int ch = 0; ch < 4; ch++) {
+        put_bits(o, pos, q0[ch], 7u);
+        put_bits(o, pos, q1[ch], 7u);
+    }
+    put_bits(o, pos, p0, 1u);
+    put_bits(o, pos, p1, 1u);
+    put_bits(o, pos, idx[0], 3u);
+    for (int i = 1; i < 16; i++) put_bits(o, pos, idx[i], 4u);
+    BlockBuf(pc.out_addr).b[bxy.y * pc.bw + bxy.x] = o;
+}

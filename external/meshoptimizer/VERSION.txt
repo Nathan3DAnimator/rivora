@@ -1,0 +1,1 @@
+meshoptimizer v1.3 (https://github.com/zeux/meshoptimizer, tag v1.3, 9e1f07b), MIT: src/ and demo/clusterlod.h copied unchanged.

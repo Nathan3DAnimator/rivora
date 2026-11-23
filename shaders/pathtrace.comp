@@ -1,0 +1,162 @@
+#version 460
+// The Path Tracing view mode: the reference ("ground truth") the GI is compared with, and playable. One path per pixel
+// per frame, next-event estimation with a shadow ray per light, Lambert + GGX lobes chosen by their weight, Russian
+// roulette after 2 bounces.
+//   * the samples add up while nothing changes (render.c's count, f.pad1, goes on): the exact reference;
+//   * when the camera or the scene changes, the history is reprojected instead of thrown away (the primary hit through
+//     last frame's view: its pixel there, accepted when the depth stored there agrees), at most 12 samples kept: the
+//     image follows the motion without the noise starting over;
+//   * the accumulation is two images side by side (u_accum is twice as wide): this frame writes one half, reads the
+//     other (pc.pad's parity); .w = the samples + the view depth (log2 / 32 in its fraction: the disocclusion test);
+//   * pass 1 (a second dispatch): the denoise, an edge-aware 5 x 5 filter (the depth stops it), stronger the fewer the
+//     samples, into the HDR target.
+#include "common.glsl"
+#include "weather.glsl"
+#define RT_PHYSICAL_LIGHTS // the reference: every light at its own intensity (no Indirect Lighting Intensity)
+#include "rt.glsl"
+#include "atmosphere.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 7, rgba32f) uniform image2D u_accum;
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D u_out;
+
+uint hash(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+float rnd(inout uint s) { s = hash(s); return float(s >> 8) / 16777216.0; }
+
+mat3 basis(vec3 n) {
+    vec3 t = abs(n.z) < 0.999 ? normalize(cross(vec3(0, 0, 1), n)) : vec3(1, 0, 0);
+    return mat3(t, cross(n, t), n);
+}
+
+float depth_of(float w) { return exp2(fract(w) * 32.0) - 1.0; }
+float pack_w(float n, float depth) { return n + min(log2(depth + 1.0) / 32.0, 0.9999); }
+
+void denoise(FrameBuf f, ivec2 px, ivec2 size, ivec2 cur) {
+    vec4 c = imageLoad(u_accum, px + cur);
+    float n = max(floor(c.w), 1.0), dc = depth_of(c.w);
+    vec3 col = c.rgb / n;
+    float k = clamp(6.0 / n, 0.0, 1.0); // (the blur's share: less and less as the samples add up)
+    if (n < 64.0) { // a firefly (far brighter than every neighbor at its depth): their mean instead
+        float lc = dot(col, vec3(0.299, 0.587, 0.114)), lmax = 0.0, lsum = 0.0, cnt = 0.0;
+        vec3 csum = vec3(0.0);
+        for (int y = -1; y <= 1; y++)
+            for (int x = -1; x <= 1; x++) {
+                if (x == 0 && y == 0) continue;
+                vec4 s = imageLoad(u_accum, clamp(px + ivec2(x, y), ivec2(0), size - 1) + cur);
+                vec3 sc = s.rgb / max(floor(s.w), 1.0);
+                float ls = dot(sc, vec3(0.299, 0.587, 0.114));
+                lmax = max(lmax, ls), csum += sc, cnt += 1.0;
+            }
+        if (lc > lmax * 2.0 + 1e-4) col = csum / cnt;
+    }
+    if (k > 0.02) {
+        vec3 sum = col;
+        float wsum = 1.0;
+        int step = n < 3.0 ? 2 : 1;
+        for (int y = -2; y <= 2; y++)
+            for (int x = -2; x <= 2; x++) {
+                if (x == 0 && y == 0) continue;
+                ivec2 q = clamp(px + ivec2(x, y) * step, ivec2(0), size - 1);
+                vec4 s = imageLoad(u_accum, q + cur);
+                float ns = max(floor(s.w), 1.0), ds = depth_of(s.w);
+                float wd = exp(-abs(ds - dc) / (0.02 * max(dc, ds) + 1.0)); // (an edge: another depth)
+                float wg = exp(-float(x * x + y * y) * 0.25);
+                float w = wd * wg * min(ns, 8.0) / 8.0;
+                sum += s.rgb / ns * w, wsum += w;
+            }
+        col = mix(col, sum / wsum, k);
+    }
+    imageStore(u_out, px, vec4(min(col * pre_exposure(f), vec3(60000.0)), 1.0)); // pre-exposed
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(u_out);
+    if (px.x >= size.x || px.y >= size.y) return;
+    ivec2 cur = ivec2((pc.pad & 1u) * uint(size.x), 0), prev = ivec2((1u - (pc.pad & 1u)) * uint(size.x), 0);
+    if (pc.pass == 1u) {
+        denoise(f, px, size, cur);
+        return;
+    }
+    uint seed = hash(uint(px.x) * 1973u + uint(px.y) * 9277u + f.pad1 * 26699u) | 1u;
+    vec2 ndc = ((vec2(px) + vec2(rnd(seed), rnd(seed))) / vec2(size)) * 2.0 - 1.0;
+    vec3 o = view_origin(f, ndc); // (orthographic: the pixel's own point)
+    vec3 d = view_ray(f, ndc);
+    vec3 L = vec3(0.0), T = vec3(1.0);
+    float first_t = -1.0; // the primary hit's distance: the aerial perspective over it
+    float sky = f.sky_params.x;
+    for (int bounce = 0; bounce < 6; bounce++) {
+        Hit h = trace_closest(f, o, d, 1e7);
+        if (!h.hit) {
+            L += T * sky_clouds(f, d, bounce == 0) * (bounce == 0 ? 1.0 : sky);
+            break;
+        }
+        if (bounce == 0) first_t = h.t;
+        L += T * (bounce == 0 ? h.emissive : h.glow); // (2026-11-23: its glow's light comes by the lights' sampling after the first hit)
+        vec3 n = h.normal;
+        vec3 diff = h.base * (1.0 - h.metal);
+        vec3 f0 = mix(vec3(0.04), h.base, h.metal);
+        float rough = clamp(h.rough, 0.045, 1.0);
+        L += T * diff / PI * direct_irradiance(f, h.pos, n);
+        // the next direction: the specular lobe with probability ps, else the diffuse one (cosine-weighted)
+        float spec_w = dot(f0, vec3(0.333)) + (1.0 - rough) * 0.25;
+        float diff_w = dot(diff, vec3(0.333));
+        float ps = clamp(spec_w / max(spec_w + diff_w, 1e-4), 0.05, 0.95);
+        vec3 nd;
+        if (rnd(seed) < ps) {
+            // GGX-distributed half vector
+            float a = rough * rough, u1 = rnd(seed), u2 = rnd(seed);
+            float ct = sqrt((1.0 - u1) / (1.0 + (a * a - 1.0) * u1)), st = sqrt(1.0 - ct * ct), ph = 6.2831853 * u2;
+            vec3 hv = basis(n) * vec3(st * cos(ph), st * sin(ph), ct);
+            nd = reflect(d, hv);
+            if (dot(nd, n) <= 0.0) break;
+            float vh = max(dot(-d, hv), 0.0);
+            vec3 F = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
+            T *= F / ps;
+        } else {
+            float u1 = rnd(seed), u2 = rnd(seed), r = sqrt(u1), ph = 6.2831853 * u2;
+            nd = basis(n) * vec3(r * cos(ph), r * sin(ph), sqrt(max(1.0 - u1, 0.0)));
+            T *= diff / (1.0 - ps);
+        }
+        if (bounce >= 2) { // Russian roulette
+            float q = clamp(max(T.r, max(T.g, T.b)), 0.05, 0.95);
+            if (rnd(seed) > q) break;
+            T /= q;
+        }
+        o = h.pos + n * 0.5;
+        d = nd;
+    }
+    if (first_t > 0.0 && f.sun_illuminance.w > 0.0) {
+        vec4 ap = aerial_perspective(f, ndc, first_t);
+        L = L * ap.a + ap.rgb;
+    }
+    uint samples = f.pad1 & 0x7FFFFFFFu;
+    bool cam_moved = (f.pad1 & 0x80000000u) != 0u;
+    if (any(isnan(L)) || any(isinf(L))) L = vec3(0.0);
+    L = min(L, vec3((samples == 0u ? 16.0 : 64.0) / pre_exposure(f))); // fireflies capped (64 on screen; 16 while it moves)
+    // the history: this pixel's primary hit (or its sky direction) in last frame's view, kept when its depth agrees
+    vec3 wp = view_origin(f, ndc) + view_ray(f, ndc) * (first_t > 0.0 ? first_t : 1.0e7);
+    float depth = first_t > 0.0 ? abs((f.view_proj * vec4(wp, 1.0)).w) : 0.0; // (the view depth: |w|, whatever the convention's sign)
+    vec4 pc4 = f.cloud_prev_vp * vec4(wp, 1.0);
+    vec3 sum = vec3(0.0);
+    float n = 0.0;
+    if (abs(pc4.w) > 1e-3) {
+        ivec2 pp = ivec2(floor((pc4.xy / pc4.w * 0.5 + 0.5) * vec2(size)));
+        if (all(greaterThanEqual(pp, ivec2(0))) && all(lessThan(pp, size))) {
+            vec4 h = imageLoad(u_accum, pp + prev);
+            float hn = floor(h.w), hd = depth_of(h.w);
+            bool ok = first_t > 0.0 ? abs(hd - abs(pc4.w)) < 0.03 * abs(pc4.w) + 2.0 : hd < 1.0; // (the sky: sky there too)
+            if (hn > 0.0 && ok) {
+                // (the camera moved: a short memory; only the scene: a longer one; nothing: all of it)
+                float keep = samples == 0u ? min(hn, cam_moved ? 12.0 : 64.0) : min(hn, 8192.0);
+                sum = h.rgb / hn * keep, n = keep;
+            }
+        }
+    }
+    sum += L, n += 1.0;
+    imageStore(u_accum, px + cur, vec4(sum, pack_w(n, depth)));
+}

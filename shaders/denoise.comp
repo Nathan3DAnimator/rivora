@@ -1,0 +1,304 @@
+#version 460
+// The unified ray traced denoiser (A9.1d; render.c, after the main pass, the Photoreal styles: notas-dev/render.md
+// "Denoiser unificado"). mesh.frag (GI_DENOISE) leaves three noisy signals out of its color, each traced once per pixel
+// per frame: the indirect diffuse light (a cosine ray: the near field traced, the cache / probes past 30 m), the rough
+// specular reflection (a GGX ray, by the visible normals), and the shadow-casting local lights' visibility (the shadow
+// split's, binding 53). One filter for the three, guided by the same key (common.glsl den_key: normal, roughness, the
+// actor) and the depth, in NVIDIA ReBLUR's order:
+//   pass 0: the pre-blur: each signal over 8 taps around (the reflection's narrower by its roughness), so that what
+//           enters the history each frame is already a mean (the raw sample alone made the frames differ: flicker)
+//   pass 1: the history: this point last frame (reprojected through the depth), its 4 texels kept only on the same
+//           actor, facing the same way, at the depth this point had (strict: a texel that fails is dropped, never
+//           blended). The frames it holds are few (diffuse 32, a reflection 3-12 by its roughness, the shadow 8), and a
+//           fast history (3 frames) cuts the long one short when the light changes (no ghosting)
+//   pass 2: the post-blur (8 taps, wide while the history is short), then the color gets diffuse * albedo + specular *
+//           its weight + the shadowed light * its visibility (albedo and weight with the air's and the fog's
+//           transmittance: mesh.frag). The key, the actor and the depth are kept for next frame's pass 1.
+// A tap counts on the same surface: on this point's plane (the depth buffer's value is affine across a plane) and
+// facing the same way; a reflection's only on the same actor, of a like roughness, the normals closer the smoother it
+// is. The three signals share the taps (one load each: mesh.frag o_den, then the key alone), each weighted by its own
+// radius. The taps turn per pixel and per frame (the TSR averages the turns).
+// pc.pass bit 8: the history is reset (a cut); bit 9: the split holds the shadows; bit 10: the layer this frame writes
+// (the other is last frame's); bit 11: the history fix off (Q20, REALENGINE_NO_HISTORY_FIX); bits 12-15: a debug view
+// (REALENGINE_DEN_DEBUG). pc.pad: last frame's pre-exposure into
+// this one's (a vendor upscaler's: render.c), as float bits. The pass: the specialization (a pipeline each).
+#include "common.glsl"
+#include "denoise.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 8, rgba16f) uniform image2D o_hdr;
+layout(set = 0, binding = 21) uniform sampler2D u_depth;
+layout(set = 0, binding = 40) uniform sampler2D u_velocity; // (2026-11-15) the moved actors' own screen motion (uv, current - previous)
+layout(set = 0, binding = 53) uniform sampler2D u_split;
+layout(set = 0, binding = 69, rgba32ui) uniform uimage2D u_den;        // mesh.frag o_den: the signals, the key, the albedo
+layout(set = 0, binding = 70, rgba32ui) uniform uimage2D u_guide;      // mesh.frag o_guide: the reflection's weight, actor + 1, depth
+layout(set = 0, binding = 71, rgba32ui) uniform uimage2D u_guide_prev; // last frame's key, actor + 1, depth
+layout(set = 0, binding = 72, rgba16f) uniform image2DArray u_hd;      // diffuse, its frames (2 layers: ping-pong)
+layout(set = 0, binding = 73, rgba16f) uniform image2DArray u_hs;      // specular, its frames
+layout(set = 0, binding = 74, rgba16f) uniform image2DArray u_hv;      // visibility, its frames, the fast diffuse and specular
+layout(set = 0, binding = 75, rgba16f) uniform image2D u_ta;           // pass 0's diffuse, visibility (-1: none)
+layout(set = 0, binding = 76, rgba16f) uniform image2D u_tb;           // pass 0's specular
+layout(set = 0, binding = 77, r32ui) uniform uimage2D u_key;           // this frame's keys (0: none), for pass 2's taps
+layout(set = 0, binding = 78, rgba16f) uniform image2DArray u_hst;     // the stabilized diffuse output (a < 0: none), ping-pong
+
+layout(constant_id = 0) const uint PASS = 0u; // (render.c: a pipeline a pass)
+#define MAX_D 64.0
+#define MAX_V 8.0
+
+float ign(vec2 px) { return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715)))); }
+float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+vec3 world_of(FrameBuf f, vec2 px, vec2 size, float z) {
+    vec4 wp = f.tsr_inv * vec4((px + 0.5) / size * 2.0 - 1.0, max(z, 1e-7), 1.0);
+    return wp.xyz / wp.w;
+}
+float spec_frames(float rough) { return mix(4.0, 24.0, smoothstep(0.15, 0.6, rough)); } // (a sharper lobe moves with the view)
+vec3 clean(vec3 v) { return any(isnan(v)) || any(isinf(v)) ? vec3(0.0) : v; }
+float raw_v(ivec2 q) { // (the split: light unshadowed and its luminance times the visibility; -1: no shadowed light there)
+    vec4 s = texelFetch(u_split, q, 0);
+    float l = lum(s.rgb);
+    return l > 0.0 ? clamp(s.a / l, 0.0, 1.0) : -1.0;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    FrameBuf f = FrameBuf(pc.frame);
+    vec2 size = floor(1.0 / f.viewport.zw + 0.5);
+    if (float(p.x) >= size.x || float(p.y) >= size.y) return;
+    bool reset = (pc.pass & 256u) != 0u, split = (pc.pass & 512u) != 0u, fix_on = (pc.pass & 2048u) == 0u; // (bit 11: Q20's history fix off)
+    int cur = int((pc.pass >> 10u) & 1u), prv = 1 - cur;
+    float zc = texelFetch(u_depth, p, 0).r;
+    uvec4 gd = imageLoad(u_guide, p);
+    // (written by this pixel's surface: a later draw over it, the water, a particle's mesh, keeps the depth its own)
+    bool ok = gd.y != 0u && abs(uintBitsToFloat(gd.z) - zc) <= 1e-5 * zc + 1e-10;
+    // (2026-11-14, "sombreamento com taxa variável cria artefatos de quadrados") a coarse pixel (VRS 2x2, 2x1) writes its
+    // center's depth to the 2 or 4 pixels it covers: off this pixel's own by up to a pixel's step of the plane. Taken
+    // as "another surface over it", the GI of those pixels was dropped: dark or black blocks on flat surfaces. Within
+    // the plane's step (the nearer neighbor on each axis, read only when the exact test fails) it is ours
+    if (!ok && gd.y != 0u) {
+        ivec2 hi = ivec2(size) - 1;
+        float zl = texelFetch(u_depth, max(p - ivec2(1, 0), ivec2(0)), 0).r, zr = texelFetch(u_depth, min(p + ivec2(1, 0), hi), 0).r;
+        float zd = texelFetch(u_depth, max(p - ivec2(0, 1), ivec2(0)), 0).r, zu = texelFetch(u_depth, min(p + ivec2(0, 1), hi), 0).r;
+        float step_ = min(abs(zr - zc), abs(zc - zl)) + min(abs(zu - zc), abs(zc - zd));
+        ok = abs(uintBitsToFloat(gd.z) - zc) <= 1e-5 * zc + 1e-10 + 1.25 * step_;
+    }
+    gd.z = floatBitsToUint(zc); // (this pixel's own depth from here on: the history keeps it)
+    if (PASS == 1u) {
+        if (!ok) { // nothing of ours here (the sky, the water...): no history
+            imageStore(u_hd, ivec3(p, cur), vec4(0.0));
+            imageStore(u_hs, ivec3(p, cur), vec4(0.0));
+            imageStore(u_hv, ivec3(p, cur), vec4(-1.0, 0.0, 0.0, 0.0));
+            return;
+        }
+        uint key = imageLoad(u_key, p).r;
+        vec3 nc = den_key_normal(key);
+        float rough = den_key_rough(key);
+        vec4 ta = imageLoad(u_ta, p), tb = imageLoad(u_tb, p);
+        vec3 D = ta.rgb, S = tb.rgb;
+        // (GI_DEN_CHECKER: a signal no tap of the pre-blur had, tb.a bit 1 the diffuse, 2 the reflection: the history kept
+        // as it is, no frame added)
+        uint miss = uint(tb.a + 0.5);
+        float vis = ta.a;
+        // last frame's: this point's world position by last frame's view, its 4 texels
+        vec4 hd = vec4(0.0), hs = vec4(0.0), hv = vec4(0.0), hst = vec4(0.0);
+        float wsum = 0.0, hvis = 0.0, wvis = 0.0, wst = 0.0;
+        if (!reset) {
+            vec4 bp = f.tsr_prev_vp * vec4(world_of(f, vec2(p), size, zc), 1.0);
+            // (last frame's render size: the dynamic resolution changes it; render.c packs it in the push's instances)
+            vec2 psize = vec2(float(pc.instances.x & 0xFFFFu), float(pc.instances.x >> 16u));
+            if (psize.x < 1.0) psize = size;
+            // (2026-11-15, "histórico temporal dos atores em movimento") the actor's own motion too (the velocity pass, drawn
+            // before this): a character walking kept its history at the place it left, lost it and was noisy a few frames
+            vec2 mv = f.tsr.z > 0.5 ? texelFetch(u_velocity, p, 0).xy : vec2(0.0);
+            bool moved = dot(mv, mv) > 1e-10;
+            if (bp.w > 1e-4) {
+                vec2 pp = (bp.xy / bp.w * 0.5 + 0.5 - mv) * psize - 0.5;
+                float ze = bp.z / bp.w;
+                ivec2 q0 = ivec2(floor(pp));
+                vec2 fr = pp - vec2(q0);
+                for (int k = 0; k < 4; k++) {
+                    ivec2 o = ivec2(k & 1, k >> 1), q = q0 + o;
+                    if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, ivec2(psize)))) continue;
+                    uvec4 gp = imageLoad(u_guide_prev, q);
+                    if (gp.y != gd.y) continue; // another actor there last frame
+                    if (dot(den_key_normal(gp.x), nc) < 0.9) continue; // turned away
+                    float zp = uintBitsToFloat(gp.z);
+                    // another depth: a disocclusion (a moving actor's: its depth last frame isn't this point's by the camera
+                    // alone; the same actor and a normal alike are enough, with a looser depth)
+                    if (abs(zp - ze) > ((moved ? 0.08 : 0.01) + 0.02 * (1.0 - abs(nc.z))) * ze) continue;
+                    float w = (o.x == 1 ? fr.x : 1.0 - fr.x) * (o.y == 1 ? fr.y : 1.0 - fr.y);
+                    vec4 v = imageLoad(u_hv, ivec3(q, prv));
+                    hd += imageLoad(u_hd, ivec3(q, prv)) * w, hs += imageLoad(u_hs, ivec3(q, prv)) * w, hv += v * w;
+                    if (v.x >= 0.0) hvis += v.x * w, wvis += w;
+                    vec4 st = imageLoad(u_hst, ivec3(q, prv));
+                    if (st.a > 0.0) hst += st * w, wst += w;
+                    wsum += w;
+                }
+            }
+        }
+        // last frame's pre-exposure into this one's (the auto exposure's step; a vendor's: render.c)
+        ExposureBuf e = ExposureBuf(f.exposure);
+        float es = f.ups_exposure > 0.0 ? uintBitsToFloat(pc.pad) : (e.pre_exposure > 0.0 ? e.exposure / e.pre_exposure : 1.0);
+        float lenD = 0.0, lenS = 0.0, lenV = 0.0, lD = lum(D), lS = lum(S), fD = lD, fS = lS;
+        if (wsum > 0.05 && !any(isnan(hd)) && !any(isnan(hs)) && !any(isnan(hv))) {
+            hd /= wsum, hs /= wsum, hv /= wsum;
+            hd.rgb *= es, hs.rgb *= es, hv.zw *= es;
+            float keep = clamp(wsum, 0.0, 1.0); // (a partial reprojection counts less: some of its texels dropped)
+            lenD = hd.a * keep, lenS = hs.a * keep, lenV = hv.y * keep;
+            fD = hv.z, fS = hv.w;
+        }
+        float lenD0 = lenD, lenS0 = lenS;
+        lenD = min(lenD + 1.0, MAX_D), lenS = min(lenS + 1.0, spec_frames(rough));
+        // the fast history (3 frames of the pre-blurred signal): where the long one strays from it by over 2x, the light
+        // changed (a lamp turned off, a door opened): the long one cut to 3 frames and pulled toward it
+        fD = mix(fD, lD, max(1.0 / lenD, 0.34)), fS = mix(fS, lS, max(1.0 / lenS, 0.34));
+        vec3 aD = lenD > 1.0 ? mix(hd.rgb, D, 1.0 / lenD) : D;
+        vec3 aS = lenS > 1.0 ? mix(hs.rgb, S, 1.0 / lenS) : S;
+        float rD = (lum(aD) + 1e-3) / (fD + 1e-3), rS = (lum(aS) + 1e-3) / (fS + 1e-3);
+        if (rD > 2.0 || rD < 0.5) aD *= clamp(rD, 0.5, 2.0) / rD, lenD = min(lenD, 3.0);
+        if (rS > 2.0 || rS < 0.5) aS *= clamp(rS, 0.5, 2.0) / rS, lenS = min(lenS, 3.0);
+        if ((miss & 1u) != 0u) aD = lenD0 > 0.0 ? hd.rgb : vec3(0.0), lenD = lenD0;
+        if ((miss & 2u) != 0u) aS = lenS0 > 0.0 ? hs.rgb : vec3(0.0), lenS = lenS0;
+        float aV = -1.0;
+        if (vis >= 0.0) { // the visibility: last frame's held within 0.25 of this frame's pre-blurred (a moving shadow lags by that at most)
+            lenV = wvis > 0.05 ? min(lenV + 1.0, MAX_V) : 1.0;
+            aV = lenV > 1.0 ? mix(clamp(hvis / wvis, vis - 0.25, vis + 0.25), vis, 1.0 / lenV) : vis;
+        } else lenV = 0.0;
+        imageStore(u_hd, ivec3(p, cur), vec4(min(aD, vec3(60000.0)), lenD));
+        imageStore(u_hs, ivec3(p, cur), vec4(min(aS, vec3(60000.0)), lenS));
+        imageStore(u_hv, ivec3(p, cur), vec4(aV, lenV, min(fD, 60000.0), min(fS, 60000.0)));
+        // last frame's stabilized output, for pass 2 (in pass 0's texel: read above, this pixel's own)
+        imageStore(u_ta, p, wst > 0.05 && !any(isnan(hst)) ? vec4(hst.rgb / wst * es, 1.0) : vec4(0.0, 0.0, 0.0, -1.0));
+        return;
+    }
+    // passes 0 and 2: the blurs
+    if (!ok) {
+        if (PASS == 0u) imageStore(u_key, p, uvec4(0u)), imageStore(u_ta, p, vec4(0.0, 0.0, 0.0, -1.0)), imageStore(u_tb, p, vec4(0.0));
+        else imageStore(u_guide_prev, p, uvec4(0u)), imageStore(u_hst, ivec3(p, cur), vec4(0.0, 0.0, 0.0, -1.0));
+        return;
+    }
+    uvec4 dc = imageLoad(u_den, p);
+    uint key = dc.z;
+    if (PASS == 0u) imageStore(u_key, p, uvec4(key));
+    vec3 nc = den_key_normal(key);
+    float rough = den_key_rough(key);
+    vec3 albedo = unpackUnorm4x8(dc.w).rgb, spw = unpackUnorm4x8(gd.x).rgb;
+    vec4 hd = vec4(0.0), hs = vec4(0.0), hv = vec4(0.0);
+    vec3 cD, cS;
+    float cV;
+    bool mD = PASS == 0u && dc.x == DEN_MISSING, mS = PASS == 0u && dc.y == DEN_MISSING; // (GI_DEN_CHECKER: the other color's)
+    if (PASS == 0u) cD = mD ? vec3(0.0) : clean(unpack_r11g11b10(dc.x)), cS = mS ? vec3(0.0) : clean(unpack_r11g11b10(dc.y)), cV = split ? raw_v(p) : -1.0;
+    else {
+        hd = imageLoad(u_hd, ivec3(p, cur)), hs = imageLoad(u_hs, ivec3(p, cur)), hv = imageLoad(u_hv, ivec3(p, cur));
+        cD = hd.rgb, cS = hs.rgb, cV = hv.x;
+    }
+    bool needD = albedo != vec3(0.0), needS = spw != vec3(0.0), needV = cV >= 0.0; // (each signal only where it was traced)
+    // the radii (px): the pre-blur's fixed (the reflection's by its roughness: a glossy one keeps its detail); the
+    // post-blur's wide while the history is short, a few pixels once it holds its frames
+    float sharp = clamp((rough - 0.1) * 2.5, 0.15, 1.0);
+    // (the diffuse pre-blur's by the ray's hit distance, as ReBLUR: a contact or a corner a few pixels, an open floor
+    // 10; its world size over this pixel's: mesh.frag packs it in the albedo's alpha, log2(1 + d / 4) / 9.553)
+    float rD0 = 10.0;
+    if (PASS == 0u && needD && !mD) {
+        float hit = (exp2(unpackUnorm4x8(dc.w).a * 9.553) - 1.0) * 4.0;
+        vec3 w0 = world_of(f, vec2(p), size, zc), w1 = world_of(f, vec2(p) + vec2(1.0, 0.0), size, zc);
+        rD0 = clamp(0.5 * hit / max(length(w1 - w0), 1e-3), 3.0, 10.0);
+    }
+    // (Q20, ReBLUR's history fix; notas-dev/gi-estavel.md) a pixel whose history is short (just uncovered behind a moving
+    // actor, a disocclusion) takes its neighbors on the same surface by how many frames they hold: their converged light
+    // in place of its own one or two frames of noise, which flickered along the trail for several frames (the ghosting
+    // probe: 2.6-2.9% behind the pillar in the Photoreal style). A tap's weight times its frames over this pixel's
+    bool fixD = PASS == 2u && fix_on && hd.a < 8.0, fixS = PASS == 2u && fix_on && hs.a < 4.0;
+    float rD = needD ? (PASS == 0u ? rD0 : 4.0 + 10.0 / sqrt(max(hd.a, 1.0))) : 0.0;
+    // (Q20) the history fix reaches past the uncovered strip (a walking actor uncovers ~5 px a frame: 8 frames of it are
+    // wider than the 14 px of a new pixel's blur) to the neighbors that hold their frames
+    if (fixD) rD = max(rD, hd.a < 2.0 ? 28.0 : hd.a < 4.0 ? 20.0 : 14.0);
+    float rS = needS ? (PASS == 0u ? 8.0 : 1.5 + 8.0 / sqrt(max(hs.a, 1.0))) * sharp : 0.0;
+    float rV = needV ? (PASS == 0u ? 4.0 : 1.0 + 4.0 / sqrt(max(hv.y, 1.0))) : 0.0;
+    float rad = max(rD, max(rS, rV));
+    // (each signal's weight falls with the tap's distance over its own radius: a narrower one takes the near taps)
+    vec3 kr = vec3(rD, rS, rV);
+    kr = vec3(-2.0) / max(kr * kr, vec3(1e-4));
+    // this point's plane in the screen: the depth buffer's value is affine across a plane (what the rasterizer
+    // interpolates), its slope from the nearer-in-depth neighbor on each axis (an edge's other side left out)
+    vec2 dz;
+    {
+        float l = texelFetch(u_depth, max(p - ivec2(1, 0), ivec2(0)), 0).r, r = texelFetch(u_depth, min(p + ivec2(1, 0), ivec2(size) - 1), 0).r;
+        float d = texelFetch(u_depth, max(p - ivec2(0, 1), ivec2(0)), 0).r, u = texelFetch(u_depth, min(p + ivec2(0, 1), ivec2(size) - 1), 0).r;
+        dz.x = abs(r - zc) < abs(zc - l) ? r - zc : zc - l;
+        dz.y = abs(u - zc) < abs(zc - d) ? u - zc : zc - d;
+    }
+    float ang = ign(vec2(p) + (PASS == 0u ? float(f.frame_index & 63u) * 5.588238 : 0.0)) * 6.2831853 + float(PASS) * 1.3;
+    float cs = cos(ang), sn = sin(ang);
+    float spow = 8.0 + 56.0 * (1.0 - rough);
+    uint actor = den_key_actor(key);
+    vec3 sD = cD, sS = cS;
+    float wD = mD ? 0.0 : 1.0, wS = mS ? 0.0 : 1.0, sV = max(cV, 0.0), wV = 1.0;
+    for (int k = 0; k < 8; k++) { // (Vogel's spiral)
+        float r = sqrt((float(k) + 0.5) / 8.0), t = float(k) * 2.3999632;
+        vec2 o = vec2(cos(t), sin(t)) * (r * rad);
+        o = vec2(o.x * cs - o.y * sn, o.x * sn + o.y * cs);
+        ivec2 q = ivec2(vec2(p) + 0.5 + o);
+        if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, ivec2(size))) || q == p) continue;
+        float zq = texelFetch(u_depth, q, 0).r;
+        uvec4 dq = PASS == 0u ? imageLoad(u_den, q) : uvec4(0u, 0u, imageLoad(u_key, q).r, 0u);
+        uint kq = dq.z;
+        if (kq == 0u) continue;
+        vec2 dd = vec2(q - p);
+        float wg = clamp(1.0 - abs(zq - (zc + dot(dz, dd))) / (zc * (0.01 + 0.002 * length(dd))), 0.0, 1.0); // (1% off its plane: another surface)
+        if (wg <= 0.0) continue;
+        float nd = max(dot(nc, den_key_normal(kq)), 0.0);
+        vec3 fall = exp(kr * dot(o, o)); // (o: the tap's offset in px)
+        if (needD) {
+            float w = wg * pow(nd, 8.0) * fall.x;
+            if (PASS == 0u) {
+                if ((dq.w & 0xFFFFFFu) != 0u && dq.x != DEN_MISSING && w > 1e-4) sD += clean(unpack_r11g11b10(dq.x)) * w, wD += w; // (a tap without the diffuse signal: none)
+            } else if (w > 1e-4) {
+                vec4 t = imageLoad(u_hd, ivec3(q, cur));
+                w *= fixD ? clamp(t.a / max(hd.a, 1.0), 0.25, 16.0) : 1.0;
+                sD += t.rgb * w, wD += w;
+            }
+        }
+        if (needS && den_key_actor(kq) == actor) { // (a reflection: another actor's never)
+            float rq = den_key_rough(kq);
+            float w = wg * pow(nd, spow) * exp(-abs(rq - rough) * 12.0) * fall.y;
+            if (PASS == 0u) {
+                if (rq >= f.gi_params.z && rq < 0.9 && dq.y != DEN_MISSING && w > 1e-4) sS += clean(unpack_r11g11b10(dq.y)) * w, wS += w; // (traced there too)
+            } else if (w > 1e-4) {
+                vec4 t = imageLoad(u_hs, ivec3(q, cur));
+                w *= fixS ? clamp(t.a / max(hs.a, 1.0), 0.25, 8.0) : 1.0;
+                sS += t.rgb * w, wS += w;
+            }
+        }
+        if (needV) {
+            float w = wg * step(0.7, nd) * fall.z;
+            float vq = w > 1e-4 ? (PASS == 0u ? raw_v(q) : imageLoad(u_hv, ivec3(q, cur)).x) : -1.0;
+            if (vq >= 0.0) sV += vq * w, wV += w;
+        }
+    }
+    vec3 oD = wD > 0.0 ? sD / wD : vec3(0.0), oS = wS > 0.0 ? sS / wS : vec3(0.0);
+    float oV = needV ? sV / wV : -1.0;
+    if (PASS == 0u) {
+        imageStore(u_ta, p, vec4(oD, oV));
+        imageStore(u_tb, p, vec4(oS, float((wD > 0.0 ? 0u : 1u) | (wS > 0.0 ? 0u : 2u))));
+        return;
+    }
+    // pass 2: the stabilization (ReBLUR's last step): last frame's output held within 5% of this frame's filtered one,
+    // and blended. What still changed between frames (the new samples' residue, the turned taps) mostly stays inside
+    // the band and is averaged; a real change (a light, a door) moves the band with it: it lags by at most 5%
+    vec4 sp = imageLoad(u_ta, p);
+    if (sp.a > 0.0) oD = mix(clamp(sp.rgb, oD * 0.95 - 1e-4, oD * 1.05 + 1e-4), oD, 0.15);
+    imageStore(u_hst, ivec3(p, cur), vec4(min(oD, vec3(60000.0)), 1.0));
+    // the color gets them; the key, the actor, the depth kept for next frame
+    imageStore(u_guide_prev, p, uvec4(key, gd.y, gd.z, gd.w)); // (w: the pixel's ReSTIR reservoir, A9.1a: mesh.frag reads it)
+    vec4 h = imageLoad(o_hdr, p);
+    vec3 add = oD * albedo + oS * spw;
+    if (split && oV >= 0.0) add += texelFetch(u_split, p, 0).rgb * oV;
+    // REALENGINE_DEN_DEBUG (render.c): 1 the diffuse alone, 2 the reflection alone, 3 the visibility (grey) over black,
+    // 4 the diffuse history's frames (red under 8, blue 8-31, green 32)
+    uint dbg = (pc.pass >> 12u) & 15u;
+    if (dbg != 0u)
+        h.rgb = vec3(0.0), add = dbg == 1u ? oD * albedo : dbg == 2u ? oS * spw : dbg == 3u ? vec3(max(oV, 0.0))
+                                : vec3(hd.a < 8.0 ? 1.0 : 0.0, hd.a >= MAX_D ? 1.0 : 0.0, hd.a >= 8.0 && hd.a < MAX_D ? 1.0 : 0.0);
+    h.rgb = min(h.rgb + add, vec3(60000.0));
+    imageStore(o_hdr, p, h);
+}

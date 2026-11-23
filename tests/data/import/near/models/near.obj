@@ -1,0 +1,21 @@
+# (2026-11-23) The textures around (import_near): Crate's MTL names a .tga in a folder that isn't there (its .png is in
+# ../textures); Barrel's names none (Barrel_BaseColor, Barrel_Normal and Barrel_ORM are in ../textures, by its name)
+mtllib near.mtl
+o Crate
+v 0 0 0
+v 1 0 0
+v 1 1 0
+v 0 1 0
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 1
+usemtl Crate
+f 1/1 2/2 3/3 4/4
+o Barrel
+v 2 0 0
+v 3 0 0
+v 3 1 0
+v 2 1 0
+usemtl M_Barrel
+f 5/1 6/2 7/3 8/4

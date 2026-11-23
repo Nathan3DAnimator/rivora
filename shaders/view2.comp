@@ -1,0 +1,110 @@
+#version 460
+// The second 3D view (render.c render_view2, notas-dev/render.md): the same scene on the GPU (the TLAS, the materials'
+// colors, the lights, the sky) seen from a camera of its own, ray traced into a buffer of its own (nothing of the main
+// view's state is touched: its histories, its exposure, its occlusion stay as they are). Perspective or orthographic
+// (Top / Front / Side). Modes: 0 Lit (the lights with their shadow rays, the sky as ambient with one occlusion ray),
+// 1 Unlit (the base colors), 2 Normals, 3 Path Tracing (accumulated while the view and the scene stay; reset by the CPU).
+// Tone mapped (ACES, the main view's exposure) and sRGB-encoded into RGBA8 for the UI.
+#include "common.glsl"
+#include "weather.glsl"
+#define RT_PHYSICAL_LIGHTS
+#include "rt.glsl"
+#include "atmosphere.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer View2Buf {
+    vec4 pos;    // w: tan(fov / 2) (perspective)
+    vec4 fwd;    // w: the orthographic half height (cm; 0: perspective)
+    vec4 right;  // w: the aspect (width / height)
+    vec4 up;     // w: the mode
+    uvec4 size;  // width, height, the path tracer's samples so far (0: start over), the frame
+    uvec2 out_rgba;
+    uvec2 accum;
+};
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer U32Buf { uint v[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer V4Buf { vec4 v[]; };
+
+uint hash(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+float rnd(inout uint s) { s = hash(s); return float(s >> 8) / 16777216.0; }
+mat3 basis(vec3 n) {
+    vec3 t = abs(n.z) < 0.999 ? normalize(cross(vec3(0, 0, 1), n)) : vec3(1, 0, 0);
+    return mat3(t, cross(n, t), n);
+}
+vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+vec3 to_srgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    View2Buf V = View2Buf(uvec2(pc.pass, pc.pad));
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(V.size.xy);
+    if (px.x >= size.x || px.y >= size.y) return;
+    uint mode = uint(V.up.w + 0.5), samples = V.size.z;
+    uint seed = hash(uint(px.x) * 1973u + uint(px.y) * 9277u + V.size.w * 26699u) | 1u;
+    vec2 jit = mode == 3u ? vec2(rnd(seed), rnd(seed)) : vec2(0.5);
+    vec2 ndc = (vec2(px) + jit) / vec2(size) * 2.0 - 1.0;
+    bool ortho = V.fwd.w > 0.0;
+    vec3 o, d;
+    if (ortho) { // parallel rays from far behind the plane of the view
+        d = V.fwd.xyz;
+        o = V.pos.xyz + V.right.xyz * (ndc.x * V.fwd.w * V.right.w) - V.up.xyz * (ndc.y * V.fwd.w) - d * 500000.0;
+    } else {
+        o = V.pos.xyz;
+        d = normalize(V.fwd.xyz + V.right.xyz * (ndc.x * V.pos.w * V.right.w) - V.up.xyz * (ndc.y * V.pos.w));
+    }
+    vec3 L = vec3(0.0);
+    float sky = f.sky_params.x;
+    if (mode == 3u) { // the path tracer (pathtrace.comp's loop): accumulated
+        vec3 T = vec3(1.0), ro = o, rd = d;
+        for (int bounce = 0; bounce < 5; bounce++) {
+            Hit h = trace_closest(f, ro, rd, 1e7);
+            if (!h.hit) {
+                L += T * (ortho && bounce == 0 ? vec3(0.18) / max(pre_exposure(f), 1e-9) : sky_clouds(f, rd, bounce == 0) * (bounce == 0 ? 1.0 : sky));
+                break;
+            }
+            L += T * (bounce == 0 ? h.emissive : h.glow);
+            vec3 n = h.normal, diff = h.base * (1.0 - h.metal);
+            L += T * diff / PI * direct_irradiance(f, h.pos, n);
+            float u1 = rnd(seed), u2 = rnd(seed), r = sqrt(u1), ph = 6.2831853 * u2;
+            rd = basis(n) * vec3(r * cos(ph), r * sin(ph), sqrt(max(1.0 - u1, 0.0)));
+            T *= diff;
+            if (bounce >= 2) {
+                float q = clamp(max(T.r, max(T.g, T.b)), 0.05, 0.95);
+                if (rnd(seed) > q) break;
+                T /= q;
+            }
+            ro = h.pos + n * 0.5;
+        }
+        if (any(isnan(L)) || any(isinf(L))) L = vec3(0.0);
+        L = min(L, vec3(64.0 / max(pre_exposure(f), 1e-9)));
+        uint i = uint(px.y * size.x + px.x);
+        vec4 acc = samples == 0u ? vec4(0.0) : V4Buf(V.accum).v[i];
+        acc += vec4(L, 1.0);
+        V4Buf(V.accum).v[i] = acc;
+        L = acc.rgb / acc.w;
+    } else {
+        Hit h = trace_closest(f, o, d, 1e7);
+        if (!h.hit) {
+            L = ortho ? vec3(0.18) / max(pre_exposure(f), 1e-9) : sky_clouds(f, d, true); // (the ortho views: a neutral backdrop)
+        } else if (mode == 1u) {
+            L = (h.base + h.emissive) / max(pre_exposure(f), 1e-9) * 0.25; // (unlit: the colors as they are on screen)
+        } else if (mode == 2u) {
+            vec3 c = h.normal * 0.5 + 0.5;
+            U32Buf(V.out_rgba).v[uint(px.y * size.x + px.x)] = packUnorm4x8(vec4(c, 1.0));
+            return;
+        } else { // Lit: the lights (shadow rays), the sky over the normal's hemisphere, one ray for its occlusion
+            vec3 n = h.normal, diff = h.base * (1.0 - h.metal);
+            L = h.emissive + diff / PI * direct_irradiance(f, h.pos, n);
+            float u1 = rnd(seed), u2 = rnd(seed), r = sqrt(u1), ph = 6.2831853 * u2;
+            vec3 ad = basis(n) * vec3(r * cos(ph), r * sin(ph), sqrt(max(1.0 - u1, 0.0)));
+            float open = trace_visible_mask(f, h.pos + n * 0.5, ad, 400.0, RT_MASK_SHADOW) ? 1.0 : 0.35;
+            L += h.base * sky_clouds(f, n, false) * sky * open * (1.0 - 0.5 * h.metal);
+        }
+    }
+    vec3 c = to_srgb(aces(max(L * pre_exposure(f), vec3(0.0)) * 0.6));
+    U32Buf(V.out_rgba).v[uint(px.y * size.x + px.x)] = packUnorm4x8(vec4(c, 1.0));
+}

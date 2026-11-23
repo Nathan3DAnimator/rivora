@@ -1,0 +1,53 @@
+#version 460
+// The contact GI's sources (gi.glsl contact_gi): the light each occluder (the Movable actors nearest the camera) sends
+// back out, six radiances each: a box's faces along its own axes, a sphere's six world directions. Each is the mean of
+// four points on that side: the direct light with shadow rays (a face half in a spotlight's cone is half lit) plus the
+// GI probes' indirect, times the albedo, plus the emission. One thread per side: 192 at most, a few microseconds.
+#include "common.glsl"
+#include "gi.glsl"
+#include "atmosphere.glsl"
+#include "rt.glsl"
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 3) uniform sampler2D u_probe_irr;
+layout(set = 0, binding = 4) uniform sampler2D u_probe_dist;
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) writeonly buffer OccLightOut { vec4 l[]; };
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    uint id = gl_GlobalInvocationID.x;
+    uint oi = id / 6u, side = id % 6u;
+    if (oi >= f.occluder_count) return;
+    Occluder o = f.occluders[oi];
+    Instance inst = InstanceBuf(f.instances).i[floatBitsToUint(o.ax.w)]; // render.c: the occluder's scene slot
+    vec3 diff = inst.base_metal.rgb * (1.0 - inst.base_metal.w);
+    float s = (side & 1u) == 0u ? 1.0 : -1.0;
+    uint axis = side >> 1u;
+    vec3 c = o.center.xyz, nrm, center, u, w;
+    if (o.center.w < 0.0) { // a sphere: the world axis, four points around it on the sphere
+        float r = o.ax.x;
+        nrm = vec3(axis == 0u ? s : 0.0, axis == 1u ? s : 0.0, axis == 2u ? s : 0.0);
+        center = c + nrm * r;
+        u = vec3(nrm.z, nrm.x, nrm.y) * r * 0.5;
+        w = vec3(nrm.y, nrm.z, nrm.x) * r * 0.5;
+    } else { // a box face: the half-axis, the other two spanning it
+        vec3 A = axis == 0u ? o.ax.xyz : axis == 1u ? o.ay.xyz : o.az;
+        u = (axis == 0u ? o.ay.xyz : axis == 1u ? o.az : o.ax.xyz) * 0.5;
+        w = (axis == 0u ? o.az : axis == 1u ? o.ax.xyz : o.ay.xyz) * 0.5;
+        nrm = normalize(A) * s;
+        center = c + A * s;
+    }
+    vec3 e = vec3(0.0), irr = vec3(0.0);
+    for (int k = 0; k < 4; k++) {
+        vec3 p = center + u * ((k & 1) == 0 ? 1.0 : -1.0) + w * ((k & 2) == 0 ? 1.0 : -1.0);
+        vec3 n = o.center.w < 0.0 ? normalize(p - c) : nrm;
+        if (o.center.w < 0.0) p = c + n * o.ax.x;
+        // a few cm out: the sphere around a cylinder or a cone passes inside it at places
+        e += direct_irradiance_budget(f, p + n * 3.0, n, RT_MASK_SHADOW, 4u);
+        if ((f.gi_flags & GI_PROBES) != 0u) irr += probe_irradiance(f, u_probe_irr, u_probe_dist, p, n, n) * f.gi_params.x;
+        else if (f.sky_params.x > 0.0) irr += sh_irradiance(f, n) / PI;
+    }
+    vec3 radiance = diff * (e / PI + irr) * 0.25 + inst_glow(inst.ids.y, inst.emissive_rough);
+    OccLightOut(f.occ_light).l[id] = vec4(radiance, 0.0);
+}

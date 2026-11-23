@@ -1,0 +1,88 @@
+#version 460
+// Crowds (crowd.c, render.c crowd_record): every agent's parts written into the scene's instances, before the GPU
+// culling, which then treats them like any other (frustum, LODs, the occlusion, the shadow list). One thread per (agent,
+// part): the part's rows in the mesh's space sampled from the baked clips (two clips blended by the agent's speed, each
+// between two frames), then placed by the agent (its yaw, its size, its feet). Far agents drop their shadows (LOD 1) and
+// their small parts (LOD 2). pc.frame: the CrowdHeader; pc.instances: the scene's instances.
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+struct CrowdAgent { vec3 pos; float yaw; float pa, pb; uint clips; float blend; uint look; }; // (look: Q27.9, crowd.h)
+struct CrowdHeader {
+    uvec2 agents, templates, baked, big;
+    uint base, nagents, nparts, frames;
+    uvec2 prev; // each part's rows last frame (velocity_crowd.vert: the TSR's and the motion blur's motion), from slot pbase
+    uint pbase;
+};
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer CrowdHeaderBuf { CrowdHeader h; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer CrowdAgentBuf { CrowdAgent a[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer TemplateBuf { Instance i[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer InstanceOutBuf { Instance i[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) writeonly buffer PrevRowsOut { vec4 r[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer BakedBuf { vec4 v[]; };
+
+// A clip's part rows at a phase (between its two nearest frames)
+void sample_rows(BakedBuf b, uint clip, float phase, uint frames, uint nparts, uint part, out vec4 r0, out vec4 r1, out vec4 r2) {
+    float fr = fract(phase) * float(frames);
+    uint f0 = uint(fr) % frames, f1 = (f0 + 1u) % frames;
+    float t = fract(fr);
+    uint a = ((clip * frames + f0) * nparts + part) * 3u, c = ((clip * frames + f1) * nparts + part) * 3u;
+    r0 = mix(b.v[a], b.v[c], t), r1 = mix(b.v[a + 1u], b.v[c + 1u], t), r2 = mix(b.v[a + 2u], b.v[c + 2u], t);
+}
+
+// (Q27.9) the looks' palettes (multiplying the mesh's own colors): 8 skin tones, 32 tops, 16 bottoms (linear)
+const vec3 SKIN[8] = vec3[8](vec3(1.45, 1.1, 0.92), vec3(1.3, 0.95, 0.75), vec3(1.15, 0.8, 0.6), vec3(0.95, 0.66, 0.48),
+                             vec3(0.72, 0.48, 0.34), vec3(0.52, 0.34, 0.24), vec3(0.38, 0.25, 0.18), vec3(1.4, 1.02, 0.85));
+const vec3 TOP[32] = vec3[32](vec3(1.6), vec3(0.15), vec3(1.2, 0.12, 0.1), vec3(0.12, 0.25, 0.9), vec3(0.1, 0.6, 0.2), vec3(1.5, 1.3, 0.2),
+                              vec3(0.9, 0.9, 0.95), vec3(0.4, 0.42, 0.45), vec3(0.6, 0.1, 0.5), vec3(1.4, 0.55, 0.1), vec3(0.1, 0.8, 0.85),
+                              vec3(0.25, 0.15, 0.08), vec3(1.5, 0.7, 0.8), vec3(0.08, 0.1, 0.35), vec3(0.5, 0.6, 0.2), vec3(1.1, 1.0, 0.75),
+                              vec3(0.7, 0.05, 0.08), vec3(0.3, 0.5, 1.2), vec3(0.2, 0.35, 0.25), vec3(1.3, 1.15, 0.9), vec3(0.6, 0.6, 0.65),
+                              vec3(0.9, 0.3, 0.6), vec3(0.15, 0.45, 0.5), vec3(1.0, 0.85, 0.3), vec3(0.45, 0.25, 0.6), vec3(0.95, 0.4, 0.3),
+                              vec3(0.05), vec3(1.2, 1.2, 1.25), vec3(0.3, 0.2, 0.15), vec3(0.6, 0.75, 1.1), vec3(0.85, 0.55, 0.35), vec3(0.2, 0.25, 0.2));
+const vec3 BOTTOM[16] = vec3[16](vec3(0.18, 0.28, 0.55), vec3(0.1, 0.16, 0.35), vec3(0.08), vec3(0.4, 0.42, 0.45), vec3(0.85, 0.75, 0.55),
+                                 vec3(0.3, 0.25, 0.18), vec3(0.25, 0.3, 0.2), vec3(0.6, 0.62, 0.66), vec3(0.15, 0.12, 0.1), vec3(1.2, 1.15, 1.05),
+                                 vec3(0.35, 0.18, 0.12), vec3(0.22, 0.38, 0.7), vec3(0.5, 0.1, 0.1), vec3(0.12, 0.2, 0.15), vec3(0.7, 0.6, 0.45),
+                                 vec3(0.3));
+
+void main() {
+    CrowdHeader h = CrowdHeaderBuf(pc.frame).h;
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= h.nagents * h.nparts) return;
+    uint ai = gid / h.nparts, p = gid - ai * h.nparts;
+    CrowdAgent ag = CrowdAgentBuf(h.agents).a[ai];
+    Instance inst = TemplateBuf(h.templates).i[p];
+    uint ca = ag.clips & 255u, cb = (ag.clips >> 8) & 255u, lod = (ag.clips >> 16) & 255u;
+    float size = float(ag.clips >> 24) * 0.01;
+    BakedBuf bb = BakedBuf(h.baked);
+    vec4 a0, a1, a2, b0, b1, b2;
+    sample_rows(bb, ca, ag.pa, h.frames, h.nparts, p, a0, a1, a2);
+    sample_rows(bb, cb, ag.pb, h.frames, h.nparts, p, b0, b1, b2);
+    vec4 m0 = mix(a0, b0, ag.blend), m1 = mix(a1, b1, ag.blend), m2 = mix(a2, b2, ag.blend);
+    uint big = UintBuf(h.big).v[p];
+    if ((ag.look & 0x80000000u) != 0u) { // (Q27.9) its build (wider or slimmer about its own axis) and its region's color
+        float w = 0.88 + float((ag.look >> 12u) & 15u) * (0.26 / 15.0);
+        m0 *= w, m1 *= w;
+        uint reg = (big >> 2u) & 3u;
+        vec3 tint = reg == 0u ? SKIN[ag.look & 7u] : reg == 1u ? TOP[(ag.look >> 3u) & 31u] : BOTTOM[(ag.look >> 8u) & 15u];
+        if (reg != 3u) inst.lightmap_st = vec4(tint, 2.0); // (mesh.frag: a crowd's part with w 2 multiplies its color)
+    }
+    // the agent: turned by its yaw about Z, scaled, standing at its place (rows times the part's rows)
+    float yr = radians(ag.yaw), c = cos(yr) * size, s = sin(yr) * size;
+    inst.row0 = c * m0 - s * m1 + vec4(0.0, 0.0, 0.0, ag.pos.x);
+    inst.row1 = s * m0 + c * m1 + vec4(0.0, 0.0, 0.0, ag.pos.y);
+    inst.row2 = size * m2 + vec4(0.0, 0.0, 0.0, ag.pos.z);
+    uint flags = inst.ids.y | INST_ALIVE | INST_DYNAMIC | INST_CROWD | INST_NO_OCCLUDER;
+    if (lod >= 1u) flags &= ~INST_CAST_SHADOW;
+    if (lod >= 2u && (big & 1u) == 0u) flags &= ~INST_ALIVE;
+    if (lod >= 3u && (big & 2u) == 0u) flags &= ~INST_ALIVE; // (Q27.1: past 60 m the two biggest parts)
+    inst.ids.y = flags;
+    // last frame's rows of this slot, before they are replaced (a slot just made, its rows zero: this frame's, no motion)
+    InstanceOutBuf io = InstanceOutBuf(pc.instances);
+    Instance old = io.i[h.base + gid];
+    bool fresh = old.row0 == vec4(0.0) && old.row1 == vec4(0.0);
+    PrevRowsOut po = PrevRowsOut(h.prev);
+    uint k = (h.base + gid - h.pbase) * 3u;
+    po.r[k] = fresh ? inst.row0 : old.row0, po.r[k + 1u] = fresh ? inst.row1 : old.row1, po.r[k + 2u] = fresh ? inst.row2 : old.row2;
+    io.i[h.base + gid] = inst;
+}

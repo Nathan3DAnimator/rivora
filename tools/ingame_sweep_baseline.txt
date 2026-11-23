@@ -1,0 +1,47 @@
+# tools/ingame_sweep.py --write-baseline: what is "editor only" today, on purpose (notas-dev/em-jogo.md)
+details:src/editor.c:cine_rows:Diaphragm Blades
+details:src/editor.c:cine_rows:Shutter Speed
+details:src/editor.c:crowd_details:Agents
+details:src/editor.c:details:?
+details:src/editor.c:details:Enabled
+details:src/editor.c:details:Loop
+details:src/editor.c:details:Rim Height
+details:src/editor.c:editor_camera_post_ui:?
+details:src/editor.c:foliage_details:?
+details:src/editor.c:foliage_details:Color
+details:src/editor.c:foliage_details:Density
+details:src/editor.c:foliage_details:Max Slope
+details:src/editor.c:foliage_details:Stretch
+details:src/editor.c:foliage_details:Wind
+details:src/editor.c:landscape_details:Size
+details:src/editor.c:mode_panel:Layer
+details:src/editor.c:proto_details:?
+details:src/editor.c:proto_details:Ceiling
+details:src/editor.c:proto_details:Steps
+details:src/editor.c:wp_actor_details:?
+details:src/editor.c:wp_details:?
+details:src/editor.c:wp_details:Cell Size
+details:src/editor.c:wp_details:HLOD Min Size
+details:src/editor.c:wp_details:HLOD Triangles
+details:src/editor.c:wp_details:Loading Range
+details:src/editor_spline.inc:?:?
+details:src/editor_spline.inc:spline_details:?
+details:src/editor_spline.inc:spline_details:Collide with Bodies
+details:src/editor_spline.inc:spline_details:Collide with World
+details:src/editor_spline.inc:spline_details:Edit Point
+details:src/editor_spline.inc:spline_details:Instances Collide
+details:src/editor_spline.inc:spline_details:Point Roll
+details:src/editor_spline.inc:uint_cell:?
+details:src/editor_spline.inc:vec3_cell:?
+details:src/interaction_ui.c:ia_ui_device:?
+details:src/inventory_ui.c:inv_ui_inventory:?
+details:src/inventory_ui.c:inv_ui_inventory:Slots
+details:src/inventory_ui.c:inv_ui_pickup:Count
+details:src/pcg_editor.c:details:?
+details:src/pcg_editor.c:details:Debug Points
+details:src/pcg_editor.c:pcg_details:?
+details:src/pcg_editor.c:prop_ui:?
+details:src/rules_ui.c:drag_u16:?
+details:src/rules_ui.c:drag_u8:?
+details:src/rules_ui.c:rules_ui_component:Tag Points
+system:look_frame

@@ -1,0 +1,48 @@
+#version 460
+// The TLAS's instances (VkAccelerationStructureInstanceKHR) from the scene's slots, on the GPU (render.c runs it when
+// the scene changed): the same rows, the slot as the custom index (the hit shaders' InstanceBuf index), the mask from
+// the flags (0x01 visible, 0x02 casts shadows, 0x04 Static), the mesh's BLAS; an empty slot gets reference 0 (an
+// inactive instance). pc.vertices: the descriptors' address (a push field reused: no vertices here).
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+struct AsInstance {
+    vec4 row0, row1, row2;
+    uint index_mask;  // custom index (24 bits) | mask << 24
+    uint sbt_flags;   // SBT offset (24 bits) | flags << 24
+    uvec2 blas;
+};
+layout(buffer_reference, scalar, buffer_reference_align = 16) writeonly buffer AsInstanceBuf { AsInstance a[]; };
+
+#define FACING_CULL_DISABLE 0x1u // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR
+#define FORCE_NO_OPAQUE 0x8u     // VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR: a Masked mesh's (rt.glsl tests its alpha)
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(f.cull_params.w)) return;
+    Instance inst = InstanceBuf(pc.instances).i[i];
+    uint flags = inst.ids.y;
+    AsInstance o;
+    o.row0 = inst.row0;
+    o.row1 = inst.row1;
+    o.row2 = inst.row2;
+    uint mask = 0x01u | ((flags & INST_CAST_SHADOW) != 0u ? 0x02u : 0u) | ((flags & INST_STATIC) != 0u ? 0x04u : 0u);
+    mask |= 0x08u | ((flags & INST_CAST_SHADOW) != 0u ? 0x10u : 0u); // never moving (rt.glsl RT_MASK_STILL)
+    // (no other ray sees a Translucent one: no shadow, no reflection of it; 2026-11-17, Q4: only the glass's colored
+    // shadow rays, rt.glsl RT_MASK_GLASS)
+    if ((flags & INST_TRANSLUCENT) != 0u) mask = 0x20u;
+    o.index_mask = (i & 0xFFFFFFu) | (mask << 24);
+    uint sbt = FACING_CULL_DISABLE;
+    o.blas = uvec2(0u);
+    // the dynamic set is in its own TLAS (render.c builds it every frame)
+    if ((flags & INST_ALIVE) != 0u && (flags & INST_DYNAMIC) == 0u) {
+        uint shape = flags >> INST_SHAPE_SHIFT;
+        o.blas = MeshInfoBuf(f.mesh_info).m[shape].blas;
+        // (MESH_INFO_MASKED; with an opacity micromap, MESH_INFO_OMM, the micromap says which micro triangles test the alpha)
+        if ((MeshInfoBuf(f.mesh_info).m[shape].lod_count & 0x900u) == 0x100u) sbt |= FORCE_NO_OPAQUE;
+    }
+    o.sbt_flags = sbt << 24;
+    AsInstanceBuf(pc.vertices).a[i] = o;
+}

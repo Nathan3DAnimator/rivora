@@ -1,0 +1,205 @@
+#version 460
+// (Q17) Nanite Tessellation (tess.c, tess.glsl): the DAG clusters' triangles of displaced instances that cull.comp pass 7
+// copied into R.tess (their indices and owners), diced by their size on screen. One set per DAG phase (pc.pad: 0 the
+// first, 1 the late one), four steps:
+//   0 (one thread): this set's triangles (from where the last set ended to the cursor), the dispatch, the counts zeroed
+//   1: each triangle's three edge factors (from each edge alone: tess_factor) and its pattern N, its place in that
+//      pattern's list (a count per N); the micro triangles summed (the budget); the seam check when asked
+//   2 (one workgroup): the patterns' prefix sums -> this set's TESS_MAX indirect draws (the pattern N's indices, its
+//      triangles as instances, from its records)
+//   3: each triangle's record written at its place (tess.vert reads it per micro vertex; Q22: and the corners pass 1
+//      gathered, TESS_CRN_AT)
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_control_flow_attributes : require
+#include "common.glsl"
+#define MAT_SET 1
+#include "mat_common.glsl"
+#include "tess.glsl"
+
+layout(local_size_x = 64) in;
+
+shared uint s_sum[2], s_cnt[TESS_MAX], s_base;
+#define CL_MAX_CHUNKS_T 65536u // (render_gpu.h CL_MAX_CHUNKS)
+
+struct DrawCmd { uint index_count; uint instance_count; uint first_index; int vertex_offset; uint first_instance; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer DrawBuf { DrawCmd d[]; };
+
+// a triangle's instance: its cluster entry (cull.comp's info: slot; the DAG draw's vertex offset)
+void tess_owner(FrameBuf f, uint t, out uint slot, out uint vofs) {
+    uint e = UintBuf(addr_add(f.tess_buf, TESS_OWNER_AT)).v[t];
+    slot = UintBuf(addr_add(f.cl_work, 32u + 20u * f.cl_entries)).v[e * 4u];
+    vofs = uint(DrawBuf(addr_add(f.cl_work, 32u + 36u * f.cl_entries + 16u * CL_MAX_CHUNKS_T)).d[e].vertex_offset);
+}
+
+// one edge's points hashed in its canonical order (the seam check: both triangles along it hash the same, their XOR is 0).
+// (Q22) The points as tess.vert makes them: from the triangle's corners (tess_tri_edge), ca / cb the ends' canonical
+// vertices (the order, the topology)
+uvec2 seam_hash(FrameBuf f, TessTri t, TessCtx c, TessCorner a, TessCorner b, uint fl, uint ca, uint cb, uint e) {
+    ca &= ~TESS_DUP, cb &= ~TESS_DUP;
+    if (ca == cb) return uvec2(0u); // (no length: its points are its corner)
+    if (cb < ca) { uint u = ca; ca = cb, cb = u; }
+    if ((f.tess_u.z & 1u) != 0u) // (REALENGINE_TESS_SEAMS_TOPO: the edges alone, the cut's topology, no points)
+        return uvec2((ca * 0x9E3779B1u) ^ (cb * 0x85EBCA77u) ^ (e * 0xC2B2AE3Du), (ca + 0x165667B1u) * (cb ^ 0x27D4EB2Fu) + e);
+    if ((f.tess_u.z & 2u) != 0u) e = 1u; // (..._E1: the factors not in it)
+    uvec2 h = uvec2(0x9E3779B9u * (e + 1u), 0x85EBCA6Bu ^ e);
+    for (uint k = 0u; k <= e; k++) {
+        vec3 p = tess_tri_edge(f, t, c, a, b, fl, (fl & TESS_E_SWAP) != 0u ? e - k : k, e); // (k from the lower canonical end)
+        uvec3 bb = floatBitsToUint(p);
+        h.x = (h.x ^ bb.x) * 0x01000193u; h.x = (h.x ^ bb.y) * 0x01000193u; h.x = (h.x ^ bb.z) * 0x01000193u;
+        h.y = (h.y + bb.x * 0x27D4EB2Du) ^ (h.y >> 15); h.y = (h.y + bb.y * 0x165667B1u) ^ (h.y >> 13); h.y = (h.y + bb.z * 0xC2B2AE35u) ^ (h.y >> 16);
+    }
+    return h;
+}
+
+// (Q22) an edge's bits from its ends' canonical vertices
+uint edge_bits(uint ca, uint cb) {
+    uint a = ca & ~TESS_DUP, b = cb & ~TESS_DUP;
+    return (b < a ? TESS_E_SWAP : 0u) | (a == b ? TESS_E_POINT : 0u) | ((ca & cb & TESS_DUP) != 0u ? TESS_E_SEAM : 0u);
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    UintBuf hdr = UintBuf(f.tess_buf);
+    uint tid = gl_LocalInvocationIndex, set = pc.pad & 1u;
+    DrawBuf cmds = DrawBuf(addr_add(f.tess_buf, TESS_CMDS_AT + set * TESS_MAX * 20u));
+
+    if (pc.pass == 0u) {
+        if (gl_GlobalInvocationID.x != 0u) return;
+        uint start = hdr.v[1], end = min(hdr.v[0], f.tess_u.y);
+        hdr.v[2] = start, hdr.v[3] = end, hdr.v[1] = end;
+        hdr.v[4] = (max(end, start) - start + 63u) / 64u, hdr.v[5] = 1u, hdr.v[6] = 1u;
+        for (uint n = 0u; n < TESS_MAX; n++) hdr.v[16u + n] = 0u;
+        return;
+    }
+    uint t = hdr.v[2] + gl_GlobalInvocationID.x;
+    bool live = t < hdr.v[3];
+
+    if (pc.pass == 1u) {
+        if (tid < 2u) s_sum[tid] = 0u;
+        barrier();
+        if (live) {
+            uint slot, vofs;
+            tess_owner(f, t, slot, vofs);
+            Instance inst = InstanceBuf(pc.instances).i[slot];
+            MeshInfo mi = MeshInfoBuf(f.mesh_info).m[inst.ids.y >> INST_SHAPE_SHIFT];
+            TessCtx c = tess_ctx(f, inst, mi, vofs);
+            UintBuf ix = UintBuf(addr_add(f.tess_buf, TESS_IDX_AT));
+            uint l0 = ix.v[t * 3u], l1 = ix.v[t * 3u + 1u], l2 = ix.v[t * 3u + 2u];
+            vec3 p0 = tess_cpos(f, c, l0), p1 = tess_cpos(f, c, l1), p2 = tess_cpos(f, c, l2); // (the canonical ends: the factors agree)
+            uint e01 = tess_factor(f, c, p0, p1), e12 = tess_factor(f, c, p1, p2), e02 = tess_factor(f, c, p0, p2);
+            uint pk = tess_pack(e01, e12, e02), n = pk >> 18;
+            // dropped before dicing (as Nanite's patches): outside the view by more than the displacement's reach, or
+            // turned away (its face and its three normals well past the silhouette: a bump there can't turn back
+            // toward the camera). Not in the seam check (every edge then counts)
+            bool cull = false;
+            if ((f.tess_u.x & TESS_SEAMS) == 0u) {
+                vec3 w0 = tess_world(c, p0), w1 = tess_world(c, p1), w2 = tess_world(c, p2);
+                vec3 ctr = (w0 + w1 + w2) / 3.0;
+                float reach = abs(c.mag) * c.s, rad = sqrt(max(dot(w0 - ctr, w0 - ctr), max(dot(w1 - ctr, w1 - ctr), dot(w2 - ctr, w2 - ctr)))) + reach;
+                for (int k = 0; k < 6; k++) cull = cull || dot(f.cull_planes[k].xyz, ctr) + f.cull_planes[k].w < -rad;
+                vec3 vd = view_ortho(f) ? -f.camera_fwd.xyz : normalize(f.camera_pos.xyz - ctr);
+                vec3 gn = cross(w1 - w0, w2 - w0);
+                if (!cull && dot(gn, vd) < 0.0) {
+                    vec3 a = vec3(inst.row0.x, inst.row1.x, inst.row2.x), b = vec3(inst.row0.y, inst.row1.y, inst.row2.y), d = vec3(inst.row0.z, inst.row1.z, inst.row2.z);
+                    bool away = true;
+                    for (int k = 0; k < 3 && away; k++) {
+                        vec3 nm = oct_decode(VertexBuf(pc.vertices).v[vofs + (k == 0 ? l0 : k == 1 ? l1 : l2)].normal_oct);
+                        vec3 nw = normalize(cross(b, d) * nm.x + cross(d, a) * nm.y + cross(a, b) * nm.z);
+                        away = dot(nw, vd) < -0.35;
+                    }
+                    cull = away && dot(normalize(gn), vd) < -0.35;
+                }
+            }
+            bool seams = (f.tess_u.x & TESS_SEAMS) != 0u;
+            uvec4 q[8];
+            uint ca0 = 0u, ca1 = 0u, ca2 = 0u;
+            if (!cull || seams) { // (Q22) the corners tess.vert reads (8 x 16 B): gathered here once per base triangle
+                ca0 = tess_canon(f, c, l0), ca1 = tess_canon(f, c, l1), ca2 = tess_canon(f, c, l2);
+                Vertex v0 = VertexBuf(pc.vertices).v[vofs + l0], v1 = VertexBuf(pc.vertices).v[vofs + l1], v2 = VertexBuf(pc.vertices).v[vofs + l2];
+                TessTri tr;
+                tr.tex = c.on ? c.tex : 0u, tr.mag = c.mag, tr.center = c.center, tr.tiling = c.tiling;
+                tr.lodk = c.texels_cm / c.s;
+                tr.bias = c.on ? abs(c.mag) * max(c.center, 0.0) * c.s + 0.5 : 0.0;
+                tr.flags = edge_bits(ca0, ca1) | (edge_bits(ca1, ca2) << 3) | (edge_bits(ca0, ca2) << 6);
+                tr.k0.p = p0, tr.k1.p = p1, tr.k2.p = p2;
+                tr.k0.n = v0.normal_oct, tr.k1.n = v1.normal_oct, tr.k2.n = v2.normal_oct;
+                tr.k0.uv = v0.uv, tr.k1.uv = v1.uv, tr.k2.uv = v2.uv;
+                tr.k0.uv2 = packUnorm2x16(v0.uv2), tr.k1.uv2 = packUnorm2x16(v1.uv2), tr.k2.uv2 = packUnorm2x16(v2.uv2);
+                // each corner's displacement from its canonical vertex (every triangle there agrees)
+                [[dont_unroll]] for (uint k = 0u; k < 3u; k++) { // (one call site: the same code for every corner)
+                    Vertex cv = VertexBuf(pc.vertices).v[vofs + ((k == 0u ? ca0 : k == 1u ? ca1 : ca2) & ~TESS_DUP)];
+                    precise vec3 d = normalize(oct_decode(cv.normal_oct)) * tess_tri_disp(f, tr, c, cv.uv, cv.pos);
+                    if (k == 0u) tr.k0.d = d; else if (k == 1u) tr.k1.d = d; else tr.k2.d = d;
+                }
+                tess_tri_pack(tr, q);
+                if (!cull) {
+                    TessCrnBuf cb = TessCrnBuf(addr_add(f.tess_buf, TESS_CRN_AT));
+                    [[unroll]] for (uint k = 0u; k < 8u; k++) cb.q[t * 8u + k] = q[k];
+                }
+            }
+            if (cull) {
+                TessTmpBuf(addr_add(f.tess_buf, TESS_TMP_AT)).t[t] = uvec2(0u); // (N 0: pass 3 skips it)
+            } else {
+                uint at = atomicAdd(hdr.v[16u + n - 1u], 1u);
+                TessTmpBuf(addr_add(f.tess_buf, TESS_TMP_AT)).t[t] = uvec2(pk, at);
+                atomicAdd(s_sum[0], n * n);
+                atomicAdd(s_sum[1], 1u);
+            }
+            if (seams) {
+                TessTri tr = tess_tri_unpack(q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]); // (the halfs tess.vert reads)
+                uvec2 h = uvec2(0u);
+                [[dont_unroll]] for (uint k = 0u; k < 3u; k++) // (one call site: the same code for every edge)
+                    h ^= seam_hash(f, tr, c, k == 1u ? tr.k1 : tr.k0, k == 0u ? tr.k1 : tr.k2, (tr.flags >> (k == 0u ? 0u : k == 1u ? 3u : 6u)) & 7u,
+                                   k == 1u ? ca1 : ca0, k == 0u ? ca1 : ca2, k == 0u ? e01 : k == 1u ? e12 : e02);
+                atomicXor(hdr.v[10], h.x);
+                atomicXor(hdr.v[11], h.y);
+                atomicAdd(hdr.v[12], 3u);
+            }
+        }
+        barrier();
+        if (tid == 0u) {
+            if (s_sum[0] != 0u) atomicAdd(hdr.v[8], s_sum[0]);
+            if (s_sum[1] != 0u) atomicAdd(hdr.v[9], s_sum[1]);
+        }
+        return;
+    }
+
+    if (pc.pass == 2u) { // (one workgroup) the draws: pattern N batched (tess_batch(N) base triangles an instance: tess.c's
+        // index buffer), each list started at a multiple of its batch (mesh.vert: record = instance x batch + copy), its
+        // last batch padded with TESS_NONE records
+        if (tid < TESS_MAX) s_cnt[tid] = hdr.v[16u + tid];
+        if (tid == 0u) s_base = hdr.v[7];
+        barrier();
+        if (tid < TESS_MAX) {
+            uint at = s_base, first = 0u, n = tid + 1u;
+            for (uint m = 1u; m <= TESS_MAX; m++) {
+                uint b = tess_batch(m);
+                at = (at + b - 1u) / b * b;
+                if (m == n) break;
+                at += (s_cnt[m - 1u] + b - 1u) / b * b;
+                first += b * 3u * m * m;
+            }
+            uint b = tess_batch(n), cnt = s_cnt[tid], padded = (cnt + b - 1u) / b * b;
+            hdr.v[48u + tid] = at; // (pass 3: where pattern N's records start)
+            DrawCmd d;
+            d.index_count = b * 3u * n * n;
+            d.instance_count = padded / b;
+            d.first_index = first;
+            d.vertex_offset = 0;
+            d.first_instance = at / b;
+            cmds.d[tid] = d;
+            TessRecBuf rb = TessRecBuf(addr_add(f.tess_buf, TESS_REC_AT));
+            for (uint k = cnt; k < padded; k++) rb.r[at + k] = uvec4(TESS_NONE);
+            if (tid == TESS_MAX - 1u) hdr.v[7] = at + padded; // (the next set's records after these)
+        }
+        return;
+    }
+
+    // pass 3: the record at its pattern's place
+    if (!live) return;
+    uvec2 tp = TessTmpBuf(addr_add(f.tess_buf, TESS_TMP_AT)).t[t];
+    if ((tp.x >> 18) == 0u) return; // (culled in pass 1)
+    uint slot, vofs;
+    tess_owner(f, t, slot, vofs);
+    TessRecBuf(addr_add(f.tess_buf, TESS_REC_AT)).r[hdr.v[48u + (tp.x >> 18) - 1u] + tp.y] = uvec4(t, slot, tp.x, vofs);
+}

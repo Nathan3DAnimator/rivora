@@ -1,0 +1,113 @@
+#version 460
+// Exposure (the physical camera, like Unreal's). pc.pass 0 (auto exposure only): a 64-bin histogram of the log
+// luminance (nits) of one pixel in 4x4 of the HDR target, which holds the scene times the pre-exposure. pc.pass 1 (one
+// workgroup): auto, the mean log luminance between the 10th and the 90th percentile gives the EV100 (log2(L * 100 /
+// 12.5)), reached smoothly (faster toward the light) between the limits; manual, the EV100's exposure. Exposure =
+// compensation / (1.2 * 2^EV100). Global: nothing per pixel carries history, so nothing ghosts.
+#include "common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 1) uniform sampler2D u_hdr;
+layout(set = 0, binding = 40) uniform sampler2D u_velocity; // (Q20: the ghosting probe, pass 3)
+
+#define LOG_MIN -12.0 // 0.00024 nits (a moonless night) .. 2^20 (the sun's surroundings)
+#define LOG_RANGE 32.0
+
+shared uint s_bins[64];
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    ExposureBuf e = ExposureBuf(f.exposure);
+    uint tid = gl_LocalInvocationIndex;
+    bool automatic = (f.post_flags & POST_AUTO_EXPOSURE) != 0u;
+    if (pc.pass == 0u) {
+        if (tid < 64u) s_bins[tid] = 0u;
+        barrier();
+        ivec2 size = textureSize(u_hdr, 0);
+        ivec2 px = ivec2(gl_GlobalInvocationID.xy) * 4 + 2;
+        if (px.x < size.x && px.y < size.y) {
+            float l = dot(texelFetch(u_hdr, px, 0).rgb, vec3(0.2126, 0.7152, 0.0722)) / max(e.exposure, 1e-12);
+            // bin 0: black (not in the mean)
+            uint b = l < exp2(LOG_MIN) ? 0u : uint(clamp((log2(l) - LOG_MIN) / LOG_RANGE * 62.0 + 1.0, 1.0, 63.0));
+            atomicAdd(s_bins[b], 1u);
+        }
+        barrier();
+        if (tid < 64u && s_bins[tid] != 0u) atomicAdd(e.bins[tid], s_bins[tid]);
+        return;
+    }
+
+    if (pc.pass == 2u) { // the flicker probe (render.c, --bench): a 64 x 32 grid of the scene's luminance (exposure divided out)
+        uvec2 g = gl_GlobalInvocationID.xy;
+        if (g.x >= 64u || g.y >= 32u) return;
+        ivec2 size = textureSize(u_hdr, 0);
+        ivec2 px = ivec2((vec2(g) + 0.5) / vec2(64.0, 32.0) * vec2(size));
+        float l = dot(texelFetch(u_hdr, px, 0).rgb, vec3(0.2126, 0.7152, 0.0722)) / max(e.exposure, 1e-12);
+        UintBuf(pc.instances).v[g.y * 64u + g.x] = floatBitsToUint(l);
+        return;
+    }
+    if (pc.pass == 3u) { // (Q20) the ghosting probe (render.c, --bench): 128 x 64 luminances, negative where a moving
+        // actor covers the point now (its velocity, written by the velocity pass, within 3 render pixels); the CPU follows
+        // each point after the mover leaves it: what still changes there is the trail (notas-dev/gi-estavel.md)
+        uvec2 g = gl_GlobalInvocationID.xy;
+        if (g.x >= 128u || g.y >= 64u) return;
+        ivec2 size = textureSize(u_hdr, 0);
+        vec2 uv = (vec2(g) + 0.5) / vec2(128.0, 64.0);
+        float l = dot(texelFetch(u_hdr, ivec2(uv * vec2(size)), 0).rgb, vec3(0.2126, 0.7152, 0.0722)) / max(e.exposure, 1e-12);
+        bool mov = false;
+        if (f.tsr.z > 0.5) {
+            vec2 rs = floor(1.0 / f.viewport.zw + 0.5);
+            ivec2 c = ivec2(uv * rs), hi = ivec2(rs) - 1;
+            for (int y = -3; y <= 3 && !mov; y += 2)
+                for (int x = -3; x <= 3 && !mov; x += 2) {
+                    vec2 v = texelFetch(u_velocity, clamp(c + ivec2(x, y), ivec2(0), hi), 0).xy;
+                    mov = dot(v, v) > 1e-12;
+                }
+        }
+        UintBuf(pc.instances).v[g.y * 128u + g.x] = floatBitsToUint(mov ? -max(l, 1e-12) : l);
+        return;
+    }
+    // pass 1: the histogram read and cleared for the next frame
+    if (automatic && tid < 64u) {
+        s_bins[tid] = e.bins[tid];
+        e.bins[tid] = 0u;
+    }
+    barrier();
+    if (tid != 0u) return;
+    float old = e.exposure;
+    e.pre_exposure = f.ups_exposure > 0.0 ? f.ups_exposure : old; // what this frame was rendered with
+    float cur = log2(max(f.exposure_params.x, 1e-12));
+    if (automatic) {
+        // (Q13) the horror exposure (a Post Process Volume's Horror group): the black counts (bin 0) and the band metered is
+        // the lit part, the 15% under the metered share (0.95: the brightest twentieth decides): a dark room with one lamp
+        // stays dark, the lamp exposed; never the mean of the dark, which the usual metering lifts to grey
+        bool horror = f.terror[5].x > 0.0;
+        uint b0 = horror ? 0u : 1u;
+        float total = 0.0;
+        for (uint b = b0; b < 64u; b++) total += float(s_bins[b]);
+        float lo = total * (horror ? max(f.terror[5].y - 0.15, 0.0) : 0.1), hi = total * (horror ? f.terror[5].y : 0.9), acc = 0.0, sum = 0.0, w = 0.0;
+        for (uint b = b0; b < 64u; b++) {
+            float a0 = acc;
+            acc += float(s_bins[b]);
+            float take = max(min(acc, hi) - max(a0, lo), 0.0);
+            sum += take * (b == 0u ? LOG_MIN : (float(b) - 0.5) / 62.0 * LOG_RANGE + LOG_MIN);
+            w += take;
+        }
+        float dt = f.camera_pos.w - e.time;
+        if (dt < 0.0 || dt > 1.0) dt = 1.0 / 60.0;
+        e.time = f.camera_pos.w;
+        if (w <= 0.0) return; // a black frame: keep the exposure
+        float avg = sum / w;
+        float ev100 = avg + log2(100.0 / 12.5);
+        float target = log2(f.exposure_params.y) - log2(1.2) - ev100;
+        if (horror) target += 1.0; // (Q13: the metered highlights a stop over middle grey, as a lit face or lamp reads)
+        target = clamp(target, log2(f.exposure_params.z), log2(f.exposure_params.w));
+        float prev = old > 0.0 ? log2(old) : target;
+        // a dead zone of a tenth of a stop (a camera's): the histogram's small wobbles (the GI settling, a bin crossed)
+        // don't move the exposure, which read as the whole image flickering; past it, the usual smooth adaptation
+        float delta = target - prev;
+        target = prev + sign(delta) * max(abs(delta) - 0.1, 0.0);
+        cur = mix(target, prev, exp(-dt * (target < prev ? 3.0 : 1.5)));
+        e.avg_log = avg;
+    }
+    e.exposure = exp2(cur);
+}

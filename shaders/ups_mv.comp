@@ -1,0 +1,27 @@
+#version 460
+// The motion vectors the vendors' upscalers read (render.c "2c", upscale_vendor.c; notas-dev/upscaling.md): every
+// render pixel's screen motion, the camera's (its depth back to the world, by last frame's view) plus the moved actors'
+// own (the velocity pass), as tsr.comp reprojects. In uv, current - previous, without the jitter (the vendors' scale
+// turns it into render pixels pointing back to the previous frame). At the pixel itself: the upscalers dilate it
+// themselves by the nearest depth.
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 21) uniform sampler2D u_depth;    // the render's depth, one sample (reversed Z)
+layout(set = 0, binding = 40) uniform sampler2D u_velocity; // the moved actors' screen motion (uv, current - previous)
+layout(set = 0, binding = 68, rg16f) uniform writeonly image2D o_mv;
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    vec2 rsize = f.tsr_size.xy;
+    if (p.x >= int(rsize.x) || p.y >= int(rsize.y)) return;
+    vec2 motion = f.tsr.z > 0.5 ? texelFetch(u_velocity, p, 0).xy : vec2(0.0);
+    float z = texelFetch(u_depth, p, 0).r;
+    vec2 ndc = ((vec2(p) + 0.5) / rsize) * 2.0 - 1.0;
+    vec4 wp = f.tsr_inv * vec4(ndc, max(z, 1e-7), 1.0); // (the sky, at depth 0: a point very far along its ray)
+    wp /= wp.w;
+    vec4 a = f.tsr_vp * wp, b = f.tsr_prev_vp * wp;
+    if (b.w > 1e-4) motion += (a.xy / a.w - b.xy / b.w) * 0.5;
+    imageStore(o_mv, p, vec4(motion, 0.0, 0.0));
+}

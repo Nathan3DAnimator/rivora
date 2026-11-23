@@ -1,0 +1,17 @@
+# Build output
+build/
+build-*/
+dist/
+
+# Local and temporary files
+*.tmp
+.vs/
+
+# The Android runtime made by android/package_apk.ps1 -BuildNative (shipped by tools/make_dist.ps1, not versioned)
+android/prebuilt/
+
+# The vendors' upscaler SDKs (tools/fetch_upscalers.ps1: their own licenses)
+external/upscalers/
+build.log
+build_cfg.log
+/*.log

@@ -1,0 +1,164 @@
+#version 460
+// The skins (render.c "skin", RMESH_SKINNED): a Skeletal Mesh's mesh bent by its bones on the GPU, every frame its pose
+// changed (Unreal's GPU skin cache). A thread a vertex: the bind's vertex (the mesh's own, its 4 bones and weights in
+// uv2's bits), its morph targets added first (weight x delta, position and normal; render.h RMESH_MORPHS: the vertex's
+// deltas in a CSR, a weight per target), the palette's rows (each bone's pose times its bind's inverse, anim.c) blended
+// by the weights, into the instance's own vertices; last frame's copied first into the second region (the velocity pass
+// reads both). The rays' BLAS is refit from them after (gi_dyn_blas).
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+struct SkinJob {
+    uint src, dst, prev, nv; // vertex indices into pc.vertices: the bind's first, this frame's, last frame's; how many
+    uvec2 pal;               // the palette (3 vec4 rows a bone)
+    uint first, nmorph;      // first: no last frame (both regions written); nmorph: the targets (0: no weight set)
+    uvec2 mfirst, mdelta, mweight; // the CSR (a uint per vertex + 1), the deltas, the weights (a float per target)
+    uint nbones, pad;        // (2026-11-16) the palette's bones: the vertices' indices clamped to them; (Q9) pad 1: a soft body; (Q14) 2: a Spline Mesh
+};
+// (Q9) a soft body's vertices (cloth.c, softbody.h): its mesh's vertex follows its lattice cell's 8 corners (the cloth's
+// positions, m in the world) by its trilinear place in it; its normal by the deformation's Jacobian there. The job's pal
+// points at 8 vec4: the world (m) -> mesh (cm) rows, the mesh -> world rows (their 3 x 3 part), the lattice (base, nx, ny,
+// nz as bits) and the mesh's scale over the cell (1/cm in the lattice's units); mfirst the embedding, mdelta the positions
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer SoftVec4 { vec4 v[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer SkinJobBuf { SkinJob j; };
+struct SkinVertex { vec3 pos; uint n; vec2 uv; uvec2 skin; }; // (Vertex's layout, uv2 read as bits)
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer SkinVertBuf { SkinVertex v[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer PaletteBuf { vec4 r[]; };
+struct MorphDelta { uint t; vec3 dp; vec3 dn; }; // (RMeshMorphDelta, 28 bytes)
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer MorphFirstBuf { uint f[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer MorphDeltaBuf { MorphDelta d[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer MorphWeightBuf { float w[]; };
+
+uint oct_pack(vec3 n) {
+    n /= abs(n.x) + abs(n.y) + abs(n.z);
+    vec2 e = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    ivec2 q = ivec2(round(clamp(e, -1.0, 1.0) * 32767.0));
+    return (uint(q.x) & 0xFFFFu) | (uint(q.y) << 16);
+}
+
+void soft_vertex(SkinJob j, uint i, SkinVertBuf vb, SkinVertex s) {
+    PaletteBuf p = PaletteBuf(j.pal);
+    vec4 i0 = p.r[0], i1 = p.r[1], i2 = p.r[2]; // world (m) -> mesh (cm)
+    mat3 M = transpose(mat3(p.r[3].xyz, p.r[4].xyz, p.r[5].xyz)); // mesh -> world (the instance's 3 x 3)
+    uvec4 L = floatBitsToUint(p.r[6]);
+    vec3 sc = p.r[7].xyz; // the mesh's scale over the cell: d(lattice) / d(mesh cm)
+    SoftVec4 P = SoftVec4(j.mdelta);
+    vec3 q = SoftVec4(j.mfirst).v[i].xyz;
+    ivec3 dim = ivec3(L.yzw);
+    ivec3 c = clamp(ivec3(floor(q)), ivec3(0), dim - 2);
+    vec3 f = clamp(q - vec3(c), vec3(0.0), vec3(1.0));
+    uint b0 = L.x + (uint(c.z) * L.z + uint(c.y)) * L.y + uint(c.x), sy = L.y, sz = L.y * L.z;
+    vec3 p000 = P.v[b0].xyz, p100 = P.v[b0 + 1u].xyz, p010 = P.v[b0 + sy].xyz, p110 = P.v[b0 + sy + 1u].xyz;
+    vec3 p001 = P.v[b0 + sz].xyz, p101 = P.v[b0 + sz + 1u].xyz, p011 = P.v[b0 + sz + sy].xyz, p111 = P.v[b0 + sz + sy + 1u].xyz;
+    vec3 x00 = mix(p000, p100, f.x), x10 = mix(p010, p110, f.x), x01 = mix(p001, p101, f.x), x11 = mix(p011, p111, f.x);
+    vec3 y0 = mix(x00, x10, f.y), y1 = mix(x01, x11, f.y);
+    vec3 w = mix(y0, y1, f.z);
+    // the Jacobian (world m per lattice unit) along each axis, then per mesh cm
+    vec3 jx = mix(mix(p100 - p000, p110 - p010, f.y), mix(p101 - p001, p111 - p011, f.y), f.z) * sc.x;
+    vec3 jy = mix(mix(p010 - p000, p110 - p100, f.x), mix(p011 - p001, p111 - p101, f.x), f.z) * sc.y;
+    vec3 jz = mix(mix(p001 - p000, p101 - p100, f.x), mix(p011 - p010, p111 - p110, f.x), f.y) * sc.z;
+    vec3 n0 = oct_decode(s.n);
+    vec3 nw = cross(jy, jz) * n0.x + cross(jz, jx) * n0.y + cross(jx, jy) * n0.z; // (the cofactor: right under any stretch)
+    vec3 nm = transpose(M) * nw; // (mesh.vert takes the instance's cofactor of it back to nw)
+    vec4 pw = vec4(w, 1.0);
+    SkinVertex o;
+    o.pos = vec3(dot(i0, pw), dot(i1, pw), dot(i2, pw));
+    o.n = oct_pack(dot(nm, nm) > 1e-24 ? normalize(nm) : n0);
+    o.uv = s.uv;
+    o.skin = uvec2(0xBF800000u);
+    if (any(isnan(o.pos))) o.pos = s.pos, o.n = s.n; // (never a NaN in the vertex buffer)
+    vb.v[j.dst + i] = o;
+    if (j.first != 0u) vb.v[j.prev + i] = o;
+}
+
+// (Q14) a Spline Mesh piece (spline.h, render.c skin_bind): the mesh's vertex along its forward axis is the place on the
+// piece's Hermite (P0, T0, P1, T1: world cm), across it the curve's frame (its up, the roll between the ends) times the
+// scale between the ends; its normal by the bend's Jacobian (the cofactor). pal: 12 vec4: world (cm) -> mesh rows, the
+// mesh -> world 3 x 3, (P0, roll0), (T0, roll1), (P1, xmin), (T1, 1 / length), (scale0, scale1), (up, axis). The frame is
+// spline_frame's (spline.c): the same math
+void spline_vertex(SkinJob j, uint i, SkinVertBuf vb, SkinVertex s) {
+    PaletteBuf p = PaletteBuf(j.pal);
+    vec4 i0 = p.r[0], i1 = p.r[1], i2 = p.r[2];
+    mat3 M = transpose(mat3(p.r[3].xyz, p.r[4].xyz, p.r[5].xyz));
+    vec4 a0 = p.r[6], b0 = p.r[7], a1 = p.r[8], b1 = p.r[9], sc = p.r[10], ua = p.r[11];
+    uint ax = uint(ua.w + 0.5) % 3u, bx = (ax + 1u) % 3u, cx = (ax + 2u) % 3u;
+    float t = (s.pos[ax] - a1.w) * b1.w;
+    float t2 = t * t, t3 = t2 * t;
+    vec3 P = (2.0 * t3 - 3.0 * t2 + 1.0) * a0.xyz + (t3 - 2.0 * t2 + t) * b0.xyz + (-2.0 * t3 + 3.0 * t2) * a1.xyz + (t3 - t2) * b1.xyz;
+    vec3 D = (6.0 * t2 - 6.0 * t) * a0.xyz + (3.0 * t2 - 4.0 * t + 1.0) * b0.xyz + (-6.0 * t2 + 6.0 * t) * a1.xyz + (3.0 * t2 - 2.0 * t) * b1.xyz;
+    if (dot(D, D) < 1e-12) D = a1.xyz - a0.xyz;
+    vec3 f = dot(D, D) > 1e-12 ? normalize(D) : vec3(1.0, 0.0, 0.0);
+    vec3 up = ua.xyz;
+    if (abs(dot(f, up)) > 0.999) up = abs(f.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    vec3 r = normalize(cross(up, f));
+    vec3 u = cross(f, r);
+    float roll = mix(a0.w, b0.w, t), cr = cos(roll), sr = sin(roll);
+    vec3 R = r * cr + u * sr, U = u * cr - r * sr;
+    vec2 k = mix(sc.xy, sc.zw, t);
+    vec3 w = P + R * (s.pos[bx] * k.x) + U * (s.pos[cx] * k.y);
+    vec3 n0 = oct_decode(s.n);
+    vec3 ja = D * b1.w, jb = R * k.x, jc = U * k.y;
+    vec3 nw = cross(jb, jc) * n0[ax] + cross(jc, ja) * n0[bx] + cross(ja, jb) * n0[cx];
+    vec3 nm = transpose(M) * nw; // (mesh.vert takes the instance's cofactor of it back to nw)
+    vec4 pw = vec4(w, 1.0);
+    SkinVertex o;
+    o.pos = vec3(dot(i0, pw), dot(i1, pw), dot(i2, pw));
+    o.n = oct_pack(dot(nm, nm) > 1e-24 ? normalize(nm) : n0);
+    o.uv = s.uv;
+    o.skin = uvec2(0xBF800000u);
+    if (any(isnan(o.pos))) o.pos = s.pos, o.n = s.n; // (never a NaN in the vertex buffer)
+    vb.v[j.dst + i] = o;
+    if (j.first != 0u) vb.v[j.prev + i] = o;
+}
+
+void main() {
+    SkinJob j = SkinJobBuf(pc.frame).j;
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= j.nv) return;
+    SkinVertBuf vb = SkinVertBuf(pc.vertices);
+    SkinVertex s = vb.v[j.src + i];
+    if (j.first == 0u) vb.v[j.prev + i] = vb.v[j.dst + i]; // last frame's (its own thread wrote it: no race)
+    if (j.pad == 1u) {
+        soft_vertex(j, i, vb, s);
+        return;
+    }
+    if (j.pad == 2u) { // (Q14)
+        spline_vertex(j, i, vb, s);
+        return;
+    }
+    vec3 bp = s.pos;
+    vec3 n = oct_decode(s.n);
+    if (j.nmorph != 0u) { // the morph targets: this vertex's deltas (most have none: two loads)
+        MorphFirstBuf mf = MorphFirstBuf(j.mfirst);
+        MorphDeltaBuf md = MorphDeltaBuf(j.mdelta);
+        MorphWeightBuf mw = MorphWeightBuf(j.mweight);
+        uint a = mf.f[i], e = mf.f[i + 1u];
+        for (uint k = a; k < e; k++) {
+            MorphDelta d = md.d[k];
+            float wt = mw.w[min(d.t, j.nmorph - 1u)];
+            bp += wt * d.dp, n += wt * d.dn;
+        }
+        n = dot(n, n) > 1e-20 ? normalize(n) : oct_decode(s.n);
+    }
+    // (2026-11-16, crashes #135-137) clamped to the palette: a part whose owner's pose isn't ready yet (a Blueprint's
+    // components made again, a sublevel added) has a palette of one bone, and its vertices' bones up to ~150 read past the
+    // buffer's end: a page fault on the GPU, VK_ERROR_DEVICE_LOST in "skin (ossos e BLAS)"
+    uint bmax = max(j.nbones, 1u) - 1u;
+    uvec4 b = min(uvec4(s.skin.x & 255u, (s.skin.x >> 8) & 255u, (s.skin.x >> 16) & 255u, s.skin.x >> 24), uvec4(bmax)) * 3u;
+    vec4 w = vec4(float(s.skin.y & 255u), float((s.skin.y >> 8) & 255u), float((s.skin.y >> 16) & 255u), float(s.skin.y >> 24)) / 255.0;
+    PaletteBuf p = PaletteBuf(j.pal);
+    vec4 r0 = p.r[b.x] * w.x, r1 = p.r[b.x + 1u] * w.x, r2 = p.r[b.x + 2u] * w.x;
+    if (w.y > 0.0) r0 += p.r[b.y] * w.y, r1 += p.r[b.y + 1u] * w.y, r2 += p.r[b.y + 2u] * w.y;
+    if (w.z > 0.0) r0 += p.r[b.z] * w.z, r1 += p.r[b.z + 1u] * w.z, r2 += p.r[b.z + 2u] * w.z;
+    if (w.w > 0.0) r0 += p.r[b.w] * w.w, r1 += p.r[b.w + 1u] * w.w, r2 += p.r[b.w + 2u] * w.w;
+    vec4 pp = vec4(bp, 1.0);
+    SkinVertex o;
+    o.pos = vec3(dot(r0, pp), dot(r1, pp), dot(r2, pp));
+    vec3 on = vec3(dot(r0.xyz, n), dot(r1.xyz, n), dot(r2.xyz, n));
+    o.n = oct_pack(dot(on, on) > 1e-20 ? normalize(on) : n);
+    o.uv = s.uv;
+    o.skin = uvec2(0xBF800000u); // (uv2 -1: no atlas)
+    vb.v[j.dst + i] = o;
+    if (j.first != 0u) vb.v[j.prev + i] = o;
+}

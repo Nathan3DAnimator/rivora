@@ -1,0 +1,93 @@
+#version 460
+// Opacity micromaps (render.c omm_update, gi.c gi_blas_omm; notas-dev/render.md "Opacity micromaps"): a Masked mesh's
+// triangles each cut in 64 micro triangles (subdivision level 3, in the spec's "bird curve" order), each marked by its
+// baked alpha: opaque (every sample at the clip value or over), transparent (every one under) or unknown (both: the ray
+// still tests the alpha, rt.glsl rt_alpha_blocks). The traversal then commits the opaque ones and skips the transparent
+// ones itself: only the leaves' edges reach the shader. 4-state format, 2 bits a micro triangle, 16 bytes a triangle.
+// One thread a triangle; the job (OmmJob) at pc.instances.
+#include "common.glsl"
+#define MAT_SET 1
+#include "mat_common.glsl"
+
+layout(local_size_x = 64) in;
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer OmmJob {
+    uvec2 out_addr, indices, materials;
+    uint first_index;
+    int vertex_offset;
+    uint ntri, slot;
+    float tiling;
+    uint level; // the subdivision (4^level micro triangles, 2 bits each)
+};
+layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer OmmOut { uint w[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer OmmIdx { uint i[]; };
+
+// The spec's micro triangle order (VK_EXT_opacity_micromap, "bird curve"): index -> discrete barycentrics
+uint even_bits(uint x) {
+    x &= 0x55555555u;
+    x = (x | (x >> 1u)) & 0x33333333u;
+    x = (x | (x >> 2u)) & 0x0f0f0f0fu;
+    x = (x | (x >> 4u)) & 0x00ff00ffu;
+    x = (x | (x >> 8u)) & 0x0000ffffu;
+    return x;
+}
+uint prefix_eor(uint x) {
+    x ^= (x >> 1u) & 0x7fff7fffu;
+    x ^= (x >> 2u) & 0x3fff3fffu;
+    x ^= (x >> 4u) & 0x0fff0fffu;
+    x ^= (x >> 8u) & 0x00ff00ffu;
+    return x;
+}
+// micro triangle i of a level-L subdivision: its corners' barycentrics (u weighs vertex 1, v vertex 2)
+void micro_bary(uint index, uint level, out vec2 p0, out vec2 p1, out vec2 p2) {
+    uint b0 = even_bits(index), b1 = even_bits(index >> 1u);
+    uint fx = prefix_eor(b0), fy = prefix_eor(b0 & ~b1);
+    uint t = fy ^ b1;
+    uint iu = (fx & ~t) | (b0 & ~t) | (~b0 & ~fx & t);
+    uint iv = fy ^ b0;
+    uint iw = (~fx & ~t) | (b0 & ~t) | (~b0 & fx & t);
+    uint m = (1u << level) - 1u;
+    iu &= m, iv &= m, iw &= m;
+    bool upright = ((iu & 1u) ^ (iv & 1u) ^ (iw & 1u)) != 0u;
+    if (!upright) iu += 1u, iv += 1u;
+    float s = 1.0 / float(1u << level);
+    float d = upright ? s : -s;
+    p0 = vec2(float(iu), float(iv)) * s;
+    p1 = p0 + vec2(d, 0.0);
+    p2 = p0 + vec2(0.0, d);
+}
+
+void main() {
+    OmmJob job = OmmJob(pc.instances);
+    uint tri = gl_GlobalInvocationID.x;
+    if (tri >= job.ntri) return;
+    OmmIdx ib = OmmIdx(job.indices);
+    VertexBuf vb = VertexBuf(pc.vertices);
+    uint base = job.first_index + tri * 3u;
+    vec2 t0 = vb.v[int(ib.i[base]) + job.vertex_offset].uv * job.tiling;
+    vec2 t1 = vb.v[int(ib.i[base + 1u]) + job.vertex_offset].uv * job.tiling;
+    vec2 t2 = vb.v[int(ib.i[base + 2u]) + job.vertex_offset].uv * job.tiling;
+    GpuMaterial gm = GpuMaterialBuf(job.materials).m[job.slot];
+    float cut = float(gm.flags >> 24u) / 255.0;
+    // the rays' own mip (rt.glsl rt_alpha_blocks: at most 512 texels across): the micromap says what their test would
+    float lod = max(log2(float(textureSize(u_mat_tex[nonuniformEXT(gm.tex_base)], 0).x)) - 9.0, 0.0);
+    uint n = 1u << (2u * job.level), words = max(n / 16u, 1u), bits = 0u;
+    uint steps = job.level >= 4u ? 2u : 4u; // (the grid over a micro triangle: 15 points, 6 when they are small)
+    OmmOut o = OmmOut(job.out_addr);
+    for (uint i = 0u; i < n; i++) {
+        vec2 p0, p1, p2;
+        micro_bary(i, job.level, p0, p1, p2);
+        bool any_in = false, any_out = false;
+        for (uint a = 0u; a <= steps; a++)
+            for (uint b = 0u; a + b <= steps; b++) {
+                vec2 w = p0 + (p1 - p0) * (float(a) / float(steps)) + (p2 - p0) * (float(b) / float(steps));
+                vec2 uv = t0 * (1.0 - w.x - w.y) + t1 * w.x + t2 * w.y;
+                bool blocks = textureLod(u_mat_tex[nonuniformEXT(gm.tex_base)], uv, lod).a >= cut;
+                any_in = any_in || blocks;
+                any_out = any_out || !blocks;
+            }
+        // 0 transparent, 1 opaque, 3 unknown (opaque: the alpha decides, rt_alpha_blocks)
+        uint state = any_in && any_out ? 3u : any_in ? 1u : 0u;
+        bits |= state << ((i & 15u) * 2u);
+        if ((i & 15u) == 15u || i + 1u == n) o.w[tri * words + (i >> 4u)] = bits, bits = 0u;
+    }
+}

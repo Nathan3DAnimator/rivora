@@ -1,0 +1,135 @@
+#version 460
+// Ground-truth-style ambient occlusion in screen space (A4a; notas-dev/render.md "GTAO"): after the main pass, from its
+// depth, the occlusion of each pixel's hemisphere by what the screen shows nearby (Jimenez et al. 2016, the horizons of
+// a few slices, here two slices of six steps each side). It darkens only the pixel's indirect diffuse light: mesh.frag
+// leaves that share of the color in the alpha as 1 + share (1: none, the sky, the views without it), so the sun and the
+// lamps keep their contact shadows to the shadow maps and rays, and the analytic AO of the actors (contact_gi) stays
+// multiplied in. The slices turn each pixel and each frame (interleaved gradient noise): TSR averages the noise away.
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 8, rgba16f) uniform image2D o_hdr;
+layout(set = 0, binding = 21) uniform sampler2D u_depth; // one sample (reversed Z: 0 is the far plane, the sky)
+
+#define STEPS 6
+#define RADIUS_CM 60.0   // how far an occluder counts (Unreal's GTAO default radius: 0.6 m)
+#define MAX_PX 96.0      // the slice's reach on screen at most (a near wall: no huge loops)
+
+float ign(vec2 px, uint frame) {
+    px += float(frame & 63u) * vec2(47.0, 17.0);
+    return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
+}
+
+vec3 world_at(FrameBuf f, ivec2 p, vec2 size, float d) {
+    vec2 ndc = ((vec2(p) + 0.5) / size) * 2.0 - 1.0;
+    vec4 w = f.tsr_inv * vec4(ndc, max(d, 1e-7), 1.0);
+    return w.xyz / w.w;
+}
+
+// One thread a 2x2 block (half the resolution: a quarter of the work, 0.8 -> ~0.2 ms at 1440p Epic): the AO at its
+// first pixel, applied to the block's pixels on the same surface (depth within 3%); the others keep their light
+float block_ao(FrameBuf f, ivec2 p, ivec2 isize, vec2 size, float d) {
+    vec3 P = world_at(f, p, size, d);
+    vec3 V = normalize(f.camera_pos.xyz - P);
+    // the normal from the depth: the neighbors on the side of the nearer depth (no normal across a silhouette)
+    ivec2 mx = min(p + ivec2(1, 0), isize - 1), lx = max(p - ivec2(1, 0), ivec2(0));
+    ivec2 my = min(p + ivec2(0, 1), isize - 1), ly = max(p - ivec2(0, 1), ivec2(0));
+    float dr = texelFetch(u_depth, mx, 0).r, dl = texelFetch(u_depth, lx, 0).r;
+    float du = texelFetch(u_depth, my, 0).r, dd = texelFetch(u_depth, ly, 0).r;
+    vec3 ex = abs(dr - d) < abs(dl - d) ? world_at(f, mx, size, dr) - P : P - world_at(f, lx, size, dl);
+    vec3 ey = abs(du - d) < abs(dd - d) ? world_at(f, my, size, du) - P : P - world_at(f, ly, size, dd);
+    vec3 N = normalize(cross(ex, ey));
+    if (dot(N, V) < 0.0) N = -N;
+    // the slice's reach in pixels: RADIUS_CM at this distance (camera_fwd.w: tan of half the horizontal field of view)
+    float dist = max(dot(P - f.camera_pos.xyz, f.camera_fwd.xyz), 1.0);
+    float reach = min(RADIUS_CM * size.x * 0.5 / (dist * f.camera_fwd.w), MAX_PX);
+    if (reach < 1.5) return 1.0; // (far: under two pixels, nothing to find)
+    float rot = ign(vec2(p >> 1), f.frame_index) * 3.14159265;
+    float jit = ign(vec2((p >> 1).yx) + 13.0, f.frame_index);
+    float occ = 0.0;
+    for (int s = 0; s < 2; s++) {
+        float a = rot + float(s) * 1.5707963;
+        vec2 dir = vec2(cos(a), sin(a));
+        for (int side = 0; side < 2; side++) {
+            vec2 sd = side == 0 ? dir : -dir;
+            float best = 0.0; // the slice side's horizon: the most a point there rises over the tangent plane
+            for (int k = 0; k < STEPS; k++) {
+                float t = (float(k) + jit) / float(STEPS);
+                ivec2 q = ivec2(vec2(p) + 0.5 + sd * (1.0 + t * t * reach));
+                if (q.x < 0 || q.y < 0 || q.x >= isize.x || q.y >= isize.y) break;
+                float qd = texelFetch(u_depth, q, 0).r;
+                if (qd <= 0.0) continue; // (the sky occludes nothing)
+                vec3 w = world_at(f, q, size, qd) - P;
+                float l = length(w);
+                if (l < 0.5) continue;
+                float fall = clamp(1.0 - l / RADIUS_CM, 0.0, 1.0);
+                best = max(best, (dot(w, N) / l - 0.05) * fall);
+            }
+            occ += clamp(best, 0.0, 1.0);
+        }
+    }
+    float ao = 1.0 - occ * 0.25; // (the four horizons' mean)
+    return ao * ao;              // (a little more contrast in creases: the cosine weighting the slices leave out)
+}
+
+// The sun's contact shadow (A4b): from P toward the sun, 12 steps over a length that grows with the distance (8 cm near,
+// up to 1.5 m far: the detail the shadow map's texels miss), each step's point projected and compared with the depth
+// there: in front of it by less than the thickness, something is in the way. 1: lit, 0: shadowed (soft at the far end)
+float contact_shadow(FrameBuf f, ivec2 p, vec2 size, float d) {
+    vec3 P = world_at(f, p, size, d);
+    vec3 L = -normalize(f.lights[int(f.sun_radiance.w)].direction); // (toward the shadow-casting light, as mesh.frag)
+    float dist = max(dot(P - f.camera_pos.xyz, f.camera_fwd.xyz), 1.0);
+    float len = clamp(dist * 0.012, 8.0, 150.0);
+    float thick = max(len * 0.35, 3.0);
+    float jit = ign(vec2(p) + 31.0, f.frame_index);
+    P += L * max(dist * 0.0015, 0.5); // (off the surface: no self shadow)
+    for (int k = 0; k < 12; k++) {
+        float t = (float(k) + jit) / 12.0;
+        vec3 Q = P + L * (t * t * len);
+        vec4 c = f.view_proj * vec4(Q, 1.0);
+        if (c.w <= 0.0) break;
+        vec2 uv = c.xy / c.w * 0.5 + 0.5;
+        if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0)))) break;
+        ivec2 q = ivec2(uv * size);
+        float qd = texelFetch(u_depth, q, 0).r;
+        if (qd <= 0.0) continue; // (the sky)
+        float zq = dot(Q - f.camera_pos.xyz, f.camera_fwd.xyz);
+        float zs = dot(world_at(f, q, size, qd) - f.camera_pos.xyz, f.camera_fwd.xyz);
+        float in_front = zq - zs; // (> 0: the depth there is nearer than the ray's point)
+        if (in_front > 0.2 && in_front < thick) return t * t * 0.6; // (soft: a hit near the end shadows a little less)
+    }
+    return 1.0;
+}
+
+void main() {
+    ivec2 isize = imageSize(o_hdr);
+    ivec2 b = ivec2(gl_GlobalInvocationID.xy) * 2;
+    if (b.x >= isize.x || b.y >= isize.y) return;
+    FrameBuf f = FrameBuf(pc.frame);
+    vec2 size = vec2(isize);
+    bool gtao_on = (f.gi_flags & GI_GTAO) != 0u, contact_on = (f.gi_flags & GI_CONTACT_SHADOWS) != 0u;
+    float d0 = texelFetch(u_depth, b, 0).r;
+    float ao = -1.0; // (computed once, for the first pixel that needs it)
+    for (int k = 0; k < 4; k++) {
+        ivec2 p = b + ivec2(k & 1, k >> 1);
+        if (p.x >= isize.x || p.y >= isize.y) continue;
+        vec4 h = imageLoad(o_hdr, p);
+        if (h.a < 0.0) continue; // (the skin's checkerboard, A9.3a: its alpha is sss.comp's, which sets it back to 1)
+        // the alpha: 1 + the indirect diffuse share + 2 x the sun's share in 15ths (mesh.frag)
+        float v = max(h.a - 1.0, 0.0);
+        float lvl = floor(v * 0.5 + 0.01);
+        float share = gtao_on ? clamp(v - 2.0 * lvl, 0.0, 1.0) : 0.0, sun = contact_on ? lvl / 15.0 : 0.0;
+        if (share <= 0.002 && sun <= 0.0) {
+            if (h.a != 1.0) imageStore(o_hdr, p, vec4(h.rgb, 1.0));
+            continue;
+        }
+        float d = texelFetch(u_depth, p, 0).r;
+        float a = 1.0, cs = 1.0;
+        if (share > 0.002 && d > 0.0 && d0 > 0.0 && abs(d - d0) < 0.03 * d0) {
+            if (ao < 0.0) ao = block_ao(f, b, isize, size, d0);
+            a = ao;
+        }
+        if (sun > 0.0 && d > 0.0) cs = contact_shadow(f, p, size, d);
+        imageStore(o_hdr, p, vec4(h.rgb * max(1.0 - share * (1.0 - a) - sun * (1.0 - cs), 0.0), 1.0));
+    }
+}

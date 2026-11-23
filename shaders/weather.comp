@@ -1,0 +1,620 @@
+#version 460
+// Clouds and fog (weather.c, weather.glsl). pc.pass:
+//   0  (none: the clouds' noise is made on the CPU, cloud_noise.c)
+//   1  the cloud panorama: a share of its rows (pc.pad: the phase); each texel marches the layer toward its direction
+//      (the Tlender's model: 56 steps, each lit by the sun through 6 steps toward it, three octaves of scattering, the
+//      sky above and the ground below shaded by the deck); far clouds fade into the horizon's haze
+//   2  the clouds' shadow on the ground: a top-down map around the camera, the layer's thickness toward the sun
+//   3  the fog's froxels: density, the sun (its shadow by a ray, through the clouds), the sky and the local lights
+//   4  the froxels integrated front to back (in-scattered light, transmittance)
+//   5  the sky light's SH with the clouds (the sky through them plus their own light): overcast is gray and dim
+//   6  the screen's clouds: a quarter of the view each way marched toward each pixel's direction, over last frame's
+//      reprojected (the sky reads them: the panorama's 8.5 px per degree magnified ~3x read blurred)
+#extension GL_EXT_ray_query : enable
+#include "common.glsl"
+#include "atmosphere.glsl"
+#include "lights.glsl"
+#include "weather.glsl"
+#define MAT_SET 1 // (2026-11-17, Q4: the Light Functions read their materials)
+#include "mat_common.glsl"
+#include "lightfn.glsl"
+#ifdef RE_RT
+#include "rt.glsl"
+#endif
+#include "vsm.glsl" // (2026-11-19) the froxels' shafts on the sun's virtual shadow maps
+#define FOG_VSM_TAPS 4u
+// One compare of the sun's map at a point of the fog, in the finest level holding it: 1 lit .. 0 (bilinear); -1: past
+// every level (the caller traces)
+float vsm_fog_tap(FrameBuf f, vec3 p) {
+    uint levels = uint(f.vsm_params.x);
+    for (uint l = 0u; l < levels; l++) {
+        vec4 L = f.vsm_level[l]; // half side, texel, depth range (cm), drawn
+        if (L.w == 0.0) continue;
+        vec3 c = (f.vsm_mat[l] * vec4(p, 1.0)).xyz;
+        if (max(abs(c.x), abs(c.y)) >= L.x - 2.0 * L.y) continue;
+        if (c.z >= 1.0) return 1.0;
+        return texture(u_vsm, vec4(c.xy / (2.0 * L.x) + 0.5, float(l), c.z - L.y / L.z));
+    }
+    return -1.0;
+}
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 28, rgba16f) uniform image2D o_cloud_pano;
+layout(set = 0, binding = 30, rgba16f) uniform image2D o_cloud_shadow;
+layout(set = 0, binding = 32, rgba16f) uniform image2D o_fog;
+layout(set = 0, binding = 33, rgba16f) uniform image2D o_fog_light;
+layout(set = 0, binding = 34) uniform sampler3D u_cloud_shape;  // 64^3, tiling: Perlin-Worley, Worley fbm at 4, 8, 16 cells
+layout(set = 0, binding = 35) uniform sampler3D u_cloud_detail; // 32^3, tiling: Worley fbm at 2, 4, 8 cells
+layout(set = 0, binding = 48, rgba16f) uniform image2D o_cloud_scr; // the screen's clouds (pass 6)
+// the coverage thresholds (quantiles of the shape) and the prefiltered means by coverage x height gradient (cloud_noise.c)
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer CloudTables { float quant[65]; float mean[289]; };
+
+float remap(float x, float a, float b, float c, float d) { return c + (x - a) / max(b - a, 1e-5) * (d - c); }
+
+// --- The clouds: the Tlender's model (its sky_clouds.c on the GPU; notas-dev/luz.md "Nuvens do Tlender"). A layer
+// between two spheres around the earth; a 2D coverage map the wind moves (value-noise fbm on the infinite plane), a
+// height profile, the Perlin-Worley shape eroded by the Worley detail; the coverage turned into clouds through the
+// shape's own quantiles (a coverage c covers that share of the layer); far samples (long steps) read the shape's
+// prefiltered mean (no streaks toward the horizon). Lit by the sun with a 6-step light march, a two-lobe
+// Henyey-Greenstein phase and three octaves of multiple scattering, the powder effect, an ambient from the sky above
+// and the ground below shaded by the deck, the sun diffused through a thick deck; energy-conserving steps. Far clouds
+// fade into the horizon's haze. Distances in meters here (the frame's cm / 100).
+#define CL_WEATHER_SCALE 22000.0 // m per tile of the coverage map
+#define CL_SHAPE_SCALE 5200.0    // m per tile of the shape texture
+#define CL_DETAIL_SCALE 900.0    // m per tile of the detail texture
+#define CL_EARTH_R 6360e3
+#define CL_HAZE_DIST 20000.0     // m: the horizon's haze over the far clouds (the Tlender's 60 km / (air + 2 aerosol))
+
+// the coverage map (the Tlender's value-noise fbm, baked tiling on the CPU: weather.c; 10 cells of 22 km across)
+layout(set = 0, binding = 52) uniform sampler2D u_cloud_weather;
+float cl_weather(vec2 p) { return textureLod(u_cloud_weather, p * 0.1, 0.0).r; }
+
+// The layer's frame (m): bottom, top, the wind's offset, the extinction per m at density 1, the detail
+struct CloudFrame { float bottom, top, cov, sigma, detail; vec2 wind; CloudTables tab; };
+CloudFrame cloud_frame(FrameBuf f) {
+    CloudFrame c;
+    c.bottom = f.cloud0.z * 0.01, c.top = f.cloud0.w * 0.01, c.cov = f.cloud0.x, c.sigma = f.cloud0.y;
+    c.wind = f.cloud1.xy * 0.01, c.detail = f.cloud1.z;
+    c.tab = CloudTables(f.cloud_tables);
+    return c;
+}
+float cl_threshold(CloudFrame c, float cov) {
+    float x = clamp(cov, 0.0, 1.0) * 64.0;
+    int i = min(int(x), 63);
+    return mix(c.tab.quant[i], c.tab.quant[i + 1], x - float(i));
+}
+float cl_mean(CloudFrame c, float cov, float grad) {
+    float x = clamp(cov, 0.0, 1.0) * 16.0, y = clamp(grad, 0.0, 1.0) * 16.0;
+    int x0 = min(int(x), 15), y0 = min(int(y), 15);
+    float fx = x - float(x0), fy = y - float(y0);
+    float a = mix(c.tab.mean[x0 * 17 + y0], c.tab.mean[x0 * 17 + y0 + 1], fy);
+    float b = mix(c.tab.mean[(x0 + 1) * 17 + y0], c.tab.mean[(x0 + 1) * 17 + y0 + 1], fy);
+    return mix(a, b, fx);
+}
+// The local coverage at (x, y): the sky's moved up and down by the weather map (banks and clear patches)
+float cl_coverage(CloudFrame c, vec2 xy) {
+    if (c.cov >= 0.999) return 1.0;
+    float w = cl_weather((xy + c.wind) / CL_WEATHER_SCALE);
+    return clamp(c.cov + (w - 0.5) * 2.5, 0.0, 1.0) * clamp(c.cov * 8.0, 0.0, 1.0);
+}
+// The density (0..1) at (x, y) and height h (m): lod 0 with the detail's erosion; foot: the length of ray the sample
+// stands for (m): past ~250 m it fades into the shape's mean
+float cl_density(CloudFrame c, vec2 xy, float h, float cov, bool fine, float foot) {
+    float hf = (h - c.bottom) / (c.top - c.bottom);
+    if (hf <= 0.0 || hf >= 1.0 || cov <= 0.0) return 0.0;
+    // a covered sky's base is not flat: it rises by up to a third of the layer over kilometers
+    float deck = clamp((c.cov - 0.8) / 0.2, 0.0, 1.0);
+    if (deck > 0.0) {
+        float rl = cl_weather((xy + c.wind) / 7000.0);
+        hf -= rl * rl * 0.35 * deck;
+        if (hf <= 0.0) return 0.0;
+    }
+    // rounded bottoms, tops that taper (taller and fuller when the sky is covered)
+    float grad = clamp(hf / 0.08, 0.0, 1.0) * clamp((1.0 - hf) / (0.25 + 0.55 * cov), 0.0, 1.0);
+    float far = clamp((foot - 250.0) / 1000.0, 0.0, 1.0);
+    float mean = far > 0.0 ? cl_mean(c, cov, grad) * (c.detail > 0.0 ? 1.0 - 0.15 * c.detail : 1.0) : 0.0;
+    if (far >= 1.0) return mean;
+    vec4 s = textureLod(u_cloud_shape, vec3(xy + c.wind * 0.6, h) / CL_SHAPE_SCALE, 0.0);
+    float low = s.y * 0.625 + s.z * 0.25 + s.w * 0.125;
+    float base = remap(s.x, -(1.0 - low), 1.0, 0.0, 1.0);
+    base = remap(base * grad, cl_threshold(c, cov), 1.0, 0.0, 1.0) * (0.4 + 0.6 * cov); // scattered clouds dense too
+    if (base <= 0.0) return far * mean;
+    if (fine && c.detail > 0.0 && base < 0.7) { // (the erosion bites the edges; a core takes its mean below)
+        vec3 dd = textureLod(u_cloud_detail, vec3(xy + c.wind * 0.9, h) / CL_DETAIL_SCALE, 0.0).xyz;
+        float fbm = dd.x * 0.625 + dd.y * 0.25 + dd.z * 0.125;
+        float m = fbm + (1.0 - 2.0 * fbm) * clamp(hf * 6.0, 0.0, 1.0); // wispy bottoms, billowy tops
+        base = remap(base, m * 0.4 * c.detail, 1.0, 0.0, 1.0);
+    } else if (fine && c.detail > 0.0) {
+        base = remap(base, 0.2 * c.detail, 1.0, 0.0, 1.0);
+    }
+    base = max(base, 0.0);
+    return base + (mean - base) * far;
+}
+// For the cloud shadow on the ground and the fog (cm in, extinction per cm out): the mass, no erosion
+float cloud_density(FrameBuf f, vec3 p) {
+    CloudFrame c = cloud_frame(f);
+    vec2 xy = p.xy * 0.01;
+    return cl_density(c, xy, p.z * 0.01, cl_coverage(c, xy), false, 0.0) * c.sigma * 0.01;
+}
+
+float cl_hg(float g, float mu) { float g2 = g * g; return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5)); }
+float cl_phase2(float mu, float k) { return 0.7 * cl_hg(0.8 * k, mu) + 0.3 * cl_hg(-0.25 * k, mu); }
+
+// The optical depth toward the sun from pos (x, y, h in m): 6 steps from 40 m, doubling
+float cl_light_depth(CloudFrame c, vec3 pos, vec3 L, float cov0) {
+    float tau = 0.0, t = 0.0, dt = 40.0;
+    for (int i = 0; i < 6; i++, dt *= 2.0) {
+        t += 0.5 * dt;
+        vec3 q = pos + L * t;
+        t += 0.5 * dt;
+        if (q.z > c.top) break;
+        // (the first two with the detail; from the 4th, 320 m and longer, the prefiltered mean alone: no texture read)
+        tau += cl_density(c, q.xy, q.z, i < 3 ? cov0 : cl_coverage(c, q.xy), i < 2, i >= 3 ? 1e6 : dt) * c.sigma * dt; // (the coverage map is kilometers wide: the point's for the short steps)
+    }
+    return tau;
+}
+
+// The ray (from height h0 above the ground, along d) inside the cloud layer, on a round Earth: [t0, t1] in cm
+vec2 cloud_span(FrameBuf f, float h0, vec3 d) {
+    const float R = 6.36e8;
+    float r0 = R + h0;
+    float b = r0 * d.z;
+    vec2 res = vec2(-1.0);
+    float rb = R + f.cloud0.z, rt = R + f.cloud0.w;
+    float db = b * b - (r0 * r0 - rb * rb), dt = b * b - (r0 * r0 - rt * rt);
+    if (dt < 0.0) return res;
+    float t_top = -b + sqrt(dt);
+    float t_bot = db >= 0.0 ? -b + sqrt(db) : -1.0; // below the layer: the bottom first
+    if (h0 < f.cloud0.z) {
+        if (db < 0.0 || -b - sqrt(db) > 0.0 && d.z < 0.0) return res;
+        res = vec2(max(t_bot, 0.0), t_top);
+    } else if (h0 > f.cloud0.w) {
+        if (d.z >= 0.0) return res;
+        float t_in = -b - sqrt(dt);
+        float t_out = db >= 0.0 ? -b - sqrt(db) : -b + sqrt(dt);
+        res = vec2(t_in, t_out);
+    } else {
+        res = vec2(0.0, db >= 0.0 && d.z < 0.0 ? -b - sqrt(db) : t_top);
+    }
+    return res;
+}
+
+// The light the clouds get, the same for every direction: the sun seen from their height; the sky above (the
+// atmosphere's LUT, for 1 lux) and the ground below; the horizon's haze. Made once a frame (pass 7): per pixel, its sixteen
+// LUT reads were most of the march's fixed cost
+struct CloudLight { vec3 top, haze, sun_rgb, amb_bottom; };
+// (pass 7 writes it once a frame after the sky light's SH in weather_sky; passes 1 and 6 read it)
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer CloudLightBuf { vec4 sh[9]; vec4 top, haze, sun_rgb, amb_bottom; };
+CloudLight cloud_light_read(FrameBuf f) {
+    CloudLightBuf b = CloudLightBuf(f.weather_sky);
+    CloudLight cl;
+    cl.top = b.top.rgb, cl.haze = b.haze.rgb, cl.sun_rgb = b.sun_rgb.rgb, cl.amb_bottom = b.amb_bottom.rgb;
+    return cl;
+}
+CloudLight cloud_light(FrameBuf f, vec3 sun) {
+    CloudFrame c = cloud_frame(f);
+    float alt = max(f.camera_pos.z, 0.0) * 0.01;
+    float rv = view_radius(f);
+    vec3 top = vec3(0.0), hz = vec3(0.0);
+    for (int e = 0; e < 3; e++)
+        for (int a = 0; a < 4; a++) {
+            float el = (float(e) + 0.5) / 3.0 * 0.5 * PI, az = (float(a) + 0.5 * float(e)) / 4.0 * 2.0 * PI;
+            vec3 dir = vec3(cos(el) * cos(az), cos(el) * sin(az), sin(el));
+            top += textureLod(u_skyview, skyview_uv(rv, dir, sun), 0.0).rgb * sin(el);
+        }
+    top *= 1.6 / 12.0;
+    for (int a = 0; a < 4; a++) {
+        float az = float(a) * 0.5 * PI;
+        hz += textureLod(u_skyview, skyview_uv(rv, vec3(cos(az) * 0.9995, sin(az) * 0.9995, 0.03), sun), 0.0).rgb;
+    }
+    // what gets through the deck (a covered sky: the ground and the haze get only that)
+    float deck = 1.0 - c.cov + c.cov / (1.0 + 0.15 * cl_mean(c, c.cov, 0.7) * c.sigma * (c.top - c.bottom));
+    CloudLight cl;
+    cl.top = top;
+    cl.haze = hz * 0.25 * (0.3 + 0.7 * deck);
+    cl.sun_rgb = transmittance(ATMO_RG + (c.bottom + c.top) * 0.5e-3, max(sun.z, 0.0)) * smoothstep(-0.05, 0.05, sun.z);
+    vec3 ground_e = (transmittance(ATMO_RG + alt * 1e-3, max(sun.z, 0.0)) * max(sun.z, 0.0) + top * PI) * deck;
+    cl.amb_bottom = ground_e * (0.3 / PI * 0.6);
+    return cl;
+}
+
+// The layer's light toward d (for 1 lux of sun) and its transmittance: N steps through it (at most 90 km), jitter the
+// first one's offset (0..1)
+vec4 clouds_march(FrameBuf f, vec3 d, vec3 sun, float jitter, int N, CloudLight cl) {
+    CloudFrame c = cloud_frame(f);
+    float alt = max(f.camera_pos.z, 0.0) * 0.01;
+    vec2 span = cloud_span(f, alt * 100.0, d) * 0.01;
+    bool below = alt < c.bottom;
+    if (d.z < -0.02 && below) return vec4(0.0, 0.0, 0.0, 1.0);
+    float t0 = span.x, t1 = min(span.y, span.x + 90000.0);
+    vec3 top = cl.top, haze = cl.haze, sun_rgb = cl.sun_rgb, amb_bottom = cl.amb_bottom;
+    bool sun_on = sun_rgb.r + sun_rgb.g + sun_rgb.b > 0.0;
+    vec3 albedo = clamp(f.cloud2.rgb, 0.0, 1.0);
+    vec3 L = vec3(0.0);
+    float T = 1.0, t_first = -1.0, len = t1 - t0;
+    if (span.y > span.x && len > 0.0) {
+        float dt = len / float(N);
+        float mu_s = dot(d, sun);
+        float ph0 = cl_phase2(mu_s, 1.0), ph1 = cl_phase2(mu_s, 0.5), ph2 = cl_phase2(mu_s, 0.25);
+        vec2 cam = f.camera_pos.xy * 0.01;
+        float t = t0 + jitter * dt;
+        for (int i = 0; i < N && T > 0.01; i++, t += dt) {
+            // the point: x, y along the ground below it, h its height (the earth's curvature)
+            vec3 P = d * t;
+            float h = length(vec3(P.xy, CL_EARTH_R + alt + P.z)) - CL_EARTH_R;
+            vec2 xy = cam + P.xy;
+            float cov = cl_coverage(c, xy);
+            if (cov <= 0.0) { t += dt; continue; } // (a clear patch: kilometers wide, the next step skipped too)
+            // (the foot a quarter of the step: each pixel averages several frames of offsets, the history does the
+            // prefiltering the Tlender's single-sample bake needed the mean for; with the whole step the clouds blurred)
+            float rho = cl_density(c, xy, h, cov, true, dt * 0.25);
+            if (rho <= 0.0) continue;
+            if (t_first < 0.0) t_first = t;
+            float st = rho * c.sigma;
+            vec3 pos = vec3(xy, h), S = vec3(0.0);
+            float tau_up = 0.0;
+            float hf = clamp((h - c.bottom) / (c.top - c.bottom), 0.0, 1.0);
+            // the deck above and below shades the ambient light (a slab's diffuse transmission 1 / (1 + 0.15 tau)), with
+            // its thicker and thinner parts (the weather map): an overcast underside is not lit by the whole sky
+            float wl = cl_weather((xy + c.wind) * 3.5 / CL_WEATHER_SCALE);
+            float tm = cl_mean(c, cov, 0.7) * c.sigma * (0.4 + 1.2 * wl);
+            tau_up = tm * (c.top - h);
+            float tau_dn = tm * (h - c.bottom);
+            float col = tm * (c.top - c.bottom), col_mean = col / (0.4 + 1.2 * wl);
+            float under = (1.0 + 0.15 * col_mean) / (1.0 + 0.15 * col);
+            vec3 amb = amb_bottom * (1.0 - hf) / (1.0 + 0.15 * tau_dn) * under + top * (0.35 + 0.65 * hf) / (1.0 + 0.15 * tau_up);
+            if (sun_on) {
+                float tau = cl_light_depth(c, pos, sun, cov);
+                // three octaves of multiple scattering (each half the light, half the extinction, a rounder phase)
+                float m = exp(-tau) * ph0 + 0.5 * exp(-tau * 0.5) * ph1 + 0.25 * exp(-tau * 0.25) * ph2;
+                float powder = 1.0 - 0.5 * exp(-rho * 2.0); // the sun-facing edges brighter than the core (Schneider)
+                S += sun_rgb * (m * powder);
+                // the sunlight diffused through a thick deck (the octaves above fade out there)
+                float mu = max(sun.z, 0.05), deep = 1.0 - exp(-0.1 * tau_up);
+                amb += sun_rgb * (mu / PI * deep / (1.0 + 0.15 * tau_up / mu) * 0.5);
+            }
+            S += amb;
+            float e = exp(-st * dt);
+            L += S * T * albedo * (1.0 - e); // (the in-scattering integrated over the step: energy-conserving)
+            T *= e;
+        }
+        if (T <= 0.01) T = 0.0; // (what is left would let the sun's disc show through a deck)
+    }
+    if (!below) return vec4(L, T); // (above or inside the layer: no horizon haze)
+    // near the horizon the last couple of degrees become the clouds' mean over the sky (the haze hides them anyway);
+    // far clouds fade into the haze
+    float tavg = 1.0 - 0.92 * clamp(c.cov, 0.0, 1.0);
+    float w = clamp(d.z / 0.04, 0.0, 1.0);
+    w = w * w * (3.0 - 2.0 * w);
+    if (t_first < 0.0) {
+        if (w >= 1.0) return vec4(0.0, 0.0, 0.0, 1.0);
+        T = 1.0, L = vec3(0.0), t_first = max(len, 0.0);
+    }
+    float fade = exp(-t_first / CL_HAZE_DIST) * w;
+    float Tm = T * w + tavg * (1.0 - w);
+    L = L * fade + haze * max((1.0 - Tm) - fade * (1.0 - T), 0.0);
+    return vec4(L, Tm);
+}
+
+// --- The high cirrus (sugestão #44, Unreal's skies have them above the cumulus): a thin ice layer at ~9 km, in patches
+// and bands, curved strands stretched along the wind with combed, frayed ends; lit by the sun (ice scatters it forward:
+// a glow around it) and the sky. Its amount: CCloud.cirrus (cloud2.w). Value noise, an integer hash (no texture, no
+// sine). Composited behind the cumulus in the screen's clouds (a quarter of the view: ~1/16 of the cost of the sky's
+// pixels) and in the panorama (reflections, Low/Medium); for 1 lux of sun, as the cumulus ---
+float cn_hash(vec2 p) {
+    uvec2 q = uvec2(ivec2(p) + 32768);
+    uint h = q.x * 1597334677u ^ q.y * 3812015801u;
+    h = (h ^ (h >> 16)) * 2246822519u;
+    return float(h >> 8) * (1.0 / 16777216.0);
+}
+float cn_noise(vec2 p) {
+    vec2 i = floor(p), u = fract(p);
+    u = u * u * (3.0 - 2.0 * u);
+    return mix(mix(cn_hash(i), cn_hash(i + vec2(1, 0)), u.x), mix(cn_hash(i + vec2(0, 1)), cn_hash(i + vec2(1, 1)), u.x), u.y);
+}
+float cn_fbm(vec2 p, int n) {
+    float s = 0.0, a = 0.5;
+    for (int o = 0; o < n; o++, p = p * 2.03 + vec2(1.7, 9.2), a *= 0.5) s += a * cn_noise(p);
+    return s;
+}
+vec4 cirrus_layer(FrameBuf f, vec3 d, vec3 sun) {
+    float amt = f.cloud2.w;
+    if (amt <= 0.0 || d.z < 0.015) return vec4(0.0, 0.0, 0.0, 1.0);
+    const float H = 9.0e5; // cm
+    float t = (H - max(f.camera_pos.z, 0.0)) / d.z;
+    vec2 wind = f.cloud1.xy;
+    vec2 wd = dot(wind, wind) > 1.0 ? normalize(wind) : vec2(1.0, 0.0);
+    vec2 p = (f.camera_pos.xy + d.xy * t + wind * 2.5) / 9.0e5; // (9 km features; higher up the wind is stronger)
+    vec2 r = vec2(dot(p, wd), dot(p, vec2(-wd.y, wd.x))); // (x along the wind)
+    // in patches and bands with clear sky between them (a slow mask; more of them as the amount grows)
+    float pm = smoothstep(0.62 - 0.25 * amt, 0.82 - 0.2 * amt, cn_fbm(r * 0.32 + vec2(3.1, 7.7), 3) * 1.14);
+    if (pm <= 0.0) return vec4(0.0, 0.0, 0.0, 1.0);
+    // curved strands: the coordinates bent by a slow noise, then stretched along the wind; their ends combed and frayed
+    vec2 bend = vec2(cn_noise(r * 0.9 + 5.3), cn_noise(r * 0.9 + 9.1)) - 0.5;
+    vec2 s = (r + bend * 0.85) * vec2(0.6, 2.2);
+    float n = cn_fbm(s * 1.6, 4) * 1.07; // (4 octaves: 0.94 of the amplitude, stretched back)
+    float fray = cn_fbm(s * vec2(1.0, 3.0) * 3.4 + n * 1.5, 3) * 1.14;
+    float a = smoothstep(0.42, 0.68, n + (fray - 0.5) * 0.35) * smoothstep(0.18, 0.6, fray) * pm;
+    a *= min(amt * 1.6, 0.9) * smoothstep(0.015, 0.12, d.z); // (thin; gone toward the horizon)
+    if (a <= 0.002) return vec4(0.0, 0.0, 0.0, 1.0);
+    float c = dot(d, sun);
+    vec3 sun_lux = transmittance(ATMO_RG + 9.0, max(sun.z, 0.0)) * smoothstep(-0.05, 0.05, sun.z);
+    float ph = mix(hg_phase(0.7, c), hg_phase(-0.15, c), 0.35);
+    vec3 amb = textureLod(u_skyview, skyview_uv(view_radius(f), vec3(0.0, 0.0, 1.0), sun), 0.0).rgb * 0.6; // (the sky above, for 1 lux)
+    vec3 Lc = f.cloud2.rgb * (sun_lux * ph * 0.9 + amb);
+    return vec4(Lc * a, 1.0 - a);
+}
+// The cirrus behind the cumulus (m: the cumulus' light and transmittance)
+vec4 with_cirrus(FrameBuf f, vec4 m, vec3 d, vec3 sun) {
+    vec4 ci = cirrus_layer(f, d, sun);
+    return vec4(m.rgb + m.a * ci.rgb, m.a * ci.a);
+}
+
+shared vec3 s_sh[64][9];
+shared vec4 s_fog[10][10]; // (pass 4: a slice's froxels around the group, for the tent)
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    vec3 sun = f.sun_dir.xyz;
+    if (pc.pass == 7u) { // the clouds' light, once a frame (one thread)
+        if (gl_GlobalInvocationID.x != 0u || gl_GlobalInvocationID.y != 0u) return;
+        CloudLight cl = cloud_light(f, sun);
+        CloudLightBuf b = CloudLightBuf(f.weather_sky);
+        b.top = vec4(cl.top, 0.0), b.haze = vec4(cl.haze, 0.0), b.sun_rgb = vec4(cl.sun_rgb, 0.0), b.amb_bottom = vec4(cl.amb_bottom, 0.0);
+        return;
+    }
+    if (pc.pass == 1u) { // the panorama (1024 x 512), the rows of this frame's phase
+        CloudLight s_cl = cloud_light_read(f);
+        ivec2 sz = imageSize(o_cloud_pano);
+        int row = px.y * 64 + int(pc.pad & 63u); // this frame's rows (weather.c PANO_PHASES)
+        if (px.x >= sz.x || row >= sz.y) return;
+        ivec2 tp = ivec2(px.x, row);
+        vec3 d = pano_dir((vec2(tp) + 0.5) / vec2(sz));
+        float jitter = fract(fract(sin(dot(vec2(tp), vec2(12.9898, 78.233))) * 43758.5453) + float(f.frame_index >> 5) * 0.618034);
+        vec4 m = clouds_march(f, d, sun, jitter, 40, s_cl); // (the sky at Low/Medium, reflections, the sky light; averaged over updates)
+        m = with_cirrus(f, m, d, sun);
+        vec3 L = m.rgb;
+        float T = m.a;
+        // averaged with the last updates (the clouds are kilometers away: the camera's moves barely change a direction's
+        // view; the wind is slow): the jitter's noise goes, an update still counts a quarter
+        vec4 prev = imageLoad(o_cloud_pano, tp);
+        vec4 cur = vec4(L, T);
+        bool fresh = prev.a <= 0.0 && dot(prev.rgb, prev.rgb) <= 0.0; // (never written)
+        imageStore(o_cloud_pano, tp, fresh || any(isnan(prev)) ? cur : mix(prev, cur, 0.25));
+        return;
+    }
+    if (pc.pass == 6u) { // the screen's clouds (a quarter of the view each way): this frame's march over the reprojected history
+        CloudLight s_cl = cloud_light_read(f);
+        ivec2 sz = ivec2(f.cloud_scr.xy);
+        if (px.x >= sz.x || px.y >= sz.y) return;
+        vec2 uv = (vec2(px) + 0.5) / vec2(sz);
+        vec3 d = view_ray(f, uv * 2.0 - 1.0);
+        vec4 cur = vec4(0.0, 0.0, 0.0, 1.0);
+        // a checkerboard: half the pixels marched a frame, the other half keep their reprojected history (with a valid
+        // history; the accumulation fills both halves). Epic (at half the view: cloud_scr.w 2) a quarter of them, the
+        // 2x2 cells in turn
+        bool four = true; // (a quarter of the pixels a frame at every scale: the Tlender's march is heavier per pixel)
+        bool epic = f.cloud_scr.w > 1.5;
+        bool march = (four ? ((px.x & 1) + 2 * (px.y & 1)) == int(f.frame_index & 3u) : ((px.x + px.y + int(f.frame_index)) & 1) == 0) ||
+                     f.cloud_scr.z <= 0.0;
+        if (d.z > PANO_EL_MIN && march) {
+            // the offset: an interleaved gradient over the pixels, moved each frame by the golden ratio
+            float ign = fract(52.9829189 * fract(dot(vec2(px), vec2(0.06711056, 0.00583715))));
+            cur = clouds_march(f, d, sun, fract(ign + float(f.frame_index % 64u) * 0.618034), epic ? 48 : 36, s_cl); // (the Tlender's Low and Medium, a new offset each frame over the history: its High and more)
+            cur = with_cirrus(f, cur, d, sun); // (the high cirrus behind them)
+        }
+        // the history where last frame's camera saw this direction (the clouds are kilometers away: the direction is
+        // enough), clamped to this frame's neighbourhood guess (a fast turn, the wind: no smear)
+        vec4 res = cur;
+        bool have = false;
+        vec4 pv = f.cloud_prev_vp * vec4(f.camera_pos.xyz + d * 1.0e7, 1.0);
+        if (f.cloud_scr.z > 0.0 && pv.w > 0.0) {
+            vec2 puv = pv.xy / pv.w * 0.5 + 0.5;
+            if (all(greaterThanEqual(puv, vec2(0.0))) && all(lessThanEqual(puv, vec2(1.0)))) {
+                vec4 h = textureLod(u_cloud_hist, puv * f.cloud_scr.xy / vec2(CLOUD_SCR_W, CLOUD_SCR_H), 0.0);
+                if (!any(isnan(h))) res = march ? mix(h, cur, f.cloud_scr.z) : h, have = true; // (render.c: the weight)
+            }
+        }
+        // (2026-11-10, "as nuvens só aparecem quando olham... fica um quadrado") a direction new to the view and not marched
+        // this frame starts from the panorama's clouds (the whole sky, refreshed a phase a frame), not empty: before, 3 in 4
+        // of its pixels began as clear sky and the 3% blends filled them over a second, the old view's edge a square
+        if (!have && !march && d.z > PANO_EL_MIN) res = textureLod(u_cloud_pano, pano_uv(d), 0.0);
+        imageStore(o_cloud_scr, px, res);
+        return;
+    }
+    if (pc.pass == 2u) { // the clouds' shadow map (256 x 256 over cloud_shadow_origin.z)
+        ivec2 sz = imageSize(o_cloud_shadow);
+        if (px.x >= sz.x || px.y >= sz.y) return;
+        vec2 xy = f.cloud_shadow_origin.xy + ((vec2(px) + 0.5) / vec2(sz) - 0.5) * f.cloud_shadow_origin.z;
+        float T = 1.0;
+        if (sun.z > 0.02) {
+            float t0 = f.cloud0.z / sun.z, t1 = f.cloud0.w / sun.z;
+            float dt = (t1 - t0) / 12.0, od = 0.0;
+            for (int i = 0; i < 12; i++) od += cloud_density(f, vec3(xy, 0.0) + sun * (t0 + (float(i) + 0.5) * dt)) * dt;
+            T = exp(-od * 0.5); // the light scattered forward inside them softens the shadow
+        }
+        imageStore(o_cloud_shadow, px, vec4(T, 0.0, 0.0, 1.0));
+        return;
+    }
+    if (pc.pass == 3u) { // the fog's froxels: a thread per froxel (x, y; z in the atlas's x)
+        if (px.x >= FOG_X * FOG_Z || px.y >= FOG_Y) return;
+        int slice = px.x / FOG_X;
+        vec2 uv = (vec2(px.x % FOG_X, px.y) + 0.5) / vec2(FOG_X, FOG_Y);
+        vec3 d = view_ray(f, uv * 2.0 - 1.0);
+        float far = f.fog3.x;
+        float z0 = FOG_NEAR * pow(far / FOG_NEAR, float(slice) / float(FOG_Z));
+        float z1 = FOG_NEAR * pow(far / FOG_NEAR, float(slice + 1) / float(FOG_Z));
+        float t = 0.5 * (z0 + z1);
+        vec3 p = f.camera_pos.xyz + d * t;
+        float sig = t < f.fog2.w ? 0.0 : fog_density_at(f, p.z); // 1/cm
+        // (A9.5b) the Local Fog Volumes here: each in its unit space (a sphere or a box), fading at its edges and upward
+        float sh = sig, sl = 0.0;
+        vec3 al = vec3(0.0), em = vec3(0.0);
+        for (uint k = 0u; k < f.fog_volume_count; k++) {
+            FogVolBuf V = FogVolBuf(f.fog_volumes);
+            uint b = k * 6u;
+            vec4 r0 = V.v[b], r1 = V.v[b + 1u], r2 = V.v[b + 2u], pr = V.v[b + 3u];
+            vec3 q = vec3(dot(r0, vec4(p, 1.0)), dot(r1, vec4(p, 1.0)), dot(r2, vec4(p, 1.0)));
+            float dd = pr.x > 0.5 ? max(abs(q.x), max(abs(q.y), abs(q.z))) : length(q);
+            if (dd >= 1.0) continue;
+            float wgt = pr.y * smoothstep(1.0, 1.0 - pr.z, dd) * exp(-pr.w * (q.z + 1.0) * 0.5);
+            sl += wgt, al += wgt * V.v[b + 4u].rgb, em += wgt * V.v[b + 5u].rgb;
+        }
+        sig += sl;
+        vec3 S = vec3(0.0);
+        if (sig > 0.0) {
+            vec3 amb = (sh_irradiance(f, vec3(0.0, 0.0, 1.0)) + sh_irradiance(f, vec3(0.0, 0.0, -1.0))) * (0.5 / PI);
+#ifdef RE_RT
+            // the sky's share of it: two rays up (tilted 35 degrees, turned per froxel); under a roof, in a tunnel, the
+            // fog no longer glows with the sky's light (it lit closed places as if outdoors)
+            if ((f.gi_flags & GI_RT) != 0u) {
+                float ang = float((px.x * 7 + px.y * 13 + slice * 5) & 15) * 0.3927;
+                float sv = 0.0;
+                for (int k = 0; k < 2; k++) {
+                    float a = ang + float(k) * 3.14159;
+                    vec3 up = normalize(vec3(cos(a) * 0.57, sin(a) * 0.57, 0.82));
+                    sv += trace_visible(f, p, up, 5000.0) ? 0.5 : 0.0;
+                }
+                amb *= mix(0.08, 1.0, sv); // (some light still bounces in)
+            }
+#endif
+            vec3 lit = amb;
+            for (uint i = 0u; i < f.light_count; i++) {
+                GpuLight Lt = f.lights[i];
+                if (light_kind(Lt) != LIGHT_DIRECTIONAL) continue;
+                float vis = cloud_shadow(f, p);
+                // shafts of light: the sun's virtual shadow maps at FOG_VSM_TAPS points spread through the froxel (along
+                // its depth and across its pixel footprint, a turn of its own: the fraction lit, smooth from one froxel to
+                // the next: one ray at its center made a staircase of whole lit or dark froxels); a point past the maps,
+                // or no maps: the ray
+                bool by_map = false;
+                if ((f.gi_flags & GI_VSM) != 0u && light_casts(Lt) && vis > 0.0) {
+                    float sum = 0.0;
+                    uint got = 0u;
+                    float rot = fract(float((px.x * 73856093) ^ (px.y * 19349663) ^ (slice * 83492791)) * (1.0 / 4096.0)) * 6.2831853;
+                    for (uint k = 0u; k < FOG_VSM_TAPS; k++) {
+                        float a = rot + float(k) * 2.3999632, rr = sqrt((float(k) + 0.5) / float(FOG_VSM_TAPS));
+                        vec2 j = vec2(cos(a), sin(a)) * rr * 0.5 / vec2(FOG_X, FOG_Y);
+                        float tk = mix(z0, z1, (float(k) + 0.5) / float(FOG_VSM_TAPS));
+                        vec3 q = f.camera_pos.xyz + view_ray(f, (uv + j) * 2.0 - 1.0) * tk;
+                        float v = vsm_fog_tap(f, q);
+                        if (v >= 0.0) sum += v, got++;
+                    }
+                    if (got == FOG_VSM_TAPS) vis *= sum / float(FOG_VSM_TAPS), by_map = true;
+                }
+#ifdef RE_RT
+                if (!by_map && (f.gi_flags & GI_RT) != 0u && light_casts(Lt) && vis > 0.0)
+                    vis *= trace_visible(f, p, -Lt.direction, 1e6) ? 1.0 : 0.0; // shafts of light
+#endif
+                lit += Lt.radiance * light_fn_of(f, Lt, p) * light_volumetric_scale(Lt) * hg_phase(f.fog1.w, dot(d, -Lt.direction)) * vis; // (Q4: its Light Function: the clouds' shafts)
+            }
+            // the local lights of p's cell (unshadowed, up to 8): a lamp's halo
+            LightLists ll = light_lists(f, p);
+            uint taken = 0u;
+            for (uint L = ll.lp; L < LG_LEVELS && taken < 8u; L++) {
+                uvec2 rg = light_range(ll, L);
+                for (uint k = 0u; k < rg.y && taken < 8u; k++) {
+                    uint it = light_item(f, rg, k);
+                    if (!light_take(it, L, ll.lp)) continue;
+                    GpuLight Lt = local_light(f, it);
+                    vec3 lv = Lt.position - p;
+                    float dl = length(lv);
+                    float w = clamp(1.0 - pow(dl * dl * Lt.inv_range2, 2.0), 0.0, 1.0);
+                    float dm = max(dl * 0.01, max(Lt.source_radius * 0.01, 0.01));
+                    float att = w * w / (dm * dm);
+                    if (light_kind(Lt) == LIGHT_SPOT) {
+                        float cs = clamp((dot(-lv / max(dl, 1e-3), Lt.direction) - Lt.cos_outer) / max(Lt.cos_inner - Lt.cos_outer, 1e-4), 0.0, 1.0);
+                        att *= cs * cs;
+                    }
+                    if (light_dust(Lt)) { // (Q13) a flashlight's beam: dust drifting through it, specks where the noises meet
+                        float t = f.camera_pos.w;
+                        vec3 q = p * 0.045 + vec3(t * 0.07, -t * 0.05, t * 0.03);
+                        float dn = cn_noise(q.xy) * cn_noise(q.yz + 17.3) * cn_noise(q.zx + 5.1);
+                        att *= 0.4 + 9.0 * dn * dn;
+                    }
+                    lit += Lt.radiance * light_fn_of(f, Lt, p) * light_volumetric_scale(Lt) * att * hg_phase(f.fog1.w, dot(d, lv / max(dl, 1e-3))); // (Q4: a projector's beam)
+                    taken++;
+                }
+            }
+            S = sh * (f.fog1.rgb * lit + f.fog2.rgb) + al * lit + em;
+        }
+        imageStore(o_fog_light, px, vec4(S, sig));
+        return;
+    }
+    if (pc.pass == 4u) { // integrate each froxel column front to back
+        // (2026-11-19) the light a 3x3 tent across the slice (its density the froxel's own): the shafts' taps and the sky's
+        // two rays a froxel left a froxel-sized mottle where a roof has gaps (a broken roof, a forest's canopy). The group's
+        // 10 x 10 froxels of the slice read once into shared memory (9 reads a froxel from the image: 0.11 ms, 0.04 so)
+        bool inside = px.x < FOG_X && px.y < FOG_Y; // (every thread runs the loop: its barriers)
+        ivec2 org = ivec2(gl_WorkGroupID.xy) * 8 - 1, lp = ivec2(gl_LocalInvocationID.xy) + 1;
+        uint li = gl_LocalInvocationIndex;
+        float far = f.fog3.x;
+        vec3 L = vec3(0.0);
+        float T = 1.0;
+        for (int s = 0; s < FOG_Z; s++) {
+            for (uint k = li; k < 100u; k += 64u) {
+                ivec2 c = clamp(org + ivec2(int(k % 10u), int(k / 10u)), ivec2(0), ivec2(FOG_X - 1, FOG_Y - 1));
+                s_fog[k / 10u][k % 10u] = imageLoad(o_fog_light, ivec2(s * FOG_X + c.x, c.y));
+            }
+            barrier();
+            vec4 v = s_fog[lp.y][lp.x];
+            vec3 acc = vec3(0.0);
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    vec4 n = s_fog[lp.y + dy][lp.x + dx];
+                    float wk = float((2 - abs(dx)) * (2 - abs(dy))); // (4 the middle, 2 the sides, 1 the corners: 16)
+                    // (as light per density: a neighbor in a denser or thinner volume, a Local Fog Volume's edge, keeps its own)
+                    acc += (n.a > 0.0 && v.a > 0.0 ? n.rgb * (v.a / n.a) : v.rgb) * wk;
+                }
+            barrier();
+            v.rgb = acc * (1.0 / 16.0);
+            float z0 = FOG_NEAR * pow(far / FOG_NEAR, float(s) / float(FOG_Z));
+            float z1 = FOG_NEAR * pow(far / FOG_NEAR, float(s + 1) / float(FOG_Z));
+            float dz = z1 - z0;
+            float st = exp(-v.a * dz);
+            L += T * (v.a > 0.0 ? v.rgb * (1.0 - st) / v.a : vec3(0.0));
+            T *= st;
+            if (inside) imageStore(o_fog, ivec2(s * FOG_X + px.x, px.y), vec4(L, T));
+        }
+        return;
+    }
+    // pass 5: the sky light's SH with the clouds (the atmosphere's pass 3 with the panorama over it)
+    uint tid = gl_LocalInvocationIndex;
+    vec3 acc[9];
+    for (int k = 0; k < 9; k++) acc[k] = vec3(0.0);
+    float r = view_radius(f);
+    const int NT = 32, NP = 64;
+    for (uint s = tid; s < uint(NT * NP); s += 64u) {
+        int i = int(s) / NP, j = int(s) % NP;
+        float th = (float(i) + 0.5) / float(NT) * PI, st = sin(th), ct = cos(th);
+        float dw = (PI / float(NT)) * (2.0 * PI / float(NP)) * st;
+        float ph = (float(j) + 0.5) / float(NP) * 2.0 * PI;
+        vec3 d = vec3(st * cos(ph), st * sin(ph), ct);
+        vec3 L = textureLod(u_skyview, skyview_uv(r, d, sun), 0.0).rgb;
+        if (d.z > PANO_EL_MIN) {
+            vec4 c = textureLod(u_cloud_pano, pano_uv(d), 0.0);
+            L = L * c.a + c.rgb;
+        }
+        L *= dw;
+        float x = d.x, y = d.y, z = d.z;
+        acc[0] += L * 0.282095;
+        acc[1] += L * 0.488603 * y;
+        acc[2] += L * 0.488603 * z;
+        acc[3] += L * 0.488603 * x;
+        acc[4] += L * 1.092548 * x * y;
+        acc[5] += L * 1.092548 * y * z;
+        acc[6] += L * 0.315392 * (3.0 * z * z - 1.0);
+        acc[7] += L * 1.092548 * x * z;
+        acc[8] += L * 0.546274 * (x * x - y * y);
+    }
+    for (int k = 0; k < 9; k++) s_sh[tid][k] = acc[k];
+    barrier();
+    if (tid < 9u) {
+        const float A[9] = float[9](3.141593, 2.094395, 2.094395, 2.094395, 0.785398, 0.785398, 0.785398, 0.785398, 0.785398);
+        const float K[9] = float[9](0.282095, 0.488603, 0.488603, 0.488603, 1.092548, 1.092548, 0.315392, 1.092548, 0.546274);
+        vec3 sum = vec3(0.0);
+        for (int t = 0; t < 64; t++) sum += s_sh[t][tid];
+        SkyBuf(f.weather_sky).sh[tid] = vec4(sum * A[tid] * K[tid], 0.0);
+    }
+}

@@ -1,0 +1,197 @@
+#version 460
+// The atmosphere's LUTs (atmosphere.glsl), for a sun of illuminance 1. pc.pass 0: transmittance to the top of the
+// atmosphere; 1: the multiple scattering (Hillaire's isotropic infinite-order approximation); 2: the sky seen from the
+// camera's altitude; 3: that sky on SH order 2, convolved with the cosine lobe (the sky light's irradiance, one
+// workgroup); 4: the aerial perspective's froxels (atmosphere.glsl). 0 and 1 once; 2 and 3 when the sun or the
+// camera's altitude changed; 4 every frame (the camera moves).
+#include "common.glsl"
+#include "atmosphere.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 16, rgba16f) uniform writeonly image2D o_transmittance;
+layout(set = 0, binding = 17, rgba16f) uniform writeonly image2D o_multiscatter;
+layout(set = 0, binding = 18, rgba16f) uniform writeonly image2D o_skyview;
+layout(set = 0, binding = 19, rgba16f) uniform writeonly image2D o_aerial;
+
+// Along (r, mu), up to tmax: the in-scattered light toward the origin and the transmittance; ms: the multiple
+// scattering LUT's own integrand (isotropic phase, the scattering seen once more in fms)
+struct Scatter { vec3 L, T, fms; };
+Scatter integrate(float r, vec3 d, vec3 sun, float tmax, int steps, bool ms) {
+    Scatter s;
+    s.L = vec3(0.0);
+    s.T = vec3(1.0);
+    s.fms = vec3(0.0);
+    vec3 o = vec3(0.0, 0.0, r);
+    float c = dot(d, sun), dt = tmax / float(steps);
+    float pr = phase_rayleigh(c), pm = phase_mie(c), iso = 1.0 / (4.0 * PI);
+    for (int i = 0; i < steps; i++) {
+        vec3 p = o + d * (float(i) + 0.3) * dt;
+        float pr_len = length(p);
+        vec3 up = p / pr_len;
+        float mu_s = dot(up, sun);
+        Medium m = medium_at(pr_len);
+        vec3 tsun = transmittance(pr_len, mu_s);
+        vec3 step_t = exp(-m.extinction * dt);
+        vec3 S;
+        if (ms) {
+            S = m.scattering * iso * tsun;
+            vec3 fint = (m.scattering - m.scattering * step_t) / max(m.extinction, vec3(1e-7));
+            s.fms += s.T * fint;
+        } else {
+            S = (m.rayleigh * pr + m.mie * pm) * tsun + multiscatter(pr_len, mu_s) * m.scattering;
+        }
+        vec3 sint = (S - S * step_t) / max(m.extinction, vec3(1e-7)); // energy conserving (Hillaire)
+        s.L += s.T * sint;
+        s.T *= step_t;
+    }
+    return s;
+}
+
+// The ground where the ray ends: lit by the sun through the atmosphere (Lambert, albedo 0.3)
+vec3 ground(float r, vec3 d, vec3 sun, float t, vec3 T) {
+    vec3 p = vec3(0.0, 0.0, r) + d * t;
+    vec3 n = normalize(p);
+    float mu = dot(n, sun);
+    return T * transmittance(ATMO_RG, mu) * max(mu, 0.0) * GROUND_ALBEDO / PI;
+}
+
+shared vec3 s_sh[64][9];
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+
+    if (pc.pass == 0u) { // transmittance
+        ivec2 size = imageSize(o_transmittance);
+        if (px.x >= size.x || px.y >= size.y) return;
+        float r, mu;
+        transmittance_r_mu((vec2(px) + 0.5) / vec2(size), r, mu);
+        float t = ray_sphere(r, mu, ATMO_RT);
+        vec3 depth = vec3(0.0);
+        const int N = 40;
+        float dt = max(t, 0.0) / float(N);
+        for (int i = 0; i < N; i++) {
+            float ti = (float(i) + 0.5) * dt;
+            float ri = sqrt(r * r + ti * ti + 2.0 * r * mu * ti);
+            depth += medium_at(ri).extinction * dt;
+        }
+        imageStore(o_transmittance, px, vec4(exp(-depth), 1.0));
+        return;
+    }
+
+    if (pc.pass == 1u) { // multiple scattering: 64 directions around each (altitude, sun zenith)
+        ivec2 size = imageSize(o_multiscatter);
+        if (px.x >= size.x || px.y >= size.y) return;
+        vec2 uv = (vec2(px) + 0.5) / vec2(size);
+        float mu_s = uv.x * 2.0 - 1.0;
+        float r = ATMO_RG + uv.y * (ATMO_RT - ATMO_RG);
+        r = clamp(r, ATMO_RG + 0.01, ATMO_RT - 0.01);
+        vec3 sun = vec3(sqrt(max(1.0 - mu_s * mu_s, 0.0)), 0.0, mu_s);
+        vec3 L2 = vec3(0.0), fms = vec3(0.0);
+        const int SQ = 8;
+        for (int i = 0; i < SQ; i++)
+            for (int j = 0; j < SQ; j++) {
+                float u = (float(i) + 0.5) / float(SQ), v = (float(j) + 0.5) / float(SQ);
+                float th = 2.0 * PI * u, ph = acos(1.0 - 2.0 * v);
+                vec3 d = vec3(sin(ph) * cos(th), sin(ph) * sin(th), cos(ph));
+                float tg = ray_sphere(r, d.z, ATMO_RG), tt = ray_sphere(r, d.z, ATMO_RT);
+                bool g = tg > 0.0;
+                float tmax = g ? tg : tt;
+                Scatter s = integrate(r, d, sun, tmax, 20, true);
+                if (g) s.L += ground(r, d, sun, tg, s.T);
+                L2 += s.L;
+                fms += s.fms;
+            }
+        L2 /= float(SQ * SQ);
+        fms /= float(SQ * SQ);
+        imageStore(o_multiscatter, px, vec4(L2 / max(vec3(1.0) - fms, vec3(1e-4)), 1.0));
+        return;
+    }
+
+    float r = view_radius(f);
+    vec3 sun = f.sun_dir.xyz;
+    if (pc.pass == 4u) { // aerial perspective: one thread per froxel column, the slices integrated front to back
+        if (px.x >= AP_RES || px.y >= AP_RES) return;
+        vec2 ndc = (vec2(px) + 0.5) / float(AP_RES) * 2.0 - 1.0;
+        vec3 d = view_ray(f, ndc);
+        // A flat Earth around the camera (its curvature is nothing over the view's distances): the altitude follows
+        // d.z from the camera's, never below the ground (the scene's geometry is where a ray ends, not the planet; that
+        // also keeps the distance scale meaningful), the sun at the same elevation everywhere
+        float h0 = r - ATMO_RG;
+        float c = dot(d, sun), pr = phase_rayleigh(c), pm = phase_mie(c);
+        vec3 L = vec3(0.0), T = vec3(1.0);
+        float t0 = 0.0;
+        for (int s = 0; s < AP_RES; s++) {
+            float t1 = ap_slice_km(float(s));
+            const int SUB = 2;
+            float dt = (t1 - t0) / float(SUB);
+            for (int k = 0; k < SUB; k++) {
+                float rl = ATMO_RG + clamp(h0 + d.z * (t0 + (float(k) + 0.5) * dt), 0.0, ATMO_RT - ATMO_RG);
+                float mu_s = sun.z;
+                Medium m = medium_at(rl);
+                vec3 S = (m.rayleigh * pr + m.mie * pm) * transmittance(rl, mu_s) + multiscatter(rl, mu_s) * m.scattering;
+                vec3 st = exp(-m.extinction * dt);
+                L += T * (S - S * st) / max(m.extinction, vec3(1e-7));
+                T *= st;
+            }
+            t0 = t1;
+            imageStore(o_aerial, ivec2(s * AP_RES + px.x, px.y), vec4(L, dot(T, vec3(1.0 / 3.0))));
+        }
+        return;
+    }
+    if (pc.pass == 2u) { // the sky-view LUT (the sun at azimuth 0: the LUT turns with it)
+        ivec2 size = imageSize(o_skyview);
+        if (px.x >= size.x || px.y >= size.y) return;
+        vec2 uv = vec2(px) / (vec2(size) - 1.0);
+        float vh = sqrt(max(r * r - ATMO_RG * ATMO_RG, 0.0));
+        float beta = acos(clamp(vh / r, -1.0, 1.0)), zh = PI - beta;
+        float vz;
+        if (uv.y < 0.5) { float c = 1.0 - 2.0 * uv.y; vz = zh * (1.0 - c * c); }
+        else { float c = uv.y * 2.0 - 1.0; vz = zh + beta * c * c; }
+        float cphi = -(uv.x * uv.x * 2.0 - 1.0);
+        float sphi = sqrt(max(1.0 - cphi * cphi, 0.0));
+        vec3 d = vec3(sin(vz) * cphi, sin(vz) * sphi, cos(vz));
+        float sun_z = clamp(sun.z, -1.0, 1.0);
+        vec3 s_local = vec3(sqrt(max(1.0 - sun_z * sun_z, 0.0)), 0.0, sun_z);
+        float tg = ray_sphere(r, d.z, ATMO_RG), tt = ray_sphere(r, d.z, ATMO_RT);
+        bool g = tg > 0.0;
+        float tmax = g ? tg : max(tt, 0.0);
+        Scatter s = integrate(r, d, s_local, tmax, 32, false);
+        if (g) s.L += ground(r, d, s_local, tg, s.T);
+        imageStore(o_skyview, px, vec4(s.L, 1.0));
+        return;
+    }
+
+    // pass 3: the sky light's SH (one 8x8 workgroup, 32 directions each)
+    uint tid = gl_LocalInvocationIndex;
+    vec3 acc[9];
+    for (int k = 0; k < 9; k++) acc[k] = vec3(0.0);
+    const int NT = 32, NP = 64; // the CPU's former grid: theta x phi
+    for (uint s = tid; s < uint(NT * NP); s += 64u) {
+        int i = int(s) / NP, j = int(s) % NP;
+        float th = (float(i) + 0.5) / float(NT) * PI, st = sin(th), ct = cos(th);
+        float dw = (PI / float(NT)) * (2.0 * PI / float(NP)) * st;
+        float ph = (float(j) + 0.5) / float(NP) * 2.0 * PI;
+        vec3 d = vec3(st * cos(ph), st * sin(ph), ct);
+        vec3 L = textureLod(u_skyview, skyview_uv(r, d, sun), 0.0).rgb * dw;
+        float x = d.x, y = d.y, z = d.z;
+        acc[0] += L * 0.282095;
+        acc[1] += L * 0.488603 * y;
+        acc[2] += L * 0.488603 * z;
+        acc[3] += L * 0.488603 * x;
+        acc[4] += L * 1.092548 * x * y;
+        acc[5] += L * 1.092548 * y * z;
+        acc[6] += L * 0.315392 * (3.0 * z * z - 1.0);
+        acc[7] += L * 1.092548 * x * z;
+        acc[8] += L * 0.546274 * (x * x - y * y);
+    }
+    for (int k = 0; k < 9; k++) s_sh[tid][k] = acc[k];
+    barrier();
+    if (tid < 9u) {
+        const float A[9] = float[9](3.141593, 2.094395, 2.094395, 2.094395, 0.785398, 0.785398, 0.785398, 0.785398, 0.785398);
+        const float K[9] = float[9](0.282095, 0.488603, 0.488603, 0.488603, 1.092548, 1.092548, 0.315392, 1.092548, 0.546274);
+        vec3 sum = vec3(0.0);
+        for (int t = 0; t < 64; t++) sum += s_sh[t][tid];
+        SkyBuf(f.sky).sh[tid] = vec4(sum * A[tid] * K[tid], 0.0);
+    }
+}

@@ -1,0 +1,55 @@
+TLENDER 90
+anim 1 250 1 24
+meshes 2
+mesh 4 1
+v -0.25 -0.25 0
+v 0.25 -0.25 0
+v 0.25 0.25 0
+v -0.25 0.25 0
+f 4 0 1 2 3
+t 0 0 1 0 1 1 0 1
+mesh 4 1
+v -0.1 0 -0.1
+v 0.1 0 -0.1
+v 0.1 0 0.1
+v -0.1 0 0.1
+f 4 0 1 2 3
+t 0 0 1 0 1 1 0 1
+materials 0
+actions 1
+action 2 0 0 0 0 0 Spin
+fc 4 2
+fb Arm
+k 1 0 0 0 0 0 1
+k 11 0.7071068 0 0 0 0 1
+fc 9 2
+fb Arm
+k 1 1 0 0 0 0 1
+k 11 0.7071068 0 0 0 0 1
+armatures 1
+armature 2 0 0 0 0 0 0
+bone -1 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 Root
+pose 0 0 0 1 0 0 0 1 1 1
+bsobj Widget
+bone 0 0 0 1 0 0 2 0 0 0 0 0 0 0 0 0 0 0 Arm
+pose 0 0 0 1 0 0 0 1 1 1
+boneinh 0 0 0 1 0
+objects 4 active 0
+o 3 -1 0 0 0 0 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.100000001 Rig
+slots 0 0 0
+arm 0
+anim -1 1 1 0
+o 0 0 0 0 0.3 0 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.100000001 Piece
+slots 0 0 0
+parent 0 1 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 Arm
+o 0 1 0 0 0 0 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.100000001 Widget
+slots 0 0 0
+o 0 1 3 0 0 0 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.100000001 Hidden
+slots 0 0 0
+collections 2 0 1
+col -1 -1 0 0 0 0 0 1 0 0 0
+coln Scene Collection
+col 0 0 0 0 1 1 0 1 0 0 0
+coln Widgets
+cl 1 3
+end

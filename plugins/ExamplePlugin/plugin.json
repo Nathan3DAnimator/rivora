@@ -1,0 +1,10 @@
+{
+  "FileVersion": 1,
+  "FriendlyName": "Example Plugin",
+  "VersionName": "1.0",
+  "Description": "The plugin API's example: pure nodes (Smooth Step, Spring Toward, Random Point in Box), a callable node with state (Count Calls), a tick and a menu item. Its source is in Source/ExamplePlugin.c.",
+  "Category": "Examples",
+  "CreatedBy": "Real Engine",
+  "EnabledByDefault": false,
+  "Module": "ExamplePlugin"
+}

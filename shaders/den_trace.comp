@@ -1,0 +1,249 @@
+#version 460
+// The unified denoiser's rays (A9.1d; notas-dev/desempenho.md "Raios da GI em compute"), out of the main pass: there they
+// held the ray traced fragment shader at 128 registers with 80-112 bytes spilled (a third of the warps resident, each one
+// waiting on its rays), so a close character covering the screen cost its rays twice over. mesh.frag's RE_DEN variants
+// now leave in o_den what the rays need (x: the diffuse light here, the miss's; y: the sky this point sees, the ray's
+// offset, which rays; z: the key with the normal and the roughness; the depth in o_guide.z) and this pass, after the
+// main pass and before denoise.comp, traces them with every warp's registers its own: one diffuse ray (cosine) and one
+// rough specular ray (GGX, the visible normals) a pixel, in the checkerboard of GI_DEN_CHECKER (one of the two a frame).
+// A hit is lit from its surface cache, or by its lights (one shadow ray) and its probes; a miss keeps the diffuse light
+// here, or the sky as much as this point sees it. Writes o_den's x and y (pre-exposed; DEN_MISSING: the other color's)
+// and the diffuse hit's distance in w's alpha (the pre-blur's radius), as mesh.frag did.
+#define RT_ALPHA
+#include "common.glsl"
+#include "weather.glsl"
+#include "gi.glsl"
+#include "atmosphere.glsl"
+#define MAT_SET 1
+#include "mat_common.glsl"
+#include "rt.glsl"
+#include "denoise.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 3) uniform sampler2D u_probe_irr;
+layout(set = 0, binding = 4) uniform sampler2D u_probe_dist;
+layout(set = 0, binding = 22) uniform sampler2D u_cache_direct;
+layout(set = 0, binding = 23) uniform sampler2D u_cache_indirect;
+layout(set = 0, binding = 69, rgba32ui) uniform uimage2D u_den;   // mesh.frag o_den
+layout(set = 0, binding = 70, rgba32ui) uniform uimage2D u_guide; // mesh.frag o_guide: y the actor + 1, z the depth
+layout(set = 0, binding = 21) uniform sampler2D u_depth;           // the one-sample depth (readable after the main pass)
+layout(set = 0, binding = 71, rgba32ui) uniform readonly uimage2D u_guide_prev; // last frame's key, actor + 1, depth (denoise.comp)
+
+// (2026-11-14) ReSTIR GI's spatial reuse (Ouyang et al. 2021; notas-dev/gi.md "ReSTIR GI"): each pixel keeps its rays'
+// samples, the diffuse one and the rough specular one (32 B: direction, the radiance it brought back pre-exposed, the
+// hit's distance, W = 1 / its pdf, M), and pass 1 reuses a couple of neighbors' (their hit points seen from here) by a
+// Rao-Blackwellized resampling: the signal is the weighted sum of all the candidates, so a pixel gets several rays' worth
+// and the pixels of the checkerboard without a ray this frame are filled by their neighbors'. The temporal reuse of the
+// paper was tried and left out: on top of the denoiser's own history the picture boiled (house 0.151% -> 0.17-0.25%)
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RgiBuf { uvec4 r[]; };
+uint ml_hash(uint x);
+#define RGI_NB 2 // (the neighbors the spatial reuse reads: 3 cost twice as much for little)
+struct Rsv { vec3 dir; vec3 L; float dist; float W; float M; float wsum; };
+float lum3(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+Rsv rsv_read(RgiBuf b, uint i, float scale) {
+    uvec4 u = b.r[i];
+    Rsv r;
+    r.dir = oct_decode(u.x), r.L = unpack_r11g11b10(u.y) * scale, r.W = uintBitsToFloat(u.z);
+    vec2 h = unpackHalf2x16(u.w);
+    r.dist = h.x, r.M = h.y, r.wsum = 0.0;
+    if (!(r.W >= 0.0) || isinf(r.W)) r.W = 0.0, r.M = 0.0;
+    return r;
+}
+uvec4 rsv_pack(Rsv r) {
+    return uvec4(packSnorm2x16(oct_encode_f(r.dir)), pack_r11g11b10(min(r.L, vec3(60000.0))), floatBitsToUint(r.W), packHalf2x16(vec2(min(r.dist, 60000.0), r.M)));
+}
+// the target at this point: the sample's luminance times the cosine (the diffuse integrand without the albedo)
+float rsv_target(vec3 L, vec3 dir, vec3 n) { return lum3(L) * max(dot(n, dir), 0.0) * (1.0 / PI); }
+// merge a candidate (its target here and its weight) into r; u: a uniform number
+void rsv_merge(inout Rsv r, Rsv c, float w, float u) {
+    r.wsum += w, r.M += c.M;
+    if (w > 0.0 && u * r.wsum <= w) r.dir = c.dir, r.L = c.L, r.dist = c.dist;
+}
+// The GGX distribution of visible normals' pdf of the reflected direction l (n, the view v, a = roughness squared): the
+// specular ray's (Dupuy and Benyoub's caps sample it)
+float vndf_pdf(vec3 n, vec3 v, vec3 l, float a) {
+    vec3 h = normalize(v + l);
+    float nv = max(dot(n, v), 1e-4), nh = max(dot(n, h), 0.0), a2 = max(a * a, 1e-6);
+    float dd = nh * nh * (a2 - 1.0) + 1.0, D = a2 / (PI * dd * dd);
+    float G1 = 2.0 * nv / (nv + sqrt(a2 + (1.0 - a2) * nv * nv));
+    return G1 * D / (4.0 * nv);
+}
+float rnd(inout uint s) { s = ml_hash(s); return float(s >> 8u) / 16777216.0; }
+vec3 point_at(FrameBuf f, ivec2 q, vec2 size, float z) {
+    vec4 w = f.tsr_inv * vec4((vec2(q) + 0.5) / size * 2.0 - 1.0, max(z, 1e-7), 1.0);
+    return w.xyz / w.w;
+}
+
+uint ml_hash(uint x) { // (mesh.frag's: the same samples it took)
+    x = x * 747796405u + 2891336453u;
+    x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+    return (x >> 22u) ^ x;
+}
+
+void spatial(FrameBuf f, ivec2 p, vec2 size);
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    FrameBuf f = FrameBuf(pc.frame);
+    vec2 size = floor(1.0 / f.viewport.zw + 0.5);
+    if (float(p.x) >= size.x || float(p.y) >= size.y) return;
+    if (pc.pass == 1u) {
+        spatial(f, p, size);
+        return;
+    }
+    uvec4 d = imageLoad(u_den, p);
+    bool den_d = (d.y & DEN_RAY_D) != 0u, den_s = (d.y & DEN_RAY_S) != 0u;
+    if (!den_d && !den_s) { // (ReSTIR GI: nothing of ours here, empty reservoirs: the neighbors skip them)
+        if (f.rgi_info.x != 0u) {
+            uint b0 = (uint(p.y) * uint(size.x) + uint(p.x)) * 2u;
+            RgiBuf(f.rgi.xy).r[b0] = uvec4(0u), RgiBuf(f.rgi.xy).r[b0 + 1u] = uvec4(0u);
+        }
+        return;
+    } // (no surface of ours, or one the denoiser leaves alone)
+    uvec4 gd = imageLoad(u_guide, p);
+    // the fragment's own point (its depth, the jittered view it was drawn with), its shading normal and roughness
+    // (2026-11-14) the depth buffer's own value: a coarse pixel (VRS) wrote its center's depth into the guide of each pixel
+    // it covers, and the rays of the others started off their surface (under a grazing floor: black blocks)
+    float zg = uintBitsToFloat(gd.z), zb = texelFetch(u_depth, p, 0).r;
+    float zp = zb > 0.0 && abs(zb - zg) < 0.05 * zg ? zb : zg;
+    vec4 wp = f.tsr_inv * vec4((vec2(p) + 0.5) / size * 2.0 - 1.0, max(zp, 1e-7), 1.0);
+    vec3 pos = wp.xyz / wp.w;
+    vec3 n = den_key_normal(d.z);
+    float rough = den_key_rough(d.z), a = rough * rough;
+    vec3 v = normalize(f.camera_pos.xyz - pos);
+    float q = float((d.y >> 24u) & 63u) * 0.25, bias = q * q; // (mesh.frag: the square root of the cm, in quarters)
+    vec3 o = pos + n * (0.5 + bias);
+    float pe = pre_exposure(f);
+    vec3 irr_pe = unpack_r11g11b10(d.x); // the diffuse light here, pre-exposed (a diffuse miss)
+    float sky_s = unpackHalf2x16(d.y & 0xFFFFu).x, sky_vis = float((d.y >> 16u) & 255u) / 255.0;
+    // (each pixel's own start, hashed, walked by the R2 sequence frame after frame: mesh.frag's)
+    uint hs = ml_hash(uint(p.x) | (uint(p.y) << 16u));
+    vec2 u = fract(vec2(float(hs >> 8u), float(ml_hash(hs) >> 8u)) / 16777216.0 + float(f.frame_index & 4095u) * vec2(0.7548776662, 0.5698402910));
+    vec3 tx = abs(n.z) < 0.999 ? normalize(cross(vec3(0.0, 0.0, 1.0), n)) : vec3(1.0, 0.0, 0.0);
+    mat3 tb = mat3(tx, cross(n, tx), n);
+    vec3 dD = vec3(0.0), dS = vec3(0.0), dirD = n, dirS = n;
+    float hit_s = 3000.0;
+    float hit_d = 3000.0;
+    int k0 = den_d ? 0 : 1, k1 = den_s ? 2 : 1;
+    if (den_d && den_s && (f.gi_flags & GI_DEN_CHECKER) != 0u) k0 = int((uint(p.x) + uint(p.y) + f.frame_index) & 1u), k1 = k0 + 1;
+    for (int k = k0; k < k1; k++) {
+        vec3 dir;
+        if (k == 0) { // cosine weighted: its radiance alone estimates E / pi
+            float r = sqrt(u.x), ph = 6.2831853 * u.y;
+            dir = tb * vec3(r * cos(ph), r * sin(ph), sqrt(max(1.0 - u.x, 0.0)));
+        } else { // the GGX lobe's visible normals (Dupuy and Benyoub's spherical caps), the view reflected on one
+            vec3 wi = normalize(vec3((transpose(tb) * v).xy * a, max(dot(n, v), 1e-4)));
+            float ph = 6.2831853 * u.x, z = (1.0 - u.y) * (1.0 + wi.z) - wi.z, st = sqrt(clamp(1.0 - z * z, 0.0, 1.0));
+            vec3 hm = vec3(st * cos(ph), st * sin(ph), z) + wi;
+            dir = reflect(-v, tb * normalize(vec3(hm.xy * a, max(hm.z, 1e-4))));
+            if (dot(dir, n) <= 0.01) dir = reflect(-v, n);
+        }
+        // the near field traced (30 m), lit from its surface cache (its probes, the lights without a chart); past it the
+        // far field: the diffuse light here, or the sky as much as this point sees it
+        Hit h = trace_closest(f, o, dir, 3000.0);
+        vec3 L;
+        if (h.hit) {
+            vec4 hst = CacheStBuf(f.cache_st).st[h.inst];
+            vec3 hl;
+            if ((f.gi_flags & GI_SURFACE_CACHE) != 0u && hst.x > 0.0) {
+                vec2 cuv = h.uv2 * hst.xy + hst.zw;
+                vec4 cd = textureLod(u_cache_direct, cuv, 0.0), ci = textureLod(u_cache_indirect, cuv, 0.0);
+                hl = (cd.rgb / max(cd.a, 1e-3) + ci.rgb / max(ci.a, 1e-3) * f.gi_params.x) * GI_LOAD;
+            } else
+                hl = direct_irradiance_budget(f, h.pos, h.normal, RT_MASK_SHADOW, 1u) / PI +
+                     ((f.gi_flags & GI_PROBES) != 0u ? probe_irradiance(f, u_probe_irr, u_probe_dist, h.pos, h.normal, -dir) * f.gi_params.x
+                                                     : sh_irradiance(f, h.normal) / PI);
+            L = (h.base * (1.0 - h.metal) * hl + h.glow) * pe;
+        } else
+            L = k == 0 ? irr_pe : (sky_s > 0.0 ? sky_radiance(f, dir, false) * sky_s * pe : vec3(0.0)) + irr_pe * (1.0 - sky_vis);
+        if (k == 0) dD = L, hit_d = h.hit ? h.t : 3000.0, dirD = dir;
+        else dS = L, hit_s = h.hit ? h.t : 3000.0, dirS = dir;
+    }
+    dD = min(dD, vec3(60000.0)), dS = min(dS, vec3(60000.0));
+    if (f.rgi_info.x != 0u) { // ReSTIR GI: this frame's samples (dist 1 with M 0: ours, no ray this frame; zero: not ours)
+        uint b0 = (uint(p.y) * uint(size.x) + uint(p.x)) * 2u;
+        Rsv r;
+        r.dir = n, r.L = vec3(0.0), r.dist = 1.0, r.W = 0.0, r.M = 0.0, r.wsum = 0.0;
+        if (k0 == 0) r.dir = dirD, r.L = dD, r.dist = hit_d, r.M = 1.0, r.W = PI / max(dot(n, dirD), 1e-4); // (cosine: pdf cos / pi)
+        RgiBuf(f.rgi.xy).r[b0] = den_d ? rsv_pack(r) : uvec4(0u);
+        r.dir = n, r.L = vec3(0.0), r.dist = 1.0, r.W = 0.0, r.M = 0.0;
+        if (den_s && k1 == 2) r.dir = dirS, r.L = dS, r.dist = hit_s, r.M = 1.0, r.W = 1.0 / max(vndf_pdf(n, v, dirS, a), 1e-6);
+        RgiBuf(f.rgi.xy).r[b0 + 1u] = den_s ? rsv_pack(r) : uvec4(0u);
+    }
+    vec4 al = unpackUnorm4x8(d.w);
+    imageStore(u_den, p, uvec4(den_d && k0 > 0 ? DEN_MISSING : pack_r11g11b10(dD), den_s && k1 < 2 ? DEN_MISSING : pack_r11g11b10(dS), d.z,
+                               packUnorm4x8(vec4(al.rgb, log2(1.0 + hit_d * 0.25) / 9.553))));
+}
+
+// Pass 1: the spatial reuse. This pixel's samples and RGI_NB neighbors' within 16 px (the same plane), each neighbor's hit
+// point seen from here (direction, distance, the Jacobian of the distance squared; a visibility ray where the two can see
+// differently); the signals are Rao-Blackwellized: (1/M) sum w_i L_i / lum(L_i), w_i = the target here x W_i x M_i x the
+// Jacobian, the target the luminance times the diffuse cosine / the specular lobe's pdf here. Writes o_den.x and .y and
+// the diffuse hit's distance (the pre-blur's radius: the candidates' weighted mean)
+struct Acc { vec3 E; float M, W, D; };
+void acc_add(inout Acc a, Rsv c, float target, float jac) {
+    a.M += c.M;
+    float w = target * c.W * c.M * jac, l = lum3(c.L);
+    if (w > 0.0 && l > 0.0) a.E += w * c.L / l, a.W += w, a.D += w * min(c.dist, 3000.0);
+}
+void spatial(FrameBuf f, ivec2 p, vec2 size) {
+    uvec4 d = imageLoad(u_den, p); // (after pass 0: x the diffuse signal, y the specular one, z the key)
+    RgiBuf cb = RgiBuf(f.rgi.xy);
+    uint W_ = uint(size.x), b0 = (uint(p.y) * W_ + uint(p.x)) * 2u;
+    Rsv od = rsv_read(cb, b0, 1.0), os = rsv_read(cb, b0 + 1u, 1.0);
+    bool want_d = od.M > 0.0 || od.dist > 0.0, want_s = os.M > 0.0 || os.dist > 0.0;
+    if (!want_d && !want_s) return; // (nothing of ours here: what pass 0 wrote stays)
+    float zc = texelFetch(u_depth, p, 0).r;
+    if (zc <= 0.0) return;
+    vec3 pos = point_at(f, p, size, zc), n = den_key_normal(d.z), v = normalize(f.camera_pos.xyz - pos);
+    float rough = den_key_rough(d.z), a = rough * rough;
+    uint seed = ml_hash(uint(p.x) | (uint(p.y) << 16u)) ^ ml_hash(f.frame_index * 7919u + 3u);
+    Acc ad, as_;
+    ad.E = vec3(0.0), ad.M = 0.0, ad.W = 0.0, ad.D = 0.0, as_ = ad;
+    if (want_d) acc_add(ad, od, rsv_target(od.L, od.dir, n), 1.0);
+    if (want_s) acc_add(as_, os, lum3(os.L) * vndf_pdf(n, v, os.dir, a), 1.0);
+    float ang = rnd(seed) * 6.2831853;
+    // the plane's slope in depth (the nearer neighbor on each axis, as denoise.comp)
+    ivec2 hi = ivec2(size) - 1;
+    float zl = texelFetch(u_depth, max(p - ivec2(1, 0), ivec2(0)), 0).r, zr = texelFetch(u_depth, min(p + ivec2(1, 0), hi), 0).r;
+    float zd = texelFetch(u_depth, max(p - ivec2(0, 1), ivec2(0)), 0).r, zu = texelFetch(u_depth, min(p + ivec2(0, 1), hi), 0).r;
+    vec2 dz = vec2(abs(zr - zc) < abs(zc - zl) ? zr - zc : zc - zl, abs(zu - zc) < abs(zc - zd) ? zu - zc : zc - zd);
+    vec3 o = pos + n * 1.0;
+    for (int k = 0; k < RGI_NB; k++) {
+        float rr = 16.0 * sqrt((float(k) + rnd(seed)) / float(RGI_NB)), t = ang + float(k) * 2.3999632;
+        ivec2 q = p + ivec2(round(vec2(cos(t), sin(t)) * rr));
+        if (any(lessThan(q, ivec2(0))) || any(greaterThan(q, hi)) || q == p) continue;
+        float zq = texelFetch(u_depth, q, 0).r;
+        vec2 dd = vec2(q - p);
+        if (zq <= 0.0 || abs(zq - (zc + dot(dz, dd))) > zc * (0.01 + 0.002 * length(dd))) continue;
+        vec3 xq = point_at(f, q, size, zq);
+        uint bq = (uint(q.y) * W_ + uint(q.x)) * 2u;
+        for (int kind = 0; kind < 2; kind++) {
+            if (kind == 0 ? !want_d : !want_s) continue;
+            Rsv c = rsv_read(cb, bq + uint(kind), 1.0);
+            if (c.M <= 0.0) continue;
+            float jac = 1.0;
+            bool check = false;
+            if (c.dist < 2999.0) { // (a hit: its point seen from here; a miss is far: the same direction)
+                vec3 sp = xq + c.dir * c.dist, to = sp - pos;
+                float dr = length(to);
+                if (dr < 1.0) continue;
+                jac = (c.dist * c.dist) / (dr * dr);
+                if (jac < 0.25 || jac > 4.0) continue; // (too far from what that neighbor saw: its contact, not ours)
+                // (the visibility only where it can differ: the neighbor's point well off this one for how far the hit
+                // is; under 15% of the distance the two see the same: no ray)
+                check = dr < 400.0 && length(xq - pos) > 0.15 * c.dist;
+                c.dir = to / dr, c.dist = dr;
+            }
+            float tg = kind == 0 ? rsv_target(c.L, c.dir, n) : lum3(c.L) * vndf_pdf(n, v, c.dir, a);
+            if (tg > 0.0 && check && !trace_visible(f, o, c.dir, max(c.dist - 2.0, 0.5))) tg = 0.0; // (behind something from here)
+            if (kind == 0) acc_add(ad, c, tg, jac);
+            else acc_add(as_, c, tg, jac);
+        }
+    }
+    // (no sample here nor around: the denoiser fills it, as before)
+    uint ox = ad.M > 0.0 ? pack_r11g11b10(min(ad.E / ad.M, vec3(60000.0))) : d.x;
+    uint oy = as_.M > 0.0 ? pack_r11g11b10(min(as_.E / as_.M, vec3(60000.0))) : d.y;
+    vec4 al = unpackUnorm4x8(d.w);
+    float hd = ad.W > 0.0 ? ad.D / ad.W : -1.0;
+    imageStore(u_den, p, uvec4(ox, oy, d.z, hd >= 0.0 ? packUnorm4x8(vec4(al.rgb, log2(1.0 + hd * 0.25) / 9.553)) : d.w));
+}

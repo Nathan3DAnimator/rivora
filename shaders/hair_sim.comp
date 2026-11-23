@@ -1,0 +1,107 @@
+#version 460
+// The hair's simulation (2026-11-16, "um sistema de Hair, tanto estático como dinâmico com física ... colidir com objetos
+// e Skeleton Meshes"; groom.c, notas-dev/render.md "Cabelo dinâmico"). One thread a strand, in world space:
+//   - Verlet: the last step's motion kept (less the air's damping), gravity and the wind added;
+//   - the root held where the groom's actor (its bone, its head) puts the grown root;
+//   - its shape: each point pulled toward where the grown (combed) strand has it now, firm at the root, by Stiffness
+//     toward the tip (TressFX's global shape constraint): the style kept, the tips free to swing;
+//   - its length: each segment back to its grown length from the root out (follow the leader, Müller 2012), the move
+//     taken off the previous point's history too (no energy gained);
+//   - collisions: out of the head (the grown ellipsoid in the actor's space), the bones' capsules (a Skeletal Mesh: the
+//     shoulders, the back, the arms) and the scene's boxes, by the hair's radius.
+// pc.instances: this groom's HairSim; pc.vertices: the hair's device buffer (the grown points, then the simulated ones:
+// the current and the last step's, vec4: world cm, w the place along the strand)
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+struct Cap { vec4 a, b; };   // the capsule's ends (xyz) and radius (a.w)
+struct Box { vec4 mn, mx; }; // an axis box
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer HairSim {
+    vec4 rows[3];      // the actor's rows (actor -> world: the grown strands placed)
+    vec4 inv[3];       // world -> actor (the head's ellipsoid)
+    uint rest, cur, prev, strands;
+    uint pts, ncap, nbox, reset;
+    float dt, stiff, damp, grav;
+    vec4 wind;         // cm/s^2 the wind pushes with (w: its gusts' strength)
+    vec4 ell_c, ell_r; // the head (actor space; ell_r.w: the hair's radius, cm)
+    Cap caps[32];
+    Box boxes[16];
+};
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer HairPts { vec4 v[]; };
+
+vec3 to_world(HairSim s, vec3 p) { return vec3(dot(s.rows[0], vec4(p, 1.0)), dot(s.rows[1], vec4(p, 1.0)), dot(s.rows[2], vec4(p, 1.0))); }
+vec3 to_local(HairSim s, vec3 p) { return vec3(dot(s.inv[0], vec4(p, 1.0)), dot(s.inv[1], vec4(p, 1.0)), dot(s.inv[2], vec4(p, 1.0))); }
+
+vec3 collide(HairSim s, vec3 p) {
+    float hr = s.ell_r.w;
+    // the head: an ellipsoid in the actor's space, the point back onto its surface (sliding over it)
+    vec3 q = to_local(s, p), d = (q - s.ell_c.xyz) / s.ell_r.xyz;
+    float dl = length(d);
+    if (dl < 1.0 && dl > 1e-5) p = to_world(s, s.ell_c.xyz + s.ell_r.xyz * (d / dl));
+    for (uint i = 0u; i < s.ncap; i++) { // the bones
+        vec3 a = s.caps[i].a.xyz, b = s.caps[i].b.xyz, ab = b - a;
+        float r = s.caps[i].a.w + hr, h = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+        vec3 c = a + ab * h, pc = p - c;
+        float l = length(pc);
+        if (l < r && l > 1e-5) p = c + pc * (r / l);
+    }
+    for (uint i = 0u; i < s.nbox; i++) { // the scene's boxes: out by the nearest face
+        vec3 mn = s.boxes[i].mn.xyz - hr, mx = s.boxes[i].mx.xyz + hr;
+        if (all(greaterThan(p, mn)) && all(lessThan(p, mx))) {
+            vec3 dn = p - mn, dx = mx - p;
+            vec3 m = min(dn, dx);
+            if (m.x < m.y && m.x < m.z) p.x = dn.x < dx.x ? mn.x : mx.x;
+            else if (m.y < m.z) p.y = dn.y < dx.y ? mn.y : mx.y;
+            else p.z = dn.z < dx.z ? mn.z : mx.z;
+        }
+    }
+    return p;
+}
+
+void main() {
+    HairSim s = HairSim(pc.instances);
+    uint k = gl_GlobalInvocationID.x;
+    if (k >= s.strands) return;
+    HairPts P = HairPts(pc.vertices);
+    uint P0 = s.pts, rb = s.rest + k * P0, cb = s.cur + k * P0, pb = s.prev + k * P0;
+    if (s.reset != 0u) { // (the first frame, a teleport: the grown strand where the actor is, at rest)
+        for (uint i = 0u; i < P0; i++) {
+            vec4 r = P.v[rb + i];
+            vec4 w = vec4(to_world(s, r.xyz), r.w);
+            P.v[cb + i] = w, P.v[pb + i] = w;
+        }
+        return;
+    }
+    float dt = s.dt, dt2 = dt * dt;
+    // (a gust: the strand's own phase, a slow wave)
+    float gust = 1.0 + s.wind.w * sin(float(k) * 0.37 + float(pc.pad) * 0.0021); // (pc.pad: the time in ms)
+    vec3 acc = vec3(0.0, 0.0, -980.0 * s.grav) + s.wind.xyz * gust;
+    vec4 r0 = P.v[rb];
+    vec3 last = to_world(s, r0.xyz);
+    P.v[cb] = vec4(last, r0.w), P.v[pb] = vec4(last, r0.w); // (the root on the head)
+    vec3 rest_prev = r0.xyz;
+    for (uint i = 1u; i < P0; i++) {
+        vec4 rr = P.v[rb + i];
+        vec3 x = P.v[cb + i].xyz, xp = P.v[pb + i].xyz;
+        // Verlet
+        vec3 xn = x + (x - xp) * (1.0 - s.damp) + acc * dt2;
+        // the shape: toward the grown point (firm at the root, Stiffness toward the tip)
+        float t = rr.w, ks = mix(0.9, s.stiff, sqrt(t));
+        vec3 goal = to_world(s, rr.xyz);
+        xn += (goal - xn) * (ks * ks * 0.5);
+        // the length: from the last point out, the grown segment's length
+        float L = length(rr.xyz - rest_prev) * length(s.rows[0].xyz); // (the actor's scale)
+        vec3 d = xn - last;
+        float dl = length(d);
+        vec3 fixd = dl > 1e-6 ? last + d * (L / dl) : goal;
+        vec3 corr = fixd - xn;
+        xn = fixd;
+        xn = collide(s, xn);
+        // the history: the length's correction taken off it too (Müller's FTL velocity fix)
+        P.v[pb + i] = vec4(x + corr * 0.9, rr.w);
+        P.v[cb + i] = vec4(xn, rr.w);
+        last = xn;
+        rest_prev = rr.xyz;
+    }
+}

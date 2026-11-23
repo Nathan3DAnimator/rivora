@@ -1,0 +1,147 @@
+#version 460
+// Fire's gas (A14, fire.glsl, fire.c): one step of a fire's grid a frame, each pass a dispatch over its cells
+// (pc.pad: the fire; pc.pass & 255 the pass, >> 8 the Jacobi iteration's parity):
+//   0 advect (semi-Lagrangian: velocity and scalars from where they came), burn, cool, dissipate, the emitter's fuel
+//   1 the curl  2 the forces: buoyancy (heat up, smoke down), vorticity confinement, the wind  3 the divergence
+//   4 a Jacobi iteration of the pressure (open sides and top: 0 outside; the floor closed)  5 the projection (no
+//   divergence; the floor holds)  6 the sun's light through the smoke to each cell (its shadow in the smoke)
+#include "common.glsl"
+#include "fire.glsl"
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+float h3(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+float vnoise(vec3 p) { // value noise (the emitter's flicker and turbulence)
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(h3(i), h3(i + vec3(1, 0, 0)), f.x), mix(h3(i + vec3(0, 1, 0)), h3(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(h3(i + vec3(0, 0, 1)), h3(i + vec3(1, 0, 1)), f.x), mix(h3(i + vec3(0, 1, 1)), h3(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+
+void main() {
+    FireInfo F = FireInfoBuf(pc.instances).f[pc.pad];
+    ivec3 c = ivec3(gl_GlobalInvocationID);
+    if (!fire_in(F, c)) return;
+    FireVec4 B = FireVec4(pc.vertices);
+    uint N = fire_n(F), base = F.dims.w, cur = uint(F.cur + 0.5);
+    uint vin = base + cur * N, vout = base + (1u - cur) * N, sin_ = base + 2u * N + cur * N, sout = base + 2u * N + (1u - cur) * N;
+    uint curl = base + 4u * N, pd = base + 5u * N;
+    uint i = fire_idx(F, c);
+    uint pass = pc.pass & 255u;
+    float dt = F.dt;
+    if (pass == 0u) {
+        vec3 p = vec3(c) + 0.5;
+        vec3 v0 = B.v[vin + i].xyz;
+        vec3 from = p - v0 * dt;
+        vec4 v = fire_sample(B, F, vin, from);
+        vec4 s = fire_sample(B, F, sin_, from);
+        // the emitter: fuel at the base, already burning, rising and turbulent
+        vec3 d = p - F.emitter.xyz;
+        float r = F.emitter.w;
+        if (length(d.xy) < r && d.z > -1.0 && d.z < 1.5) {
+            float n = vnoise(vec3(p.xy * 0.35, F.time * 3.0)), edge = 1.0 - smoothstep(0.6, 1.0, length(d.xy) / r);
+            s.z = max(s.z, F.fuel * mix(0.5, 1.0, n) * edge);
+            s.x = max(s.x, 1100.0 * edge);
+            v.z = max(v.z, 6.0 * edge);
+            v.xy += (vec2(vnoise(vec3(p.xy, F.time * 5.0)), vnoise(vec3(p.yx + 7.0, F.time * 5.0))) - 0.5) * F.wind.w * edge;
+        }
+        // combustion: the fuel burns while hot, heats the gas, leaves smoke
+        if (s.z > 0.0 && s.x > 400.0) {
+            float b = min(s.z, F.burn * dt);
+            s.z -= b, s.x += b * F.heat, s.y += b * F.smoke;
+        }
+        s.x *= exp(-F.cooling * dt);
+        s.y *= exp(-F.dissipation * dt);
+        s.z *= exp(-0.6 * dt);
+        float top = float(F.dims.z) - float(c.z); // (the open top and sides let it go)
+        float side = min(min(float(c.x), float(F.dims.x - 1u) - float(c.x)), min(float(c.y), float(F.dims.y - 1u) - float(c.y)));
+        float fade = smoothstep(0.0, 3.0, min(top, side + 1.0));
+        s.xyz *= mix(0.85, 1.0, fade);
+        v.xyz *= exp(-0.15 * dt);
+        if (length(v.xyz) > 60.0) v.xyz *= 60.0 / length(v.xyz);
+        B.v[vout + i] = vec4(v.xyz, 0.0);
+        B.v[sout + i] = vec4(max(s.xyz, vec3(0.0)), s.w);
+        return;
+    }
+    if (pass == 1u) { // the curl of the new velocity (central differences, clamped at the edges)
+        ivec3 m = ivec3(F.dims.xyz) - 1;
+        vec3 px = B.v[vout + fire_idx(F, ivec3(min(c.x + 1, m.x), c.y, c.z))].xyz, nx = B.v[vout + fire_idx(F, ivec3(max(c.x - 1, 0), c.y, c.z))].xyz;
+        vec3 py = B.v[vout + fire_idx(F, ivec3(c.x, min(c.y + 1, m.y), c.z))].xyz, ny = B.v[vout + fire_idx(F, ivec3(c.x, max(c.y - 1, 0), c.z))].xyz;
+        vec3 pz = B.v[vout + fire_idx(F, ivec3(c.x, c.y, min(c.z + 1, m.z)))].xyz, nz = B.v[vout + fire_idx(F, ivec3(c.x, c.y, max(c.z - 1, 0)))].xyz;
+        vec3 w = 0.5 * vec3((py.z - ny.z) - (pz.y - nz.y), (pz.x - nz.x) - (px.z - nx.z), (px.y - nx.y) - (py.x - ny.x));
+        B.v[curl + i] = vec4(w, length(w));
+        return;
+    }
+    if (pass == 2u) { // the forces
+        vec4 v = B.v[vout + i];
+        vec4 s = B.v[sout + i];
+        v.z += dt * (F.buoyancy * s.x * 0.001 - 0.25 * s.y);
+        ivec3 m = ivec3(F.dims.xyz) - 1;
+        vec3 g = 0.5 * vec3(B.v[curl + fire_idx(F, ivec3(min(c.x + 1, m.x), c.y, c.z))].w - B.v[curl + fire_idx(F, ivec3(max(c.x - 1, 0), c.y, c.z))].w,
+                            B.v[curl + fire_idx(F, ivec3(c.x, min(c.y + 1, m.y), c.z))].w - B.v[curl + fire_idx(F, ivec3(c.x, max(c.y - 1, 0), c.z))].w,
+                            B.v[curl + fire_idx(F, ivec3(c.x, c.y, min(c.z + 1, m.z)))].w - B.v[curl + fire_idx(F, ivec3(c.x, c.y, max(c.z - 1, 0)))].w);
+        float gl = length(g);
+        if (gl > 1e-5) v.xyz += dt * F.vorticity * cross(g / gl, B.v[curl + i].xyz);
+        v.xyz += (F.wind.xyz - v.xyz) * (1.0 - exp(-0.4 * dt)) * smoothstep(0.0, 0.2, float(c.z) / float(F.dims.z));
+        if (c.z == 0) v.z = max(v.z, 0.0); // (the floor)
+        B.v[vout + i] = v;
+        return;
+    }
+    if (pass == 3u) { // the divergence (outside the box: the same as the edge, the floor's z 0)
+        ivec3 m = ivec3(F.dims.xyz) - 1;
+        float dx = B.v[vout + fire_idx(F, ivec3(min(c.x + 1, m.x), c.y, c.z))].x - B.v[vout + fire_idx(F, ivec3(max(c.x - 1, 0), c.y, c.z))].x;
+        float dy = B.v[vout + fire_idx(F, ivec3(c.x, min(c.y + 1, m.y), c.z))].y - B.v[vout + fire_idx(F, ivec3(c.x, max(c.y - 1, 0), c.z))].y;
+        float zn = c.z == 0 ? 0.0 : B.v[vout + fire_idx(F, ivec3(c.x, c.y, c.z - 1))].z;
+        float dz = B.v[vout + fire_idx(F, ivec3(c.x, c.y, min(c.z + 1, m.z)))].z - zn;
+        vec4 q = B.v[pd + i];
+        B.v[pd + i] = vec4(q.xy, 0.5 * (dx + dy + dz), 0.0);
+        return;
+    }
+    if (pass == 4u) { // Jacobi: p = (sum of the neighbors - divergence) / 6; outside the sides and top 0, below the floor its own
+        bool odd = (pc.pass >> 8u) != 0u;
+        float sum = 0.0, own = odd ? B.v[pd + i].y : B.v[pd + i].x;
+        for (int k = 0; k < 6; k++) {
+            ivec3 o = c + ivec3(k == 0 ? 1 : k == 1 ? -1 : 0, k == 2 ? 1 : k == 3 ? -1 : 0, k == 4 ? 1 : k == 5 ? -1 : 0);
+            if (o.z < 0) sum += own;
+            else if (fire_in(F, o)) { vec4 q = B.v[pd + fire_idx(F, o)]; sum += odd ? q.y : q.x; }
+        }
+        vec4 q = B.v[pd + i];
+        float p = (sum - q.z) / 6.0;
+        if (odd) q.x = p;
+        else q.y = p;
+        B.v[pd + i] = q;
+        return;
+    }
+    if (pass == 5u) { // the projection: the pressure's gradient out of the velocity
+        float p0 = B.v[pd + i].x;
+        vec3 gp;
+        ivec3 o;
+        float pxp = fire_in(F, o = c + ivec3(1, 0, 0)) ? B.v[pd + fire_idx(F, o)].x : 0.0;
+        float pxn = fire_in(F, o = c - ivec3(1, 0, 0)) ? B.v[pd + fire_idx(F, o)].x : 0.0;
+        float pyp = fire_in(F, o = c + ivec3(0, 1, 0)) ? B.v[pd + fire_idx(F, o)].x : 0.0;
+        float pyn = fire_in(F, o = c - ivec3(0, 1, 0)) ? B.v[pd + fire_idx(F, o)].x : 0.0;
+        float pzp = fire_in(F, o = c + ivec3(0, 0, 1)) ? B.v[pd + fire_idx(F, o)].x : 0.0;
+        float pzn = c.z > 0 ? B.v[pd + fire_idx(F, c - ivec3(0, 0, 1))].x : p0;
+        gp = 0.5 * vec3(pxp - pxn, pyp - pyn, pzp - pzn);
+        vec4 v = B.v[vout + i];
+        v.xyz -= gp;
+        if (c.z == 0) v.z = max(v.z, 0.0);
+        B.v[vout + i] = v;
+        return;
+    }
+    if (pass == 6u) { // the sun's light through the smoke to this cell (a cell a step toward it)
+        vec4 s = B.v[sout + i];
+        float tau = 0.0;
+        if (F.sun.w > 0.5) {
+            vec3 q = vec3(c) + 0.5 + F.sun.xyz;
+            for (int k = 0; k < 48; k++) {
+                ivec3 o = ivec3(floor(q));
+                if (!fire_in(F, o)) break;
+                tau += B.v[sout + fire_idx(F, o)].y * F.look.y * F.cell;
+                if (tau > 10.0) break;
+                q += F.sun.xyz;
+            }
+        }
+        B.v[sout + i] = vec4(s.xyz, exp(-tau));
+    }
+}

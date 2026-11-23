@@ -1,0 +1,65 @@
+#version 460
+// The Lighting Levels' blend (gi_bake.c gi_lightmaps_blend_step, notas-dev/niveis.md): each level's bake is a layer kept
+// on the GPU (L0, L1, the probe volume's irradiance), and the shown lightmaps are their weighted sum, made again only on
+// the frames a weight changes (Set Lighting Level Blend: a timeline dimming a lamp, a flicker). The light is linear: a
+// layer at weight w is that group of lights at w times its intensity (lights.c scales the lights the same).
+// pc.pass 0: the lightmap atlas's texels -> u_lm0 (L0 summed; valid where any layer is), u_lm1 (the direction weighted by
+//            each layer's luminance); pc.pass 1: the volume's irradiance texels -> u_irr (its alpha the base's)
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D u_lm0;
+layout(set = 0, binding = 12, rgba16f) uniform writeonly image2D u_lm1;
+layout(set = 0, binding = 5, rgba16f) uniform coherent image2D u_irr;
+
+// the layers: per layer [L0: atlas^2 texels][L1: atlas^2][volume irradiance: vw * vh], each texel 4 halfs (uvec2)
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer Texels { uvec2 t[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BlendParams {
+    uvec2 data;          // the layers' buffer
+    uint n, atlas;       // layers, the lightmap atlas's side
+    uint vw, vh, has_vol, pad;
+    uvec2 layer_texels;  // (a layer's size in texels: 2 atlas^2 + vw vh), unused high word
+    uvec2 pad2;
+    float w[36];         // each layer's weight (layer 0: the persistent level, 1)
+};
+
+vec4 h4(uvec2 u) { return vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); }
+
+void main() {
+    BlendParams bp = BlendParams(pc.instances);
+    uvec2 px = gl_GlobalInvocationID.xy;
+    Texels d = Texels(bp.data);
+    uint lt = bp.layer_texels.x, a2 = bp.atlas * bp.atlas;
+    if (pc.pass == 0u) {
+        if (px.x >= bp.atlas || px.y >= bp.atlas) return;
+        uint idx = px.y * bp.atlas + px.x;
+        // (every layer has the same Static meshes in the same places: a texel no surface uses is empty in all of them,
+        // left as it is; about half the atlas, half the reads)
+        vec4 a0 = h4(d.t[idx]);
+        if (a0.a <= 0.0) return;
+        vec3 l0 = vec3(0.0), dir = vec3(0.0);
+        float valid = a0.a;
+        for (uint k = 0u; k < bp.n; k++) {
+            float w = bp.w[k];
+            if (w <= 0.0) continue;
+            vec4 a = k == 0u ? a0 : h4(d.t[k * lt + idx]);
+            vec3 b = h4(d.t[k * lt + a2 + idx]).xyz;
+            l0 += a.rgb * w;
+            dir += b * (dot(a.rgb, vec3(0.2126, 0.7152, 0.0722)) * w);
+            valid = max(valid, a.a);
+        }
+        float dl = dot(dir, dir);
+        imageStore(u_lm0, ivec2(px), vec4(l0, valid));
+        imageStore(u_lm1, ivec2(px), vec4(dl > 1e-20 ? dir * inversesqrt(dl) : vec3(0.0, 0.0, 1.0), 1.0));
+    } else {
+        if (bp.has_vol == 0u || px.x >= bp.vw || px.y >= bp.vh) return;
+        uint idx = px.y * bp.vw + px.x, o = 2u * a2;
+        vec4 base = h4(d.t[o + idx]);
+        vec3 irr = base.rgb * bp.w[0];
+        for (uint k = 1u; k < bp.n; k++) {
+            float w = bp.w[k];
+            if (w > 0.0) irr += h4(d.t[k * lt + o + idx]).rgb * w;
+        }
+        imageStore(u_irr, ivec2(px), vec4(irr, base.a));
+    }
+}

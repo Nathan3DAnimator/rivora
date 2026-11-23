@@ -1,0 +1,42 @@
+Real Engine - editor de jogos (editor, renderer com GI híbrida e path tracing, Blueprints, UI do jogo, física,
+animação, IA, multidões, terreno, projetos)
+
+COMO USAR
+- Descompacte a pasta inteira em qualquer lugar e abra realengine.exe.
+- Precisa de uma GPU com Vulkan 1.3 (NVIDIA GTX 900 / AMD RX 400 / Intel Xe ou mais novas, com driver atualizado).
+  Ray tracing por hardware (RTX 2000 / RX 6000 ou mais novas) liga a iluminação global completa.
+- Ao abrir aparece o Navegador de Projetos: crie um projeto a partir de um modelo (Terceira Pessoa, Primeira Pessoa,
+  Visão de Cima, Física, Em Branco) ou abra um recente. "Continuar sem projeto" usa a pasta Content ao lado do
+  executável.
+- Alt+P joga, Esc para, F8 possui/ejeta. Help > About lista os atalhos; Editar > Preferências do Editor também.
+- Editar > Configurações do Projeto: mapas, Default Pawn, gravidade, teclas, opções do jogo empacotado.
+- Ctrl+Espaço abre a Gaveta de Conteúdo. Compilar > Empacotar Jogo gera o jogo sem o editor.
+- Importar (Gaveta de Conteúdo ou arrastar o arquivo): .tlend do Tlender, OBJ, glTF/GLB e FBX (malhas, materiais,
+  esqueletos, animações, luzes e câmeras).
+- Os painéis encaixam e podem sair da janela (outro monitor). Janela > Viewport 2 abre uma segunda vista 3D.
+- Janela > Posicionar Atores (Shift+1 / Shift+2 alternam os modos Seleção e Paisagem). Ctrl+P abre qualquer asset
+  pelo nome; Ctrl+Shift+S salva tudo.
+- Anim Blueprints abrem no AnimGraph (máquinas de estados, blends, camadas, Motion Matching). Um banco de Motion
+  Matching abre no editor próprio (Banco de Dados e Depurador de Consulta). As animações tocam a prévia no
+  Navegador de Conteúdo ao passar o mouse.
+- Motion Matching com poucas animações: um idle, um andar e uma corrida bastam. Starts, stops, trocas de velocidade e
+  direções intermediárias são gerados no estilo delas (pés presos no chão, inclinação pela aceleração), com ajustes no
+  editor de Motion Matching. Ferramentas > Pacotes de Animação > Exemplos de Motion Matching traz 4 personagens prontos.
+- O Motion Matching também usa as suas transições (start, stop, giro 90/180, com root motion) antes das geradas, e
+  acha os melhores momentos num take longo único (tudo num arquivo), espelhando quando serve. Trocas por
+  inercialização. Os exemplos trazem LongTake (um take só) e Authored (starts e stops próprios).
+- Idioma: Editar > Preferências do Editor > Geral (português ou inglês).
+
+ATUALIZAÇÕES
+- O editor procura versões novas ao abrir (Help > Check for Updates). Os pacotes são assinados; a instalação
+  acontece quando o editor fecha, pelo realengine_updater.exe.
+
+SE TRAVAR, BUGS E SUGESTÕES
+- Um relatório é salvo em crashes\ (com o nível salvo de emergência); na abertura seguinte o editor pergunta se
+  manda o relatório aos desenvolvedores. Help > Report a Bug salva em bugReport\ e envia; Help > Send a Suggestion
+  manda uma ideia. O nome do usuário do Windows e do computador são tirados antes do envio.
+
+ARQUIVOS
+- realengine.exe: o editor. realengine.pdb: os nomes das funções nos relatórios de crash.
+- realengine_game.exe: o runtime que Empacotar Jogo copia como o jogo.
+- realengine_updater.exe: instala as atualizações. vcruntime140*.dll, msvcp140.dll: o runtime do Visual C++.

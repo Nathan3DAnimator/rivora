@@ -1,0 +1,83 @@
+#version 460
+// Bloom (render.c, after the exposure): the bright part of the image down a chain of half sizes (13-tap filter; the
+// first, from the full image to a quarter, 4 bilinear taps of 4x4 texels each with a soft threshold and Karis' weights), then back up adding each smaller level with a tent filter. pc.pass: the step (low
+// byte: 0 prefilter into level 0, 1 down into level pc.pad, 2 up into level pc.pad).
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 1) uniform sampler2D u_hdr;
+layout(set = 0, binding = 41) uniform sampler2D u_bloom;
+layout(set = 0, binding = 42, rgba16f) uniform image2D o_mip0;
+layout(set = 0, binding = 43, rgba16f) uniform image2D o_mip1;
+layout(set = 0, binding = 44, rgba16f) uniform image2D o_mip2;
+layout(set = 0, binding = 45, rgba16f) uniform image2D o_mip3;
+layout(set = 0, binding = 46, rgba16f) uniform image2D o_mip4;
+layout(set = 0, binding = 47, rgba16f) uniform image2D o_mip5;
+
+// (a level's image by its number: separate bindings, one per level)
+ivec2 mip_size(uint l) {
+    return l == 0u ? imageSize(o_mip0) : l == 1u ? imageSize(o_mip1) : l == 2u ? imageSize(o_mip2) : l == 3u ? imageSize(o_mip3) : l == 4u ? imageSize(o_mip4) : imageSize(o_mip5);
+}
+vec4 mip_load(uint l, ivec2 p) {
+    return l == 0u ? imageLoad(o_mip0, p) : l == 1u ? imageLoad(o_mip1, p) : l == 2u ? imageLoad(o_mip2, p) : l == 3u ? imageLoad(o_mip3, p) : l == 4u ? imageLoad(o_mip4, p) : imageLoad(o_mip5, p);
+}
+void mip_store(uint l, ivec2 p, vec4 v) {
+    if (l == 0u) imageStore(o_mip0, p, v);
+    else if (l == 1u) imageStore(o_mip1, p, v);
+    else if (l == 2u) imageStore(o_mip2, p, v);
+    else if (l == 3u) imageStore(o_mip3, p, v);
+    else if (l == 4u) imageStore(o_mip4, p, v);
+    else imageStore(o_mip5, p, v);
+}
+
+vec3 down13(sampler2D s, vec2 uv, vec2 t, float lod) {
+    vec3 a = textureLod(s, uv + t * vec2(-2, -2), lod).rgb, b = textureLod(s, uv + t * vec2(0, -2), lod).rgb, c = textureLod(s, uv + t * vec2(2, -2), lod).rgb;
+    vec3 d = textureLod(s, uv + t * vec2(-1, -1), lod).rgb, e = textureLod(s, uv + t * vec2(1, -1), lod).rgb;
+    vec3 f = textureLod(s, uv + t * vec2(-2, 0), lod).rgb, g = textureLod(s, uv, lod).rgb, h = textureLod(s, uv + t * vec2(2, 0), lod).rgb;
+    vec3 i = textureLod(s, uv + t * vec2(-1, 1), lod).rgb, j = textureLod(s, uv + t * vec2(1, 1), lod).rgb;
+    vec3 k = textureLod(s, uv + t * vec2(-2, 2), lod).rgb, l = textureLod(s, uv + t * vec2(0, 2), lod).rgb, m = textureLod(s, uv + t * vec2(2, 2), lod).rgb;
+    return (d + e + i + j) * 0.125 + (a + c + k + m) * 0.03125 + (b + f + h + l) * 0.0625 + g * 0.125;
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    uint step = pc.pass & 0xFFu, level = pc.pad;
+    ivec2 size = mip_size(level);
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= size.x || px.y >= size.y) return;
+    vec2 uv = (vec2(px) + 0.5) / vec2(size);
+    if (step == 0u) { // the image's bright part (pre-exposed: its threshold scaled by the exposure it was rendered with)
+        ExposureBuf e = ExposureBuf(f.exposure);
+        float ex = e.exposure / max(e.pre_exposure, 1e-12);
+        vec2 t = 1.0 / vec2(textureSize(u_hdr, 0));
+        vec3 c = vec3(0.0);
+        float wsum = 0.0;
+        for (int i = 0; i < 4; i++) { // each tap the mean of 2x2 texels; weighed by 1 / (1 + luma): fireflies don't flash
+            vec2 o = vec2((i & 1) != 0 ? 1.0 : -1.0, (i & 2) != 0 ? 1.0 : -1.0) * t;
+            vec3 s = textureLod(u_hdr, uv + o, 0.0).rgb * ex;
+            float w = 1.0 / (1.0 + max(s.r, max(s.g, s.b)));
+            c += s * w;
+            wsum += w;
+        }
+        c /= wsum;
+        float br = max(c.r, max(c.g, c.b)), th = f.pp[0].y, knee = th * 0.5;
+        float soft = clamp(br - th + knee, 0.0, 2.0 * knee);
+        soft = soft * soft / (4.0 * knee + 1e-5);
+        float w = max(soft, br - th) / max(br, 1e-5);
+        c = min(c * w, vec3(64.0)) / max(ex, 1e-12); // (back to the pre-exposed scale; fireflies capped)
+        mip_store(0u, px, vec4(c, 1.0));
+    } else if (step == 1u) {
+        vec2 t = 1.0 / vec2(textureSize(u_bloom, int(level) - 1));
+        mip_store(level, px, vec4(down13(u_bloom, uv, t, float(level) - 1.0), 1.0));
+    } else { // this level plus the smaller one, tent-filtered
+        vec2 t = 1.0 / vec2(textureSize(u_bloom, int(level) + 1));
+        float lod = float(level) + 1.0;
+        vec3 s = textureLod(u_bloom, uv, lod).rgb * 4.0;
+        s += (textureLod(u_bloom, uv + vec2(t.x, 0), lod).rgb + textureLod(u_bloom, uv - vec2(t.x, 0), lod).rgb +
+              textureLod(u_bloom, uv + vec2(0, t.y), lod).rgb + textureLod(u_bloom, uv - vec2(0, t.y), lod).rgb) * 2.0;
+        s += textureLod(u_bloom, uv + t, lod).rgb + textureLod(u_bloom, uv - t, lod).rgb + textureLod(u_bloom, uv + vec2(t.x, -t.y), lod).rgb +
+             textureLod(u_bloom, uv + vec2(-t.x, t.y), lod).rgb;
+        vec3 here = mip_load(level, px).rgb;
+        mip_store(level, px, vec4(here + s / 16.0, 1.0));
+    }
+}

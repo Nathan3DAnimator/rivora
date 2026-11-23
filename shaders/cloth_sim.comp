@@ -1,0 +1,684 @@
+#version 460
+#ifdef SOFT_BLOCK
+#extension GL_KHR_shader_subgroup_clustered : require
+#endif
+// Cloth (cloth.c, cloth.glsl, notas-dev/tecido.md): Vertex Block Descent (Chen, Macklin, Kim, Yuksel, SIGGRAPH 2024).
+// Each vertex of a color (9 colors: a vertex's springs reach 2 cells, so (x mod 3, y mod 3) never touches another of
+// its color) takes one Newton step on its own block: the inertia plus its springs' energies, their Hessians clamped to
+// stay positive (no explosions at any stiffness), damping as in the paper. Contacts as in Offset Geometric Contact
+// (Chen et al., SIGGRAPH 2025): a vertex never moves more than a share of its distance to the nearest collider in a step,
+// so it can't tunnel; then it is pushed to the collider's offset surface (the cloth's thickness) with friction.
+// pc.pass: 0 predict (gravity, wind, the pins follow the actor), 1 a color's solve (header.color), 2 velocities + tears,
+// 3 a cut (every spring of the vertices inside header.cut torn), 4 the new cloths at rest, 5 the BLAS's triangles,
+// 6-8 self collision (as NvCloth's, vertex against vertex): 6 the hash emptied, 7 each vertex into its cell, 8 each
+// vertex's 4 nearest contacts (another cloth's, or its own past 2 grid steps) found once a substep; the solve keeps them
+// apart by a stiff penalty in its Newton step; 9 a mesh's normals (its triangles around each vertex).
+// A mesh (CLF_MESH): the same passes over its adjacency lists instead of the grid (cloth.glsl)
+// A soft body (CLF_SOFT, softbody.h): a lattice of cubes, 6 tetrahedra each, its vertices' Newton step on stable
+// Neo-Hookean elasticity (soft_solve); 8 colors ((x, y, z) mod 2: a tetrahedron never joins two of one); its contacts let
+// it in by how far outside its mesh the vertex stands; the last iteration's contact forces summed per collider for the
+// physics bodies (cloth.c reads them back), its dent kept and let go by its plasticity (pass 2)
+#include "common.glsl"
+#include "cloth.glsl"
+
+#ifdef SOFT_BLOCK
+
+layout(local_size_x = 512) in; // (64 vertices at once, 8 lanes each: one a cell around it)
+#else
+layout(local_size_x = 64) in;
+#endif
+
+ClothHeader H;
+#ifdef SOFT_BLOCK
+#define SB_COLS 32u
+shared vec4 sbcol[3u * SB_COLS]; // (its body's colliders, the first 32)
+vec4 COLV(uint k, uint first, uint j) { return sbcol[3u * (k - first) + j]; }
+#else
+#define SB_COLS 0xFFFFFFFFu
+vec4 COLV(uint k, uint first, uint j) { return ClothVec4(H.colliders).v[3u * k + j]; }
+#endif
+
+uint self_bucket(vec3 p) {
+    ivec3 q = ivec3(floor(p / H.cell));
+    return uint((q.x * 73856093) ^ (q.y * 19349663) ^ (q.z * 83492791)) & (H.nbuckets - 1u);
+}
+
+vec3 qrot(vec4 q, vec3 v) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
+
+// The nearest collider: its signed distance (m), the way out and which one (3 vec4 a collider: a.w its type, + 16 when
+// the CPU wants its contact forces back)
+float collide(vec3 p, uint first, uint count, out vec3 nrm, out uint which) {
+    float best = 1e9;
+    nrm = vec3(0.0, 0.0, 1.0);
+    which = 0xFFFFFFFFu;
+    for (uint k = first; k < first + min(count, SB_COLS) && k < H.ncolliders; k++) {
+        vec4 a = COLV(k, first, 0u), b = COLV(k, first, 1u);
+        uint type = uint(a.w) & 15u;
+        float d;
+        vec3 n;
+        if (type == 0u) { // sphere
+            vec3 r = p - a.xyz;
+            float l = length(r);
+            d = l - b.w, n = l > 1e-6 ? r / l : vec3(0, 0, 1);
+        } else if (type == 1u) { // capsule
+            vec3 ab = b.xyz - a.xyz;
+            float t = clamp(dot(p - a.xyz, ab) / max(dot(ab, ab), 1e-8), 0.0, 1.0);
+            vec3 r = p - (a.xyz + ab * t);
+            float l = length(r);
+            d = l - b.w, n = l > 1e-6 ? r / l : vec3(0, 0, 1);
+        } else if (type == 6u) { // (Q10) a moving capsule (a Physics Asset body): swept over the substeps from last frame's
+            // place (the next slot) to now's; a vertex the axis passed (inside now, on the other side before) is put back
+            // on the side it was on: pushed ahead of the limb, not through it
+            bool prev_ok = k + 1u < first + min(count, SB_COLS) && k + 1u < H.ncolliders; // (cut off by the per-cloth limit: as it is now)
+            vec4 pa = prev_ok ? COLV(k + 1u, first, 0u) : a, pb = prev_ok ? COLV(k + 1u, first, 1u) : b;
+            float f = clamp((float((pc.pad >> 16) & 15u) + 1.0) / float(max((pc.pad >> 20) & 15u, 1u)), 0.0, 1.0); // (pass 1's pad: bits 16-19 the substep, 20-23 of how many)
+            vec3 a0 = mix(pa.xyz, a.xyz, f), b0 = mix(pb.xyz, b.xyz, f);
+            vec3 ab = b0 - a0;
+            float t = clamp(dot(p - a0, ab) / max(dot(ab, ab), 1e-8), 0.0, 1.0);
+            vec3 r = p - (a0 + ab * t);
+            float l = length(r);
+            d = l - b.w, n = l > 1e-6 ? r / l : vec3(0, 0, 1);
+            if (d < 0.0) {
+                vec3 pab = pb.xyz - pa.xyz;
+                float tp = clamp(dot(p - pa.xyz, pab) / max(dot(pab, pab), 1e-8), 0.0, 1.0);
+                vec3 rp = p - (pa.xyz + pab * tp);
+                float lp = length(rp);
+                if (lp > b.w * 0.5 && dot(rp, r) < 0.0) n = rp / lp, d = -(l + b.w); // (out ahead, the way it came)
+            }
+        } else if (type == 7u) { // (the slot before's last place: not a collider of its own)
+            continue;
+        } else if (type == 2u) { // box (min, max)
+            vec3 q = clamp(p, a.xyz, b.xyz);
+            vec3 r = p - q;
+            float l = length(r);
+            if (l > 1e-6) d = l, n = r / l;
+            else { // inside: out through the nearest face
+                vec3 lo = p - a.xyz, hi = b.xyz - p;
+                vec3 m = min(lo, hi);
+                if (m.x <= m.y && m.x <= m.z) d = -m.x, n = vec3(lo.x < hi.x ? -1.0 : 1.0, 0.0, 0.0);
+                else if (m.y <= m.z) d = -m.y, n = vec3(0.0, lo.y < hi.y ? -1.0 : 1.0, 0.0);
+                else d = -m.z, n = vec3(0.0, 0.0, lo.z < hi.z ? -1.0 : 1.0);
+            }
+        } else if (type == 4u) { // (Q9) an oriented box: center a, half extents b, turned by the quaternion c
+            vec4 q = COLV(k, first, 2u);
+            vec3 lp = qrot(vec4(-q.xyz, q.w), p - a.xyz);
+            vec3 qq = clamp(lp, -b.xyz, b.xyz);
+            vec3 r = lp - qq;
+            float l = length(r);
+            vec3 ln;
+            if (l > 1e-6) d = l, ln = r / l;
+            else {
+                vec3 m = b.xyz - abs(lp);
+                if (m.x <= m.y && m.x <= m.z) d = -m.x, ln = vec3(lp.x < 0.0 ? -1.0 : 1.0, 0.0, 0.0);
+                else if (m.y <= m.z) d = -m.y, ln = vec3(0.0, lp.y < 0.0 ? -1.0 : 1.0, 0.0);
+                else d = -m.z, ln = vec3(0.0, 0.0, lp.z < 0.0 ? -1.0 : 1.0);
+            }
+            n = qrot(q, ln);
+        } else { // a floor at a.z
+            d = p.z - a.z, n = vec3(0, 0, 1);
+        }
+        if (d < best) best = d, nrm = n, which = k;
+    }
+    return best;
+}
+float collide(vec3 p, uint first, uint count, out vec3 nrm) { uint k; return collide(p, first, count, nrm, k); }
+
+// --- Soft bodies (CLF_SOFT) ---
+const uvec4 SB_TETS[6] = uvec4[6](uvec4(0u, 1u, 3u, 7u), uvec4(0u, 1u, 5u, 7u), uvec4(0u, 2u, 3u, 7u), uvec4(0u, 2u, 6u, 7u), uvec4(0u, 4u, 5u, 7u), uvec4(0u, 4u, 6u, 7u)); // (softbody.c g_soft_tets)
+// each one's order of the axes (0 -> e_a -> e_a + e_b -> 7): its rest's inverse in closed form, rows (e_a - e_b, e_b - e_c,
+// e_c) / cell: no rest read, no inverse (the lattice is regular in the actor's scaled space)
+const uvec3 SB_ORD[6] = uvec3[6](uvec3(0u, 1u, 2u), uvec3(0u, 2u, 1u), uvec3(1u, 0u, 2u), uvec3(1u, 2u, 0u), uvec3(2u, 0u, 1u), uvec3(2u, 1u, 0u));
+vec3 sb_e(uint a) { return vec3(a == 0u ? 1.0 : 0.0, a == 1u ? 1.0 : 0.0, a == 2u ? 1.0 : 0.0); }
+#define FB_SCALE 1024.0
+// The lattice's positions and dents: the block pass (SOFT_BLOCK: a workgroup a soft body) keeps its body's in shared memory,
+// the passes by color read the buffers
+#ifdef SOFT_BLOCK
+#define SB_MAX 2048u
+#define SB_THREADS 512u
+#define SB_SLOTS 64u
+shared float sbx[SB_MAX], sby[SB_MAX], sbz[SB_MAX];
+shared uint sbpa[SB_MAX], sbpb[SB_MAX]; // (the dents, half floats)
+vec3 SBP(uint i, ClothInfo c) { uint l = i - c.base; return vec3(sbx[l], sby[l], sbz[l]); }
+vec3 SBD(uint i, ClothInfo c) { uint l = i - c.base; return vec3(unpackHalf2x16(sbpa[l]), unpackHalf2x16(sbpb[l]).x); }
+void SBW(uint i, ClothInfo c, vec3 x) { uint l = i - c.base; sbx[l] = x.x, sby[l] = x.y, sbz[l] = x.z; }
+#else
+vec3 SBP(uint i, ClothInfo c) { return ClothVec4(H.pos).v[i].xyz; }
+vec3 SBD(uint i, ClothInfo c) { return ClothVec4(H.mnormal).v[i].xyz; }
+void SBW(uint i, ClothInfo c, vec3 x) { ClothVec4(H.pos).v[i] = vec4(x, 0.0); }
+#endif
+// the actor's space (cm) of a world point (m): its rows are a turn and a move
+vec3 sb_to_local(ClothInfo c, vec3 p) {
+    vec3 d = p * 100.0 - vec3(c.rows[0].w, c.rows[1].w, c.rows[2].w);
+    return vec3(dot(vec3(c.rows[0].x, c.rows[1].x, c.rows[2].x), d), dot(vec3(c.rows[0].y, c.rows[1].y, c.rows[2].y), d), dot(vec3(c.rows[0].z, c.rows[1].z, c.rows[2].z), d));
+}
+void fb_add(uint slot, vec3 v) {
+    ClothUint fb = ClothUint(H.feedback);
+    ivec3 q = ivec3(round(clamp(v * FB_SCALE, vec3(-2e9), vec3(2e9))));
+    atomicAdd(fb.v[slot], uint(q.x)), atomicAdd(fb.v[slot + 1u], uint(q.y)), atomicAdd(fb.v[slot + 2u], uint(q.z));
+}
+
+// One lattice cell's tetrahedra around vertex v (its corner 7 - b in the cell, b the cell's bit): their elastic force on
+// it and their Hessian (stable Neo-Hookean; the rest's inverse in closed form; the block pass runs the 8 cells in 8 lanes)
+void sb_tet(uint v, ClothInfo c, ivec3 g, uint b, uint t, vec3 x, inout vec3 f, inout mat3 He) {
+    float mu = c.k_stretch, la = max(c.k_shear, 1e-3), alpha = 1.0 + mu / la;
+    uint sy = c.nx, sz = c.nx * uint(c.soft.x);
+    float icell = 1.0 / max(c.dx, 1e-5), V = c.dx * c.dx * c.dx / 6.0;
+    bool dents = c.tint.x > 0.0 || c.tint.y > 0.0;
+    mat3 Rw = transpose(mat3(c.rows[0].xyz, c.rows[1].xyz, c.rows[2].xyz)); // (the actor's turn: its dents' frame)
+    ivec3 c0 = g - ivec3(1) + ivec3(int(b & 1u), int((b >> 1) & 1u), int(b >> 2));
+    uint corner = 7u - b;
+    uint vb = c.base + uint(c0.z) * sz + uint(c0.y) * sy + uint(c0.x);
+    {
+    uvec4 tk = SB_TETS[t];
+    int s = tk.x == corner ? 0 : tk.y == corner ? 1 : tk.z == corner ? 2 : tk.w == corner ? 3 : -1;
+    if (s < 0) return;
+    uvec4 id = uvec4(vb) + (tk & 1u) + ((tk >> 1u) & 1u) * sy + (tk >> 2u) * sz;
+    vec3 x0 = id.x == v ? x : SBP(id.x, c), x1 = id.y == v ? x : SBP(id.y, c);
+    vec3 x2 = id.z == v ? x : SBP(id.z, c), x3 = id.w == v ? x : SBP(id.w, c);
+    uvec3 o = SB_ORD[t];
+    vec3 r0 = (sb_e(o.x) - sb_e(o.y)) * icell, r1 = (sb_e(o.y) - sb_e(o.z)) * icell, r2 = sb_e(o.z) * icell; // (the rest inverse's rows)
+    mat3 Ds = mat3(x1 - x0, x2 - x0, x3 - x0);
+    if (dents) { // a dent shifts the rest: its corners' offsets (the actor's frame) taken off the edges
+        vec3 p0 = SBD(id.x, c);
+        Ds -= Rw * mat3(SBD(id.y, c) - p0, SBD(id.z, c) - p0, SBD(id.w, c) - p0);
+    }
+    mat3 F = outerProduct(Ds[0], r0) + outerProduct(Ds[1], r1) + outerProduct(Ds[2], r2);
+    mat3 cof = mat3(cross(F[1], F[2]), cross(F[2], F[0]), cross(F[0], F[1])); // dJ/dF
+    float J = dot(F[0], cof[0]);
+    mat3 P = mu * F + la * (J - alpha) * cof; // (stable Neo-Hookean: the first Piola-Kirchhoff stress)
+    vec3 d = s == 0 ? -(r0 + r1 + r2) : s == 1 ? r0 : s == 2 ? r1 : r2; // (dF/dx: the rest inverse's row of x)
+    vec3 gj = cof * d;                                                     // (dJ/dx; J is affine in x: no more terms)
+    f -= V * (P * d);
+    He += V * (mu * dot(d, d) * mat3(1.0) + la * outerProduct(gj, gj));    // (exact and positive: no projection)
+    }
+}
+void sb_cell(uint v, ClothInfo c, ivec3 g, uint b, vec3 x, inout vec3 f, inout mat3 He) {
+    for (uint t = 0u; t < 6u; t++) sb_tet(v, c, g, b, t, x, f, He);
+}
+// a vertex's 24 (cell, tetrahedron) pairs: its corner 0 cell (bit 7) and corner 7 cell (bit 0) in all 6, the others in 2
+const uvec2 SB_PAIRS[24] = uvec2[24](uvec2(0u, 0u), uvec2(0u, 1u), uvec2(0u, 2u), uvec2(0u, 3u), uvec2(0u, 4u), uvec2(0u, 5u),
+                                     uvec2(7u, 0u), uvec2(7u, 1u), uvec2(7u, 2u), uvec2(7u, 3u), uvec2(7u, 4u), uvec2(7u, 5u),
+                                     uvec2(6u, 0u), uvec2(6u, 1u), uvec2(5u, 2u), uvec2(5u, 3u), uvec2(3u, 4u), uvec2(3u, 5u),
+                                     uvec2(4u, 0u), uvec2(4u, 2u), uvec2(2u, 1u), uvec2(2u, 4u), uvec2(1u, 3u), uvec2(1u, 5u));
+
+// The rest of a lattice vertex's Newton step (VBD), its elasticity summed: inertia, damping, its hold, the others' contacts,
+// the step, the colliders (OGC), its push on a physics body (the substep's last iteration)
+void sb_finish(uint v, uint ci, ClothInfo c, uint cells, vec3 x, vec3 fe, mat3 He, bool last) {
+    ClothVec4 pos = ClothVec4(H.pos), prev = ClothVec4(H.prev), tgt = ClothVec4(H.target);
+    vec3 xp = prev.v[v].xyz, y = tgt.v[v].xyz;
+    float m = c.mass * float(bitCount(cells));
+    float m_h2 = m * c.inv_h * c.inv_h, mu = c.k_stretch;
+    vec3 f = fe - m_h2 * (x - y);
+    mat3 Hs = mat3(m_h2);
+    float kd = c.damping * 0.01 * c.inv_h; // (Rayleigh: k_d / h, Damping 0.05 = k_d 5e-4 s)
+    f -= kd * (He * (x - xp));
+    Hs += He * (1.0 + kd);
+    vec4 R = ClothVec4(H.mrest).v[v];
+    if (R.w > 0.001 && c.soft.z < 0.5) { // a faded hold: a spring to its place on what holds it
+        vec3 tw = cl_to_world(c, R.xyz) * 0.01;
+        float ka = c.k_bend * R.w;
+        f += ka * (tw - x), Hs += mat3(ka);
+    }
+    if (H.nbuckets != 0u && c.look.z > 0.0) { // the other soft bodies and the cloths (vertex against vertex, pass 8)
+        ClothUint nb = ClothUint(H.selfnb), owner = ClothUint(H.owner);
+        float kc = max(mu * c.dx, 1000.0);
+        for (uint k = 0u; k < 4u; k++) {
+            uint u = nb.v[v * 4u + k];
+            if (u == 0xFFFFFFFFu) break;
+            uint cu = owner.v[u];
+            if (cu >= H.ncloth) continue;
+            float D = c.look.z + ClothInfoBuf(H.info).c[cu].look.z;
+            vec3 dd = x - pos.v[u].xyz;
+            float len = length(dd);
+            if (len >= D || len < 1e-7) continue;
+            vec3 un = dd / len;
+            f += kc * (D - len) * un;
+            Hs += kc * outerProduct(un, un);
+        }
+    }
+    if (abs(determinant(Hs)) < 1e-12) return;
+    // what it leans on a collider with, quasi-static: its elasticity and its weight (the inertia left out: it reached the
+    // physics body frames late, an impact's spike fed back made the body bounce off; cloth.c damps the body itself)
+    vec3 fstat = f + m_h2 * (x - y) + m * vec3(0.0, 0.0, -9.81 * c.gravity);
+    vec3 dx = inverse(Hs) * f;
+    // the contact (OGC), the mesh's surface (not the lattice's) kept at the thickness
+    float th = c.thickness - ClothVec2(H.muv).v[v].x;
+    vec3 nrm;
+    uint which;
+    float dist = collide(x, c.col_first, c.col_count, nrm) - th;
+    float lim = max(dist * 0.45, 0.002);
+    float dl = length(dx);
+    if (dist < 0.25 && dl > lim) dx *= lim / dl;
+    x += dx;
+    which = 0xFFFFFFFFu;
+    float d2 = dist - length(dx); // (a step can't close more than its length: far from everything, no second look)
+    if (d2 < 0.01) d2 = collide(x, c.col_first, c.col_count, nrm, which) - th;
+    if (d2 < 0.0) {
+        x -= nrm * d2;
+        vec3 mv = x - xp;
+        vec3 tang = mv - nrm * dot(mv, nrm);
+        x -= tang * c.friction;
+    }
+    if (any(isnan(x)) || any(isinf(x))) x = xp;
+    SBW(v, c, x);
+    if (last && d2 < 0.001 && which < H.ncolliders) { // its push on a physics body (the last iteration's)
+        vec4 a = ClothVec4(H.colliders).v[3u * which], b = ClothVec4(H.colliders).v[3u * which + 1u];
+        if (a.w >= 16.0) {
+            float push = dot(fstat, -nrm); // (along the contact's normal only: its sides' pushes cancel, nothing slides the body)
+            vec3 F = -nrm * push;
+            if (push > 0.0) {
+                vec3 ctr = (uint(a.w) & 15u) == 2u ? 0.5 * (a.xyz + b.xyz) : a.xyz;
+                fb_add(which * 8u, F);
+                fb_add(which * 8u + 3u, cross(x - ctr, F));
+                atomicAdd(ClothUint(H.feedback).v[which * 8u + 6u], 1u);
+            }
+        }
+    }
+}
+
+// A lattice vertex's Newton step, its 8 cells one after the other (the passes by color)
+void soft_solve(uint v, uint ci, ClothInfo c, ivec3 g, uint cells, bool last) {
+    vec3 x = SBP(v, c), f = vec3(0.0);
+    mat3 He = mat3(0.0);
+    for (uint b = 0u; b < 8u; b++)
+        if ((cells & (1u << b)) != 0u) sb_cell(v, c, g, b, x, f, He);
+    sb_finish(v, ci, c, cells, x, f, He, last);
+}
+
+void soft_post(uint v, uint ci, ClothInfo c, bool lastsub);
+// The other passes of a soft body's vertex: 0 predict, 2 velocities and the dent, 4 the rest pose
+void soft_pass(uint v, uint ci, ClothInfo c, uint cells, bool pinned) {
+    ClothVec4 pos = ClothVec4(H.pos), prev = ClothVec4(H.prev), vel = ClothVec4(H.vel), tgt = ClothVec4(H.target);
+    vec4 R = ClothVec4(H.mrest).v[v];
+    float h = 1.0 / c.inv_h;
+    if (pc.pass == 4u) {
+        if ((c.flags & 32u) == 0u) return;
+        vec3 w = cl_to_world(c, R.xyz) * 0.01;
+        pos.v[v] = vec4(w, 0.0), prev.v[v] = vec4(w, 0.0), vel.v[v] = vec4(0.0), tgt.v[v] = vec4(w, 0.0);
+        ClothUint(H.mask).v[v] = 0u, ClothVec4(H.mnormal).v[v] = vec4(0.0);
+        return;
+    }
+    if (cells == 0u || c.soft.y > 0.5) return; // (empty, or asleep: still where it is)
+    if (pc.pass == 0u) {
+        if (pinned) {
+            vec3 w = cl_to_world(c, R.xyz) * 0.01;
+            pos.v[v] = vec4(w, 0.0), prev.v[v] = vec4(w, 0.0), vel.v[v] = vec4(0.0), tgt.v[v] = vec4(w, 0.0);
+            return;
+        }
+        vec3 x = pos.v[v].xyz, u = vel.v[v].xyz;
+        if (pc.pad == 0u && H.kick.w > 0.0 && (H.kick_vel.w < 0.0 || uint(H.kick_vel.w) == ci)) { // Add Soft Body Impulse
+            float d = length(x - H.kick.xyz);
+            if (d < H.kick.w) u += H.kick_vel.xyz * (1.0 - d / H.kick.w);
+        }
+        prev.v[v] = vec4(x, 0.0);
+        vec3 y = x + h * u + h * h * vec3(0.0, 0.0, -9.81 * c.gravity);
+        tgt.v[v] = vec4(y, 0.0), pos.v[v] = vec4(y, 0.0);
+        return;
+    }
+    if (pc.pass == 2u && !pinned && (c.flags & CLF_BLOCK) == 0u) soft_post(v, ci, c, pc.pad == 1u); // (a block's: its own pass)
+}
+
+// After a substep (pass 2, or the block pass): the velocity, the dent, the feedback (the last substep)
+void soft_post(uint v, uint ci, ClothInfo c, bool lastsub) {
+    ClothVec4 pos = ClothVec4(H.pos), prev = ClothVec4(H.prev), vel = ClothVec4(H.vel);
+    vec4 R = ClothVec4(H.mrest).v[v];
+    float h = 1.0 / c.inv_h;
+    vec3 x = pos.v[v].xyz;
+    vec3 u = (x - prev.v[v].xyz) * c.inv_h * 0.998;
+    float sp = length(u);
+    if (sp > 40.0) u *= 40.0 / sp, sp = 40.0; // (never faster than 40 m/s: a crushing hit can't fling it away)
+    vel.v[v] = vec4(u, 0.0);
+    if (c.tint.x > 0.0 || c.tint.y > 0.0) { // plasticity: the rest follows a dent past the yield, and comes back slowly
+        vec3 disp = (sb_to_local(c, x) - R.xyz) * 0.01;
+        vec3 p = ClothVec4(H.mnormal).v[v].xyz;
+        vec3 e = disp - p;
+        float el = length(e);
+        if (el > c.soft.w && c.tint.x > 0.0) p += e * (1.0 - c.soft.w / el) * min(c.tint.x * h, 1.0);
+        p *= max(0.0, 1.0 - c.tint.y * h);
+        ClothVec4(H.mnormal).v[v] = vec4(p, 0.0);
+    }
+    if (lastsub && H.feedback.x + H.feedback.y != 0u) { // the last substep: its mean place and its fastest vertex
+        uint fbs = H.fb_cloth + ci * 8u;
+        fb_add(fbs, x - vec3(c.rows[0].w, c.rows[1].w, c.rows[2].w) * 0.01);
+        atomicAdd(ClothUint(H.feedback).v[fbs + 3u], 1u);
+        atomicMax(ClothUint(H.feedback).v[fbs + 4u], floatBitsToUint(sp));
+    }
+}
+
+#ifdef SOFT_BLOCK
+// The block pass (pass 10, its own pipeline: cloth_soft.comp.inc): a workgroup a soft body (its lattice up to SB_MAX vertices
+// in shared memory), every iteration and color of a substep in one dispatch: barriers inside the workgroup instead of 64
+// dispatches with their barriers (the chain's fixed cost was the whole cost), then its velocities, dents and feedback
+void main() {
+    H = ClothHeaderBuf(pc.instances).h;
+    uint ci = gl_WorkGroupID.x;
+    if (ci >= H.ncloth) return;
+    ClothInfo c = ClothInfoBuf(H.info).c[ci];
+    uint n = c.nx * c.ny, tid = gl_LocalInvocationID.x;
+    if ((c.flags & (CLF_SOFT | CLF_BLOCK)) != (CLF_SOFT | CLF_BLOCK) || c.soft.y > 0.5 || n > SB_MAX) return; // (the whole workgroup)
+    bool dents = c.tint.x > 0.0 || c.tint.y > 0.0;
+    for (uint k = tid; k < 3u * min(c.col_count, SB_COLS); k += SB_THREADS) sbcol[k] = ClothVec4(H.colliders).v[3u * c.col_first + k];
+    for (uint l = tid; l < n; l += SB_THREADS) {
+        vec3 p = ClothVec4(H.pos).v[c.base + l].xyz;
+        sbx[l] = p.x, sby[l] = p.y, sbz[l] = p.z;
+        vec3 q = dents ? ClothVec4(H.mnormal).v[c.base + l].xyz : vec3(0.0);
+        sbpa[l] = packHalf2x16(q.xy), sbpb[l] = packHalf2x16(vec2(q.z, 0.0));
+    }
+    barrier();
+    uint NX = c.nx, NY = max(uint(c.soft.x), 1u), NZ = n / (NX * NY), iters = max(c.iter, 1u);
+    for (uint it = 0u; it < iters; it++)
+        for (uint col = 0u; col < 8u; col++) {
+            uvec3 o = uvec3(col & 1u, (col >> 1) & 1u, col >> 2);
+            uvec3 cnt = (uvec3(NX, NY, NZ) - o + 1u) / 2u; // (the vertices of this color along each axis)
+            uint total = cnt.x * cnt.y * cnt.z;
+            for (uint q0 = 0u; q0 < total; q0 += SB_SLOTS) { // (uniform: every lane reaches the reductions)
+                uint q = q0 + (tid >> 3u), lane = tid & 7u;
+                uint v = 0u, cells = 0u;
+                uvec3 g = uvec3(0u);
+                bool act = false;
+                vec3 x = vec3(0.0), f = vec3(0.0);
+                mat3 He = mat3(0.0);
+                if (q < total) {
+                    g = o + 2u * uvec3(q % cnt.x, (q / cnt.x) % cnt.y, q / (cnt.x * cnt.y));
+                    v = c.base + (g.z * NY + g.y) * NX + g.x;
+                    cells = uint(ClothVec2(H.muv).v[v].y);
+                    act = cells != 0u && !(ClothVec4(H.mrest).v[v].w >= 0.999 && c.soft.z < 0.5);
+                    x = SBP(v, c);
+                    for (uint k = lane; k < 24u && act; k += 8u) // (3 tetrahedra a lane)
+                        if ((cells & (1u << SB_PAIRS[k].x)) != 0u) sb_tet(v, c, ivec3(g), SB_PAIRS[k].x, SB_PAIRS[k].y, x, f, He);
+                }
+                f = subgroupClusteredAdd(f, 8u); // (the 8 cells' sums: in lane 0 of each 8)
+                He[0] = subgroupClusteredAdd(He[0], 8u), He[1] = subgroupClusteredAdd(He[1], 8u), He[2] = subgroupClusteredAdd(He[2], 8u);
+                if (act && lane == 0u) sb_finish(v, ci, c, cells, x, f, He, it + 1u == iters);
+            }
+            barrier();
+        }
+    for (uint l = tid; l < n; l += SB_THREADS) { // back to the buffers; the velocities, the dents, the feedback
+        uint v = c.base + l;
+        ClothVec4(H.pos).v[v] = vec4(sbx[l], sby[l], sbz[l], 0.0);
+        bool pinned = ClothVec4(H.mrest).v[v].w >= 0.999 && c.soft.z < 0.5;
+        if (uint(ClothVec2(H.muv).v[v].y) != 0u && !pinned) soft_post(v, ci, c, pc.pad == 1u);
+    }
+}
+#else
+void main() {
+    ClothHeaderBuf hb = ClothHeaderBuf(pc.instances);
+    H = hb.h;
+    uint v = gl_GlobalInvocationID.x;
+    if (pc.pass == 6u) { // the hash emptied
+        if (v < H.nbuckets) ClothUint(H.head).v[v] = 0xFFFFFFFFu;
+        return;
+    }
+    if (pc.pass == 1u) { // a color's pass: its own list (a ninth of the threads); pad's 0x100: the substep's last iteration
+        uint col = pc.pad & 0xFFu;
+        if (v >= hb.h.ccount[col]) return; // (from the buffer: a private copy's array indexed by a variable spills)
+        v = ClothUint(H.order).v[hb.h.cfirst[col] + v];
+    }
+    if (v >= H.nverts) return;
+    ClothVec4 pos = ClothVec4(H.pos), prev = ClothVec4(H.prev), vel = ClothVec4(H.vel), tgt = ClothVec4(H.target);
+    ClothUint owner = ClothUint(H.owner), mask = ClothUint(H.mask);
+    uint ci = owner.v[v];
+    if (ci >= H.ncloth) return; // (guards: nothing read out of bounds whatever the buffers hold)
+    ClothInfo c = ClothInfoBuf(H.info).c[ci];
+    bool msh = cl_mesh(c), sb = (c.flags & CLF_SOFT) != 0u;
+    if (c.nx < 2u || (c.ny < 2u && !msh) || v < c.base || v - c.base >= c.nx * c.ny) return;
+    uint l = v - c.base;
+    ivec2 g = ivec2(int(l % c.nx), int(l / c.nx));
+    uint scells = sb ? uint(ClothVec2(H.muv).v[v].y) : 0u;
+    bool pinned = sb ? ClothVec4(H.mrest).v[v].w >= 0.999 && c.soft.z < 0.5 : msh ? ClothVec4(H.mrest).v[v].w > 0.5 : cl_pinned(c, g);
+    if (sb && pc.pass != 7u && pc.pass != 8u) { // a soft body's own passes (its lattice: x along nx, y along soft.x, z the rest)
+        uint NY = max(uint(c.soft.x), 1u);
+        ivec3 g3 = ivec3(int(l % c.nx), int((l / c.nx) % NY), int(l / (c.nx * NY)));
+        if (pc.pass == 1u) {
+            if (!pinned && scells != 0u && c.soft.y < 0.5) soft_solve(v, ci, c, g3, scells, (pc.pad & 0x100u) != 0u);
+        } else if (pc.pass == 0u || pc.pass == 2u || pc.pass == 4u)
+            soft_pass(v, ci, c, scells, pinned);
+        return; // (3 the cut, 5 the cloth's BLAS, 9 the mesh's normals: not a soft body's)
+    }
+    // (a mesh's adjacency: its first entry and count)
+    uvec2 aoff = msh ? ClothUvec2(H.madj_off).v[v] : uvec2(0u);
+    if (pc.pass == 9u) { // a mesh's normal: its triangles' (area weighted), toward the outside as the mesh winds
+        if (!msh) return;
+        ClothUvec2 adj = ClothUvec2(H.madj);
+        vec3 n = vec3(0.0);
+        for (uint e = 0u; e < min(aoff.y, 48u); e++) {
+            uvec2 a = adj.v[aoff.x + e];
+            if ((a.x >> 30) != 2u) continue;
+            uvec3 t = ClothUvec3(H.mtris).v[c.color + (a.x & 0x3FFFFFFFu)] + uvec3(c.base);
+            vec3 p0 = pos.v[t.x].xyz, p1 = pos.v[t.y].xyz, p2 = pos.v[t.z].xyz;
+            n += cross(p1 - p0, p2 - p0);
+        }
+        ClothVec4(H.mnormal).v[v] = vec4(dot(n, n) > 1e-14 ? normalize(n) : vec3(0.0, 0.0, 1.0), 0.0);
+        return;
+    }
+    float h = 1.0 / c.inv_h;
+    if (pc.pass == 7u) { // into its cell (a list through next)
+        if (c.look.z <= 0.0 || (sb && scells == 0u)) return;
+        uint b = self_bucket(pos.v[v].xyz);
+        ClothUint(H.next).v[v] = atomicExchange(ClothUint(H.head).v[b], v);
+        return;
+    }
+    if (pc.pass == 8u) { // its 4 nearest contacts within reach (radii summed, and a margin for the substep's motion)
+        ClothUint nb = ClothUint(H.selfnb);
+        uint best[4] = uint[4](0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu);
+        float bd[4] = float[4](1e9, 1e9, 1e9, 1e9);
+        if (c.look.z > 0.0 && !pinned && (!sb || (scells != 0u && c.soft.y < 0.5))) {
+            vec3 p = pos.v[v].xyz;
+            ivec3 q0 = ivec3(floor(p / H.cell));
+            ClothUint head = ClothUint(H.head), nx_ = ClothUint(H.next);
+            for (int dz = -1; dz <= 1; dz++)
+                for (int dy = -1; dy <= 1; dy++)
+                    for (int dx = -1; dx <= 1; dx++) {
+                        ivec3 q = q0 + ivec3(dx, dy, dz);
+                        uint u = head.v[uint((q.x * 73856093) ^ (q.y * 19349663) ^ (q.z * 83492791)) & (H.nbuckets - 1u)];
+                        for (int steps = 0; steps < 48 && u != 0xFFFFFFFFu; steps++, u = nx_.v[u]) {
+                            if (u == v || u >= H.nverts) continue;
+                            uint cu = owner.v[u];
+                            if (cu >= H.ncloth) continue;
+                            if (cu == ci && sb) continue; // (a soft body: never against itself, its tetrahedra keep it apart)
+                            if (cu == ci && !msh) { // its own: not its springs' neighbors (2 grid steps)
+                                uint lu = u - c.base;
+                                ivec2 gu = ivec2(int(lu % c.nx), int(lu / c.nx));
+                                if (max(abs(gu.x - g.x), abs(gu.y - g.y)) <= 2) continue;
+                            }
+                            if (cu == ci && msh) { // (a mesh: not its springs' ends)
+                                bool linked = false;
+                                for (uint e = 0u; e < min(aoff.y, 48u) && !linked; e++) {
+                                    uint ax = ClothUvec2(H.madj).v[aoff.x + e].x;
+                                    linked = (ax >> 30) != 2u && (ax & 0x3FFFFFFFu) == u;
+                                }
+                                if (linked) continue;
+                            }
+                            float ru = cu == ci ? c.look.z : ClothInfoBuf(H.info).c[cu].look.z;
+                            float d = length(pos.v[u].xyz - p) - (c.look.z + ru);
+                            if (d > c.look.z) continue; // (out of reach this substep)
+                            if (d < bd[3]) { // (kept sorted, nearest first)
+                                int k = 3;
+                                while (k > 0 && d < bd[k - 1]) { bd[k] = bd[k - 1], best[k] = best[k - 1]; k--; }
+                                bd[k] = d, best[k] = u;
+                            }
+                        }
+                    }
+        }
+        for (uint k = 0u; k < 4u; k++) nb.v[v * 4u + k] = best[k];
+        return;
+    }
+    if (pc.pass == 5u && msh) { // a mesh's triangles for the BLAS: vertex l writes triangles 2l and 2l + 1; a cut one empty
+        ClothUint ib = ClothUint(H.idx);
+        for (uint k = 0u; k < 2u; k++) {
+            uint t = 2u * l + k;
+            if (t >= c.iter) break;
+            uvec3 tr = ClothUvec3(H.mtris).v[c.color + t];
+            bool cut = mask.v[c.base + tr.x] != 0u || mask.v[c.base + tr.y] != 0u || mask.v[c.base + tr.z] != 0u;
+            uint o = c.base * 6u + 3u * t;
+            ib.v[o] = cut ? tr.x : tr.x, ib.v[o + 1u] = cut ? tr.x : tr.y, ib.v[o + 2u] = cut ? tr.x : tr.z;
+        }
+        return;
+    }
+    if (pc.pass == 5u) { // its triangles for the BLAS (cloth.c): at half the grid (a quad a 2 x 2 block: its shadow alike,
+        // a quarter of the triangles to refit and to cross), the block's corner writes it; torn anywhere inside: empty
+        if ((g.x & 1) != 0 || (g.y & 1) != 0 || g.x >= int(c.nx) - 1 || g.y >= int(c.ny) - 1) return;
+        ClothUint ib = ClothUint(H.idx);
+        uint nbx = c.nx / 2u; // (blocks across: ceil((nx - 1) / 2))
+        uint o = c.base * 6u + (uint(g.y / 2) * nbx + uint(g.x / 2)) * 6u;
+        int x1 = min(g.x + 2, int(c.nx) - 1), y1 = min(g.y + 2, int(c.ny) - 1);
+        bool whole = true;
+        for (int y = g.y; y < y1; y++)
+            for (int x = g.x; x < x1; x++) { // (each small quad as cloth.vert tests it)
+                uint m0 = mask.v[c.base + uint(y) * c.nx + uint(x)], m1 = mask.v[c.base + uint(y + 1) * c.nx + uint(x + 1)];
+                if ((m0 & (1u | 4u | 16u)) != 0u || (m1 & (2u | 8u)) != 0u) whole = false;
+            }
+        if (!whole) { for (uint k = 0u; k < 6u; k++) ib.v[o + k] = l; return; } // (degenerate: never hit)
+        uint a = l, b = uint(g.y) * c.nx + uint(x1), d = uint(y1) * c.nx + uint(g.x), e = uint(y1) * c.nx + uint(x1);
+        ib.v[o] = a, ib.v[o + 1u] = b, ib.v[o + 2u] = e;
+        ib.v[o + 3u] = a, ib.v[o + 4u] = e, ib.v[o + 5u] = d;
+        return;
+    }
+    if (pc.pass == 0u) {
+        if (pinned) {
+            vec3 w = cl_to_world(c, msh ? ClothVec4(H.mrest).v[v].xyz : cl_rest_local(c, g)) * 0.01;
+            pos.v[v] = vec4(w, 0.0), prev.v[v] = vec4(w, 0.0), vel.v[v] = vec4(0.0), tgt.v[v] = vec4(w, 0.0);
+            return;
+        }
+        vec3 x = pos.v[v].xyz, u = vel.v[v].xyz;
+        // the wind on the cloth's face: its normal from the grid, the air's speed against it (a gust that wanders)
+        vec3 n;
+        if (msh) n = ClothVec4(H.mnormal).v[v].xyz; // (a mesh: last frame's, pass 9)
+        else {
+            ivec2 gx = clamp(g + ivec2(1, 0), ivec2(0), ivec2(c.nx - 1u, c.ny - 1u)), gx0 = clamp(g - ivec2(1, 0), ivec2(0), ivec2(c.nx - 1u, c.ny - 1u));
+            ivec2 gy = clamp(g + ivec2(0, 1), ivec2(0), ivec2(c.nx - 1u, c.ny - 1u)), gy0 = clamp(g - ivec2(0, 1), ivec2(0), ivec2(c.nx - 1u, c.ny - 1u));
+            vec3 tx = pos.v[c.base + uint(gx.y) * c.nx + uint(gx.x)].xyz - pos.v[c.base + uint(gx0.y) * c.nx + uint(gx0.x)].xyz;
+            vec3 ty = pos.v[c.base + uint(gy.y) * c.nx + uint(gy.x)].xyz - pos.v[c.base + uint(gy0.y) * c.nx + uint(gy0.x)].xyz;
+            n = cross(tx, ty);
+        }
+        n = dot(n, n) > 1e-12 ? normalize(n) : vec3(0.0);
+        float t = H.time.x;
+        float gust = 1.0 + c.wind.w * (0.6 * sin(t * 1.3 + float(g.x) * 0.07) + 0.4 * sin(t * 3.1 + float(g.y) * 0.11));
+        vec3 rel = c.wind.xyz * gust - u;
+        float push = dot(rel, n) * 2.5;
+        // (a mesh, a closed garment with its normals out: the air presses the faces it meets; the far side is in their
+        // lee, a little suction only: pushed outward as a flag's, a skirt's back flared up as the body moved)
+        if (msh && push > 0.0) push *= 0.15;
+        vec3 a = vec3(0.0, 0.0, -9.81 * c.gravity) + n * push + rel * 0.05; // (the face's push, a little drag)
+        prev.v[v] = vec4(x, 0.0);
+        vec3 y = x + h * u + h * h * a;
+        tgt.v[v] = vec4(y, 0.0);
+        pos.v[v] = vec4(y, 0.0); // (the first guess: the inertia)
+        return;
+    }
+    if (pc.pass == 1u) {
+        if (pinned) return; // (the list holds only this pass's color)
+        vec3 x = pos.v[v].xyz, xp = prev.v[v].xyz, y = tgt.v[v].xyz;
+        float m_h2 = c.mass * c.inv_h * c.inv_h;
+        vec3 f = -m_h2 * (x - y);
+        mat3 Hs = mat3(m_h2);
+        uint mk = mask.v[v];
+        float rest[3] = float[3](c.dx, length(vec2(c.dx, c.dy)), 2.0 * c.dx);
+        float kd = c.damping * 1e-3 * c.inv_h; // (VBD's k_d / h: Damping 0.02 = k_d 2e-5 s; the paper's range is 1e-6..1e-3)
+        if (msh && mk == 0u) { // a mesh: its adjacency's springs (a cut vertex holds none; one cut across: dropped too)
+            ClothUvec2 adj = ClothUvec2(H.madj);
+            for (uint e = 0u; e < min(aoff.y, 48u); e++) {
+                uvec2 a = adj.v[aoff.x + e];
+                uint kind = a.x >> 30, j = a.x & 0x3FFFFFFFu;
+                if (kind == 2u || j >= H.nverts || mask.v[j] != 0u) continue;
+                float L = uintBitsToFloat(a.y), k = kind == 0u ? c.k_stretch : c.k_bend;
+                vec3 d = x - pos.v[j].xyz;
+                float len = max(length(d), 1e-7);
+                vec3 un = d / len;
+                mat3 uu = outerProduct(un, un);
+                mat3 He = k * (uu + max(0.0, 1.0 - L / len) * (mat3(1.0) - uu));
+                f -= k * (len - L) * un;
+                // damping on the spring's own motion (its two ends' relative step): the paper's, on this vertex's whole
+                // step, also braked the garment carried along by the body (it trailed 24 cm behind the hips at a walk)
+                f -= kd * (He * ((x - xp) - (pos.v[j].xyz - prev.v[j].xyz)));
+                Hs += He * (1.0 + kd);
+            }
+        }
+        if (!msh) for (int s = 0; s < 12; s++) { // (a grid's: the bound constant, the loop unrolled)
+            if ((mk & (1u << uint(s))) != 0u) continue; // (torn)
+            ivec2 gn = g + CL_NB[s];
+            if (gn.x < 0 || gn.y < 0 || gn.x >= int(c.nx) || gn.y >= int(c.ny)) continue;
+            vec3 xj = pos.v[c.base + uint(gn.y) * c.nx + uint(gn.x)].xyz;
+            int kind = s / 4;
+            float L = kind == 0 ? (CL_NB[s].x != 0 ? c.dx : c.dy) : kind == 1 ? rest[1] : (CL_NB[s].x != 0 ? 2.0 * c.dx : 2.0 * c.dy);
+            float k = kind == 0 ? c.k_stretch : kind == 1 ? c.k_shear : c.k_bend;
+            vec3 d = x - xj;
+            float len = max(length(d), 1e-7);
+            vec3 un = d / len;
+            mat3 uu = outerProduct(un, un);
+            mat3 He = k * (uu + max(0.0, 1.0 - L / len) * (mat3(1.0) - uu)); // (PSD: the compressed part dropped)
+            f -= k * (len - L) * un;
+            // damping (VBD's): the spring's Hessian against this vertex's motion in the step
+            f -= kd * (He * (x - xp));
+            Hs += He * (1.0 + kd);
+        }
+        if (H.nbuckets != 0u && c.look.z > 0.0) { // self collision: a stiff spring pushing apart what came closer than the radii
+            ClothUint nb = ClothUint(H.selfnb);
+            float kc = max(c.k_stretch, 1000.0);
+            for (uint k = 0u; k < 4u; k++) {
+                uint u = nb.v[v * 4u + k];
+                if (u == 0xFFFFFFFFu) break;
+                uint cu = owner.v[u];
+                float D = c.look.z + (cu == ci ? c.look.z : ClothInfoBuf(H.info).c[cu].look.z);
+                vec3 d = x - pos.v[u].xyz;
+                float len = length(d);
+                if (len >= D || len < 1e-7) continue;
+                vec3 un = d / len;
+                f += kc * (D - len) * un;
+                Hs += kc * outerProduct(un, un);
+            }
+        }
+        float det = determinant(Hs);
+        if (abs(det) < 1e-12) return;
+        vec3 dx = inverse(Hs) * f;
+        // the contact (OGC): never further than 0.45 of the way to the nearest collider's offset surface in a step
+        vec3 nrm;
+        float dist = collide(x, c.col_first, c.col_count, nrm) - c.thickness;
+        float lim = max(dist * 0.45, 0.002);
+        float dl = length(dx);
+        if (dist < 0.25 && dl > lim) dx *= lim / dl;
+        x += dx;
+        float d2 = collide(x, c.col_first, c.col_count, nrm) - c.thickness;
+        if (d2 < 0.0) { // pushed to the offset surface; the slide along it slowed by friction
+            x -= nrm * d2;
+            vec3 mv = x - xp;
+            vec3 tang = mv - nrm * dot(mv, nrm);
+            x -= tang * c.friction;
+        }
+        if (any(isnan(x)) || any(isinf(x))) x = xp; // (never a NaN: the step dropped)
+        pos.v[v] = vec4(x, 0.0);
+        return;
+    }
+    if (pc.pass == 4u) { // a cloth new to the buffers (or reset): its rest pose, still, whole
+        if ((c.flags & 32u) == 0u) return;
+        vec3 w = cl_to_world(c, msh ? ClothVec4(H.mrest).v[v].xyz : cl_rest_local(c, g)) * 0.01;
+        pos.v[v] = vec4(w, 0.0), prev.v[v] = vec4(w, 0.0), vel.v[v] = vec4(0.0), tgt.v[v] = vec4(w, 0.0);
+        mask.v[v] = 0u;
+        return;
+    }
+    if (pc.pass == 3u) {
+        if (length(pos.v[v].xyz - H.cut.xyz) < H.cut.w) mask.v[v] = 0xFFFu;
+        return;
+    }
+    // 2: the velocities; the springs stretched past the tear strain break (each side marks its own)
+    if (pinned) return;
+    vec3 x = pos.v[v].xyz;
+    vel.v[v] = vec4((x - prev.v[v].xyz) * c.inv_h * 0.998, 0.0);
+    if (c.tear > 1.0 && !msh) { // (a mesh tears by Tear Cloth only: its springs have no bits)
+        uint mk = mask.v[v], add = 0u;
+        for (int s = 0; s < 8; s++) {
+            if ((mk & (1u << uint(s))) != 0u) continue;
+            ivec2 gn = g + CL_NB[s];
+            if (gn.x < 0 || gn.y < 0 || gn.x >= int(c.nx) || gn.y >= int(c.ny)) continue;
+            float L = s < 4 ? (CL_NB[s].x != 0 ? c.dx : c.dy) : length(vec2(c.dx, c.dy));
+            if (length(x - pos.v[c.base + uint(gn.y) * c.nx + uint(gn.x)].xyz) > L * c.tear) add |= 1u << uint(s);
+        }
+        if (add != 0u) {
+            // a torn stretch spring takes the bending ones through it (else the tear would hang on them)
+            if ((add & 3u) != 0u) add |= 3u << 8u;
+            if ((add & 12u) != 0u) add |= 3u << 10u;
+            mask.v[v] = mk | add;
+        }
+    }
+}
+#endif

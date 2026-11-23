@@ -1,0 +1,11 @@
+# test
+newmtl Red
+Kd 0.8 0.1 0.1
+Ns 250
+newmtl Gold
+	Kd 1.0 0.76 0.33
+	Pm 1
+	Pr 0.25
+newmtl Logo
+Kd 1 1 1
+map_Kd -s 1 1 1 -bm 0.5 tex logo.png

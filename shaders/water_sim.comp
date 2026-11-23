@@ -1,0 +1,460 @@
+#version 460
+// Water (water.c, water.glsl, notas-dev/agua.md). pc.pass:
+//   0  the rain's surface: this frame's rows of the window traced from above (the first surface the rain meets: below
+//      a roof it is dry); without ray queries the cells are "open ground at the camera's feet" (wet, no puddles)
+//   1  the shallow water's flow (the virtual pipes of Mei, Decaudin and Hu 2007): each cell's four outflows from the
+//      difference of water level (surface + water) to its neighbors, scaled so no cell gives more than it holds
+//   2  the water: the rain added, the in- and outflows applied, the ground's and the air's loss, the wetness, the flow's
+//      speed (the streams' look)
+//   4  the rain's rings baked into a tiling 128^2 map (what the surfaces read: the rings' math out of mesh.frag)
+//   3  the ripples of what moves in water: a wave equation on a grid around the camera, pushed by spheres
+//   10 the ocean's spectrum at this time (Tessendorf): per cascade, h(k, t) and its derivatives packed two complex in a
+//      vec4: (h + i Dx), (Dy + i dh/dx), (dh/dy + i dDx/dx), (dDy/dy + i dDx/dy)
+//   11 the inverse FFT of the rows, 12 of the columns (a line a workgroup, 8 radix-2 stages in shared memory): built
+//      apart (-DRE_WATER_FFT, water_fft.comp.inc), its own pipeline
+//   13 the ocean's maps: displacement (x, y, z) and foam, slopes and the Jacobian (where the crests fold: foam)
+// The buffers: pc.instances = the ocean's spectrum h0 (per cascade N x N: h0(k), conj(h0(-k)))
+#extension GL_EXT_ray_query : enable
+#include "common.glsl"
+#include "water.glsl"
+#ifdef RE_RT
+#include "rt.glsl"
+#endif
+
+layout(local_size_x = 8, local_size_y = 8) in;
+#ifdef RE_WATER_FFT
+shared vec4 s_line[2][W_OCEAN_N]; // (the FFT's build only: water_fft.comp.inc, its own pipeline)
+#endif
+
+const float G = 981.0; // cm/s2
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 0: the surface
+
+#ifdef RE_RT
+// The static scene's first surface along the rain (d, unit): its height, -1e9 for none; and what moves above it (the
+// dynamic set, only before the static hit): its height in mv.w (-1e9: none) and its speed in mv.xyz (cm/s): the actor's
+// (water[57..62]: the 3 nearest movers, water.c) plus a skin's own motion at the hit (last frame's bent vertices, the
+// velocity pass's: an arm swinging throws its drops forward)
+float first_surface(FrameBuf f, vec3 o, vec3 d, float len, out vec4 mv) {
+    float t, t2;
+    uint ii, prim;
+    vec2 bc;
+    bool front;
+    mv = vec4(0.0, 0.0, 0.0, -1e9);
+    // (2026-11-15, "quando entrei em um lugar sem chuva, embaixo dela começou uma goteira enorme bugada") a body is never
+    // the rain's roof: a skin or a skeletal part in the static set (a character placed Static) made its top an edge the
+    // eave streams fell from. Its top counts as something moving over the ground (mv.w) and the ray goes on past it
+    float base = 0.0;
+    bool hit = false;
+    for (int k = 0; k < 3; k++) {
+        hit = closest_in(f, false, o + d * base, d, len - base, RT_MASK_VISIBLE, t, ii, prim, bc, front);
+        if (!hit) break;
+        uint fl = InstanceBuf(f.instances).i[ii].ids.y;
+        if ((fl & (INST_SKINNED | 4096u)) == 0u) { t += base; break; } // (4096: INST_ROUND_OCCLUDER, a skeletal part or skin)
+        mv.w = max(mv.w, o.z + d.z * (base + t));
+        base += t + 1.0;
+        hit = false;
+    }
+    if (has_dyn(f) && closest_in(f, true, o, d, hit ? t : len, RT_MASK_VISIBLE, t2, ii, prim, bc, front)) {
+        vec3 p = o + d * t2;
+        mv.w = max(mv.w, p.z);
+        Instance inst = InstanceBuf(f.instances).i[ii];
+        if ((inst.ids.y & INST_SKINNED) != 0u) {
+            IndexBuf ib = IndexBuf(f.indices);
+            VertexBuf vb = VertexBuf(pc.vertices);
+            uint base = inst.ids.z + prim * 3u, cur = inst.ids.w, prv = floatBitsToUint(inst.lightmap_st.x);
+            uint i0 = ib.i[base], i1 = ib.i[base + 1u], i2 = ib.i[base + 2u];
+            float w0 = 1.0 - bc.x - bc.y;
+            vec3 dp = (vb.v[cur + i0].pos - vb.v[prv + i0].pos) * w0 + (vb.v[cur + i1].pos - vb.v[prv + i1].pos) * bc.x + (vb.v[cur + i2].pos - vb.v[prv + i2].pos) * bc.y;
+            dp = vec3(dot(inst.row0.xyz, dp), dot(inst.row1.xyz, dp), dot(inst.row2.xyz, dp)); // (object -> world, no translation)
+            if (dot(dp, dp) < 2500.0) mv.xyz += dp / f.water[56].y; // (50 cm in a frame: a pose snapped, not motion)
+        }
+        for (int k = 0; k < int(f.water[56].x); k++) { // the actor carrying it
+            vec4 m = f.water[57 + 2 * k], vm = f.water[58 + 2 * k];
+            if (length(p.xy - m.xy) < m.w && abs(p.z - m.z) < vm.w + m.w * 0.5) { mv.xyz += vm.xyz; break; }
+        }
+    }
+    return hit ? o.z + d.z * t : -1e9;
+}
+#endif
+
+void pass_surface(FrameBuf f) {
+    int n = int(f.water[1].y);
+    ivec2 l = ivec2(gl_GlobalInvocationID.xy);
+    if (l.x >= n || l.y >= int(f.water[6].y)) return;
+    l.y = (l.y + int(f.water[6].x)) % n;
+    ivec2 c = ivec2(f.water[1].zw) + l;
+    vec2 p = (vec2(c) + 0.5) * f.water[1].x;
+    float h = -1e9;
+    vec4 mv = vec4(0.0, 0.0, 0.0, -1e9);
+#ifdef RE_RT
+    if ((uint(f.water[5].w) & 1u) != 0u) { // (2026-11-10) along the rain's slant: the cell is a line of rain (water.glsl rain_u)
+        vec2 s = rain_slant(f);
+        float top = f.water[6].z;
+        vec3 d = normalize(vec3(s, -1.0));
+        h = first_surface(f, vec3(p - s * top, top), d, f.water[6].w * sqrt(1.0 + dot(s, s)), mv);
+    }
+#endif
+    if (h < -1e8) h = f.camera_pos.z - 170.0; // (no ray queries, or nothing below: open ground near the camera)
+    uint key = uint(c.x & 0xFFFF) | (uint(c.y & 0xFFFF) << 16u), i = rain_index(f, c);
+    WaterBuf sb = WaterBuf(f.water_addr[0]);
+    if (floatBitsToUint(sb.v[i].y) != key || sb.v[i].z < 0.5) { // a place new to the window: its water as it starts
+        vec4 w0 = vec4(f.water[38].x, f.water[0].x > 0.05 ? 0.3 : 0.0, 0.0, 0.0), pv;
+        if (persist_at(f, p, pv)) w0.xy = pv.xy; // (Q27.6: what the place kept since the window last held it)
+        WaterBuf(f.water_addr[1]).v[i] = w0;
+        WaterBuf(f.water_addr[2]).v[i] = vec4(0.0);
+    }
+    float cover = floatBitsToUint(sb.v[i].y) == key ? sb.v[i].w : f.water[38].z; // (the snow's cover stays while the place does; a new place: the open cover)
+    sb.v[i] = vec4(h, uintBitsToFloat(key), 1.0, cover);
+    sb.v[i + uint(n * n)] = mv;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 1, 2: the shallow water
+
+float micro_relief(FrameBuf f, vec2 p) { // cm (<= 0): small dips where flat ground keeps puddles
+    vec2 g = p / 70.0, i = floor(g), t = g - i;
+    t = t * t * (3.0 - 2.0 * t);
+    float a = w_hash12(i), b = w_hash12(i + vec2(1, 0)), c = w_hash12(i + vec2(0, 1)), d = w_hash12(i + vec2(1, 1));
+    return -f.water[5].z * mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+
+// A cell of the window: its surface (ground + relief) if it is set for this place, else false (a wall)
+bool cell_ground(FrameBuf f, ivec2 c, out float b) {
+    b = 0.0;
+    ivec2 d = c - ivec2(f.water[1].zw);
+    int n = int(f.water[1].y);
+    if (d.x < 0 || d.y < 0 || d.x >= n || d.y >= n) return false;
+    vec4 s = rain_surface(f, c);
+    uint key = uint(c.x & 0xFFFF) | (uint(c.y & 0xFFFF) << 16u);
+    if (s.z < 0.5 || floatBitsToUint(s.y) != key) return false;
+    b = s.x + micro_relief(f, (vec2(c) + 0.5) * f.water[1].x);
+    return true;
+}
+
+void pass_flux(FrameBuf f) {
+    int n = int(f.water[1].y);
+    ivec2 l = ivec2(gl_GlobalInvocationID.xy);
+    if (l.x >= n || l.y >= n) return;
+    ivec2 c = ivec2(f.water[1].zw) + l;
+    uint i = rain_index(f, c);
+    WaterBuf fl = WaterBuf(f.water_addr[2]);
+    float b;
+    if (!cell_ground(f, c, b)) { fl.v[i] = vec4(0.0); return; }
+    vec4 w = WaterBuf(f.water_addr[1]).v[i];
+    float d = max(w.x, 0.0), lvl = b + d, cell = f.water[1].x, dt = f.water[4].w;
+    vec4 o = fl.v[i];
+    const ivec2 nb[4] = ivec2[4](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+    float k = dt * cell * G * f.water[4].x; // (the pipe: cross-section cell^2 over its length cell)
+    for (int j = 0; j < 4; j++) {
+        float bn;
+        float out_ = 0.0;
+        if (cell_ground(f, c + nb[j], bn)) {
+            float dn = max(rain_water(f, c + nb[j]).x, 0.0);
+            out_ = max(0.0, o[j] * 0.995 + k * (lvl - (bn + dn)));
+        }
+        o[j] = out_;
+    }
+    float total = (o.x + o.y + o.z + o.w) * dt;
+    float have = d * cell * cell;
+    if (total > have && total > 0.0) o *= have / total;
+    fl.v[i] = o;
+}
+
+void pass_water(FrameBuf f) {
+    int n = int(f.water[1].y);
+    ivec2 l = ivec2(gl_GlobalInvocationID.xy);
+    if (l.x >= n || l.y >= n) return;
+    ivec2 c = ivec2(f.water[1].zw) + l;
+    uint i = rain_index(f, c);
+    WaterBuf wb = WaterBuf(f.water_addr[1]);
+    vec4 w = wb.v[i];
+    float b;
+    if (!cell_ground(f, c, b)) { wb.v[i] = vec4(0.0); return; }
+    if ((uint(f.water[5].w) & 2u) != 0u) w = vec4(f.water[38].x, 0.0, 0.0, 0.0); // (W_RESET: the water as it starts)
+    WaterBuf fl = WaterBuf(f.water_addr[2]);
+    vec4 o = fl.v[i];
+    const ivec2 nb[4] = ivec2[4](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+    const int opp[4] = int[4](1, 0, 3, 2);
+    float in_ = 0.0, fin[4];
+    for (int j = 0; j < 4; j++) {
+        float bn;
+        fin[j] = cell_ground(f, c + nb[j], bn) ? fl.v[rain_index(f, c + nb[j])][opp[j]] : 0.0;
+        in_ += fin[j];
+    }
+    float cell = f.water[1].x, dt = f.water[4].w, area = cell * cell;
+    float out_ = o.x + o.y + o.z + o.w;
+    float d0 = max(w.x, 0.0);
+    float d = d0 + dt * (in_ - out_) / area;
+    // the rain (mm/h -> cm/s, times the gain), the loss
+    bool snowing = f.water[39].x > 0.5;
+    float rain = snowing ? 0.0 : f.water[0].x * 0.1 / 3600.0 * f.water[4].y;
+    { // the snow's cover (the surface's w): grows while it snows (faster the harder), melts after (its water joins the rest)
+        WaterBuf sb = WaterBuf(f.water_addr[0]);
+        float cover = sb.v[i].w;
+        if (snowing && f.water[0].x > 0.0) cover += dt * f.water[39].z * clamp(f.water[0].x / 10.0, 0.1, 3.0);
+        else if (cover > 0.0) {
+            float m = min(cover, dt * f.water[38].y);
+            cover -= m;
+            rain += m * 0.5 / max(dt, 1e-4); // (a full cover melts into ~0.5 cm of water)
+        }
+        sb.v[i].w = clamp(cover, 0.0, 1.0);
+    }
+    d += dt * (rain - f.water[4].z);
+    d = max(d, 0.0);
+    // the flow's speed through the cell (cm/s): the mean of what crosses each axis over the water's cross-section
+    float dm = max(0.5 * (d0 + d), 0.05);
+    vec2 v = vec2((fin[0] - o.x + o.y - fin[1]) * 0.5, (fin[2] - o.z + o.w - fin[3]) * 0.5) / (cell * dm);
+    // the wetness: soaking while it rains here, drying after; standing water keeps it wet
+    float wet = w.y;
+    wet = f.water[0].x > 0.05 && !snowing ? wet + dt * f.water[5].x : wet - dt * f.water[5].y;
+    // (2026-11-10, "o escoamento molhando o local plano") the runoff wets where it goes: the water flowing in from the
+    // cells above (a slope, a roof's edge, a gutter) soaks this one by how much passes (in_ / area: cm/s of water; ~2 mm/h
+    // a thin film already darkens it, 20 mm/h of runoff soaks it), and a thin film (0.3 mm) counts as wet, not 0.8 mm:
+    // the paths the water takes stay wet after the rain while it still runs, the flat ground it spreads on too
+    float runoff = in_ / area;
+    wet = max(wet, smoothstep(0.0, 0.00055, runoff));
+    if (runoff > 0.00005) wet = min(1.0, wet + dt * f.water[5].x * clamp(runoff / 0.00055, 0.0, 1.0)); // (soaking while it runs)
+    wet = clamp(max(wet, smoothstep(0.0, 0.03, d)), 0.0, 1.0);
+    wb.v[i] = vec4(d, wet, clamp(v, vec2(-500.0), vec2(500.0)));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 3: the ripples (x: height at even frames, y: at odd, z: the cell's key)
+
+uint ripple_index(FrameBuf f, ivec2 c) {
+    int n = W_RIPPLE_N;
+    ivec2 m = c & (n - 1);
+    return uint(m.y * n + m.x);
+}
+
+void pass_ripple(FrameBuf f) {
+    ivec2 l = ivec2(gl_GlobalInvocationID.xy);
+    if (l.x >= W_RIPPLE_N || l.y >= W_RIPPLE_N) return;
+    ivec2 c = ivec2(f.water[11].zw) + l;
+    WaterBuf rb = WaterBuf(f.water_addr[3]);
+    uint i = ripple_index(f, c);
+    vec4 r = rb.v[i];
+    uint key = uint(c.x & 0xFFFF) | (uint(c.y & 0xFFFF) << 16u);
+    bool odd = (f.frame_index & 1u) != 0u;
+    if (floatBitsToUint(r.z) != key) { rb.v[i] = vec4(0.0, 0.0, uintBitsToFloat(key), 0.0); return; }
+    float cur = odd ? r.y : r.x, prev = odd ? r.x : r.y;
+    float sum = 0.0;
+    const ivec2 nb[4] = ivec2[4](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+    for (int j = 0; j < 4; j++) {
+        ivec2 cn = c + nb[j];
+        ivec2 d = cn - ivec2(f.water[11].zw);
+        vec4 q = (d.x < 0 || d.y < 0 || d.x >= W_RIPPLE_N || d.y >= W_RIPPLE_N) ? vec4(0.0) : rb.v[ripple_index(f, cn)];
+        sum += floatBitsToUint(q.z) == (uint(cn.x & 0xFFFF) | (uint(cn.y & 0xFFFF) << 16u)) ? (odd ? q.y : q.x) : 0.0;
+    }
+    float cell = f.water[11].x, dt = f.water[12].x, cs = f.water[12].z * dt / cell;
+    cs = min(cs, 0.7); // (stable: the Courant number under 1/sqrt(2))
+    float nh = (2.0 * cur - prev + cs * cs * (sum - 4.0 * cur)) * f.water[12].y;
+    // the spheres: pressed down where they are in the water (the sign: moving down or up), a wake behind
+    vec2 p = (vec2(c) + 0.5) * cell;
+    for (int s = 0; s < int(f.water[12].w); s++) {
+        vec4 sp = f.water[13 + s];
+        float rad = abs(sp.w), dz = abs(sp.z - f.water[7].x);
+        if (dz > rad) continue;
+        float rr = sqrt(max(rad * rad - dz * dz, 0.0)); // (its circle at the water line)
+        float dd = length(p - sp.xy);
+        if (dd < rr) nh = mix(nh, -0.25 * rr * sign(sp.w) * f.water[9].w, 0.35 * (1.0 - dd / rr));
+    }
+    nh = clamp(nh, -60.0, 60.0);
+    if (odd) r.x = nh; else r.y = nh;
+    rb.v[i] = r;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 10-13: the ocean
+
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+vec2 ci(vec2 a) { return vec2(-a.y, a.x); } // i a
+
+void pass_spectrum(FrameBuf f) {
+    uvec3 g = gl_GlobalInvocationID;
+    if (g.x >= W_OCEAN_N || g.y >= W_OCEAN_N) return;
+    uint casc = g.z, N = W_OCEAN_N, idx = g.y * N + g.x;
+    float L = W_CASCADE_SIDE(f, casc); // m
+    vec2 k = 6.2831853 / L * vec2(float(int(g.x) - int(N / 2u)), float(int(g.y) - int(N / 2u)));
+    float kl = length(k);
+    vec4 h0 = WaterBuf(pc.instances).v[casc * N * N + idx];
+    float w = sqrt(9.81 * kl), t = f.water[10].w;
+    vec2 e = vec2(cos(w * t), sin(w * t));
+    vec2 h = cmul(h0.xy, e) + cmul(h0.zw, vec2(e.x, -e.y));
+    vec2 kn = kl > 1e-6 ? k / kl : vec2(0.0);
+    vec2 Dx = ci(h) * kn.x, Dy = ci(h) * kn.y; // (i k/|k| h: the horizontal displacement, as -i in Tessendorf: a sign of the choppiness)
+    vec2 sx = ci(h) * k.x, sy = ci(h) * k.y;   // the slopes
+    vec2 dxx = -h * k.x * kn.x, dyy = -h * k.y * kn.y, dxy = -h * k.x * kn.y; // the displacement's derivatives
+    WaterBuf fb = WaterBuf(f.water_addr[5]);
+    uint base = (casc * 2u) * N * N;
+    fb.v[base + idx] = vec4(h + ci(Dx), Dy + ci(sx));
+    fb.v[base + N * N + idx] = vec4(sy + ci(dxx), dyy + ci(dxy));
+}
+
+#ifdef RE_WATER_FFT
+uint bitrev8(uint x) { return bitfieldReverse(x) >> 24u; }
+
+// One line of 256 (gl_WorkGroupID.x the line, .y the field 0..5), its threads 8 x 8 = 64: four butterflies each
+void pass_fft(FrameBuf f, bool columns) {
+    uint N = W_OCEAN_N, line = gl_WorkGroupID.x, field = gl_WorkGroupID.y, tid = gl_LocalInvocationIndex;
+    WaterBuf fb = WaterBuf(f.water_addr[5]);
+    uint src = columns ? 6u * N * N : 0u, dst = columns ? 0u : 6u * N * N; // (rows: A -> B, columns: B -> A)
+    uint base = field * N * N;
+    for (uint e = tid; e < N; e += 64u) {
+        uint j = bitrev8(e);
+        uint at = columns ? j * N + line : line * N + j;
+        s_line[0][e] = fb.v[src + base + at];
+    }
+    barrier();
+    for (uint len = 2u; len <= N; len <<= 1u) {
+        uint half_ = len >> 1u;
+        for (uint b = tid; b < N / 2u; b += 64u) {
+            uint grp = b / half_, pos = b % half_;
+            uint i0 = grp * len + pos, i1 = i0 + half_;
+            float a = 6.2831853 * float(pos) / float(len); // (inverse: +)
+            vec2 tw = vec2(cos(a), sin(a));
+            vec4 u = s_line[0][i0], v = s_line[0][i1];
+            vec4 tv = vec4(cmul(v.xy, tw), cmul(v.zw, tw));
+            s_line[0][i0] = u + tv;
+            s_line[0][i1] = u - tv;
+        }
+        barrier();
+    }
+    for (uint e = tid; e < N; e += 64u) {
+        uint at = columns ? e * N + line : line * N + e;
+        fb.v[dst + base + at] = s_line[0][e];
+    }
+}
+#endif
+
+void pass_ocean_maps(FrameBuf f) {
+    uvec3 g = gl_GlobalInvocationID;
+    if (g.x >= W_OCEAN_N || g.y >= W_OCEAN_N) return;
+    uint casc = g.z, N = W_OCEAN_N, idx = g.y * N + g.x;
+    WaterBuf fb = WaterBuf(f.water_addr[5]);
+    float sg = ((g.x + g.y) & 1u) == 0u ? 1.0 : -1.0; // (the spectrum was centered: every other sample flips)
+    vec4 a = fb.v[(casc * 2u) * N * N + idx] * sg, b = fb.v[(casc * 2u + 1u) * N * N + idx] * sg;
+    float h = a.x, dx = a.y, dy = a.z, sx = a.w, sy = b.x, dxx = b.y, dyy = b.z, dxy = b.w;
+    float lam = f.water[7].y;
+    float J = (1.0 + lam * dxx) * (1.0 + lam * dyy) - lam * lam * dxy * dxy;
+    WaterBuf ob = WaterBuf(f.water_addr[6]);
+    uint o = (casc * 2u) * N * N + idx;
+    float foam = ob.v[o].w;
+    foam = max(foam * exp(-f.water[12].x * 0.6), clamp((0.55 - J) * 2.0, 0.0, 1.0) * f.water[7].z);
+    ob.v[o] = vec4(-lam * dx, -lam * dy, h, foam);
+    ob.v[o + N * N] = vec4(sx, sy, J, 0.0);
+}
+
+void pass_rings(FrameBuf f) {
+    ivec2 l = ivec2(gl_GlobalInvocationID.xy);
+    if (l.x >= W_RIP_N || l.y >= W_RIP_N) return;
+    vec2 p = (vec2(l) + 0.5) * (W_RIP_TILE / float(W_RIP_N));
+    WaterBuf(f.water_addr[7]).v[l.y * W_RIP_N + l.x] = vec4(rain_ripples(p, f.water[0].y, f.water[0].x), 0.0, 0.0);
+}
+
+// pass 15 (Q27.6): the persistent wet map. A cell the window holds whole takes the window's mean water and wetness (16
+// of its places, those set for this place); one away from it evolves on its own: the rain there (the storms', or the
+// actor's everywhere) times the gain, the gained loss down to what its small dips hold (0.35 x Micro Relief: the puddles),
+// then only the real evaporation (a puddle lasts hours away from the camera, as one does), the wetness by its rates
+void pass_persist(FrameBuf f) {
+    int N = int(f.water[53].y);
+    ivec2 l = ivec2(gl_GlobalInvocationID.xy);
+    if (l.x >= N || l.y >= N || f.water[53].w < 0.5) return;
+    ivec2 c = ivec2(f.water[52].zw) + l;
+    uint i = persist_index(f, c), key = persist_key(c);
+    WaterBuf pb = persist_buf(f);
+    vec4 v = pb.v[i];
+    bool snowing = f.water[39].x > 0.5;
+    if (floatBitsToUint(v.w) != key || (uint(f.water[5].w) & 2u) != 0u) // (a place new to the map: as the level starts)
+        v = vec4(f.water[38].x, f.water[0].x > 0.05 && !snowing ? 0.3 : 0.0, 0.0, uintBitsToFloat(key));
+    float P = f.water[53].x, cell = f.water[1].x;
+    vec2 lo = vec2(c) * P;
+    ivec2 o = ivec2(f.water[1].zw), a = ivec2(floor(lo / cell)) - o, b = ivec2(floor((lo + P) / cell)) - o;
+    int n = int(f.water[1].y);
+    if (a.x >= 1 && a.y >= 1 && b.x < n - 1 && b.y < n - 1) {
+        vec2 s = vec2(0.0);
+        float k = 0.0;
+        for (int y = 0; y < 4; y++)
+            for (int x = 0; x < 4; x++) {
+                ivec2 fc = rain_cell(f, lo + (vec2(x, y) + 0.5) * (P * 0.25));
+                float bg;
+                if (!cell_ground(f, fc, bg)) continue;
+                s += rain_water(f, fc).xy;
+                k += 1.0;
+            }
+        if (k >= 8.0) {
+            v.xy = s / k;
+            pb.v[i] = v;
+            return;
+        }
+    }
+    float dt = f.water[4].w * 2.0 + f.water[53].z;
+    float mmh = f.water[54].y > 0.5 ? storm_rain(f, lo + 0.5 * P) : f.water[0].x;
+    float d = v.x + dt * (snowing ? 0.0 : mmh * 0.1 / 3600.0 * f.water[4].y), cap = 0.35 * f.water[5].z;
+    d = d > cap ? max(d - dt * f.water[4].z, cap) : max(d - dt * f.water[54].z, 0.0);
+    float wet = mmh > 0.05 && !snowing ? v.y + dt * f.water[5].x : v.y - dt * f.water[5].y;
+    v.x = d, v.y = clamp(max(wet, smoothstep(0.0, 0.03, d)), 0.0, 1.0);
+    pb.v[i] = v;
+}
+
+// pass 14: the snow's trail. Each cell: its place's print (a new place: none), filled back by the falling snow, then
+// this frame's feet stamped in: a boot (the sole ahead, the heel behind) pressed in, the snow it pushes aside a rim
+void pass_trail(FrameBuf f) {
+    ivec2 l = ivec2(gl_GlobalInvocationID.xy);
+    if (l.x >= W_TRAIL_N || l.y >= W_TRAIL_N) return;
+    ivec2 c = ivec2(f.water[48].zw) + l;
+    uint i = trail_index(c), key = trail_key(c);
+    TrailBuf tb = trail_buf(f);
+    vec2 v = tb.v[i];
+    float d = floatBitsToUint(v.y) == key ? v.x : 0.0;
+    // (2026-11-15) in the rain the map keeps the wet marks (water[49].x 2): wetness 0..1 drying linearly; in the snow the
+    // prints' depth, filled back as the cover grows
+    bool wetm = f.water[49].x > 1.5;
+    if (wetm) d = max(d - f.water[49].z * f.water[49].w, 0.0);
+    else d *= max(1.0 - f.water[49].z * f.water[49].w, 0.0);
+    vec2 p = (vec2(c) + 0.5) * W_TRAIL_CELL;
+    uint ns = min(uint(f.water[49].y), 6u);
+    for (uint s = 0u; s < ns; s++) {
+        vec4 st = f.water[50u + s];
+        vec2 q = p - st.xy;
+        if (dot(q, q) > 900.0) continue; // (30 cm: beyond any foot)
+        if (wetm && st.w < 0.0) { // a drip off a wet actor: a splat a few cm across with droplets thrown around it
+            float r = 2.0 + 2.5 * fract(st.z * 7.31), dd = length(q);
+            float sp = 1.0 - smoothstep(r * 0.65, r, dd);
+            float ang = atan(q.y, q.x), ring = smoothstep(r * 1.2, r * 1.5, dd) * (1.0 - smoothstep(r * 1.8, r * 2.6, dd));
+            sp = max(sp, ring * smoothstep(0.75, 0.95, sin(ang * 7.0 + st.z * 13.0)) * 0.8);
+            d = max(d, sp * -st.w);
+            continue;
+        }
+        float ca = cos(st.z), sa = sin(st.z);
+        vec2 r = vec2(q.x * ca + q.y * sa, -q.x * sa + q.y * ca); // (along the heading, across it)
+        float e = min(length((r - vec2(4.0, 0.0)) / vec2(10.0, 5.5)), length((r + vec2(9.5, 0.0)) / vec2(5.0, 4.5)));
+        float foot = 1.0 - smoothstep(0.75, 1.0, e);
+        float rim = smoothstep(0.95, 1.2, e) * (1.0 - smoothstep(1.2, 1.7, e));
+        if (wetm) { d = max(d, foot * st.w * (0.8 + 0.2 * fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453))); continue; } // (a wet sole: the tread a little uneven)
+        if (foot > 0.0) d = max(d, foot * st.w);
+        else if (d <= 0.0) d = min(d, -0.3 * rim * st.w);
+    }
+    tb.v[i] = vec2(d, uintBitsToFloat(key));
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+#ifdef RE_WATER_FFT // (the FFT alone in its pipeline: Adreno's compiler crashed on its barriers among the other passes)
+    pass_fft(f, pc.pass == 12u);
+#else
+    switch (pc.pass) {
+    case 4u: pass_rings(f); break;
+    case 0u: pass_surface(f); break;
+    case 1u: pass_flux(f); break;
+    case 2u: pass_water(f); break;
+    case 3u: pass_ripple(f); break;
+    case 10u: pass_spectrum(f); break;
+    case 13u: pass_ocean_maps(f); break;
+    case 14u: pass_trail(f); break;
+    case 15u: pass_persist(f); break;
+    }
+#endif
+}

@@ -1,0 +1,514 @@
+#version 460
+// The GPU cull (notas-dev/escala.md): every slot of the scene, every frame, without the CPU; two-phase occlusion.
+// Three lists of indirect draws (VkDrawIndexedIndirectCommand, one per mesh and LOD): 0 early (in the view and drawn
+// last frame: the prepass draws them, their depth becomes the Hi-Z), 1 shadow, 2 late (in the view, not drawn last
+// frame, not hidden behind the early ones). pc.pass 0: frustum, LOD (by the radius on screen; dropped under
+// cull_params.y px), early or not, shadow box; 1: the early and shadow draws (prefix sums); 2: their visible lists.
+// After the prepass and the Hi-Z: 3: every slot in the view tested against the Hi-Z (also next frame's early flag);
+// 4: the late draws; 5: their list. Counts gathered per workgroup in shared memory (one global atomic per workgroup
+// and draw: 60 counters, a million threads).
+#include "common.glsl"
+#define LSM_NO_SAMPLER
+#include "lsm.glsl" // the local lights drawn this frame (their spheres)
+#include "mat_ops.h" // (Q17) MATF_TESS
+#include "farview.glsl" // (Q21) the impostors' table
+// (Q17, tess.glsl's numbers without its material set) R.tess: the cursor (header word 0), each triangle's cluster entry,
+// its indices
+#define TESS_ON 1u
+#define TESS_SUBDIV 2u
+#define TESS_SEAMS 4u
+#define TESS_MAX_TRIS 262144u // (Q22: tess.glsl)
+#define TESS_OWNER_AT 2048u
+#define TESS_IDX_AT (TESS_OWNER_AT + TESS_MAX_TRIS * 4u)
+#define CL_TESS 0x40000000u // info word 3: this entry's clusters diced (R.tess holds them), its own draw empty
+// an instance whose material is displaced (Enable Tessellation: GpuMaterial.flags, its 4th word)
+bool tess_inst(FrameBuf f, uint flags, vec4 er) {
+    return (f.tess_u.x & TESS_ON) != 0u && (flags & INST_MATERIAL) != 0u && (UintBuf(f.materials).v[floatBitsToUint(er.x) * 16u + 3u] & MATF_TESS) != 0u;
+}
+
+layout(local_size_x = 64) in;
+
+#define MAX_LODS 4u
+#define NONE 0xFFFu   // vis: the main draw (mesh * MAX_LODS + LOD) in bits 0-11, the shadow one in 16-27
+#define EARLY 0x1000u // vis: in the early list
+#define SEEN 0x2000u  // vis: in the view (pass 3 tests it)
+#define LATE 0x4000u  // vis: in the late list
+#define CLUSTERED 0x8000u // vis: drawn by its clusters (pass 6), not in the early nor the late list
+#define CL_MAX_CHUNKS 65536u // (render_gpu.h)
+
+// 2 lists x (up to 1023 meshes x 4 LODs) = 8184: with s_occ and s_rel 32 748 bytes, under the 32 KB phones have (the
+// scatter's bases replace its counts in place: two arrays were 64). 8192 went 12 bytes past: Adreno 740's compiler
+// crashed on it (the S23, 2026-11-08)
+shared uint s_cnt[8184], s_occ, s_rel[2];
+
+struct DrawCmd { uint index_count; uint instance_count; uint first_index; int vertex_offset; uint first_instance; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer DrawBuf { DrawCmd d[]; };
+
+// A vector's component by a variable index, chosen (v[i] crashed Adreno 740's compiler: the S23's, 2026-11-08)
+uint u4at(uvec4 v, uint i) { return i == 0u ? v.x : i == 1u ? v.y : i == 2u ? v.z : v.w; }
+int i4at(ivec4 v, uint i) { return i == 0u ? v.x : i == 1u ? v.y : i == 2u ? v.z : v.w; }
+
+bool sphere_inside(vec4 planes[6], vec3 c, float r) {
+    for (int i = 0; i < 6; i++)
+        if (dot(planes[i].xyz, c) + planes[i].w < -r) return false;
+    return true;
+}
+
+// Whether a caster's shadow can fall in the view: its sphere swept along the light's travel (d) crosses the frustum. Out
+// only when it is behind a plane and the sweep doesn't bring it back in (moving along d goes away from that plane)
+bool shadow_into_view(vec4 planes[6], vec3 c, float r, vec3 d) {
+    for (int i = 0; i < 6; i++)
+        if (dot(planes[i].xyz, c) + planes[i].w < -r && dot(planes[i].xyz, d) <= 0.0) return false;
+    return true;
+}
+
+// The Hi-Z's texel (level, p): the farthest depth (reversed Z: the smallest) the prepass left there
+float hiz_at(FrameBuf f, uint level, ivec2 p) {
+    uint w = f.hiz_w, h = f.hiz_h, at = 0u;
+    for (uint l = 0u; l < level; l++) {
+        at += w * h;
+        w = max(1u, (w + 1u) / 2u);
+        h = max(1u, (h + 1u) / 2u);
+    }
+    p = clamp(p, ivec2(0), ivec2(int(w) - 1, int(h) - 1));
+    return uintBitsToFloat(UintBuf(f.hiz).v[at + uint(p.y) * w + uint(p.x)]);
+}
+
+// Hidden behind the prepass: the sphere's nearest depth farther than the farthest occluder over its screen rectangle
+bool occluded(FrameBuf f, vec3 c, float r) {
+    vec3 rel = c - f.camera_pos.xyz;
+    float vz = dot(rel, f.camera_fwd.xyz);
+    bool ortho = view_ortho(f);
+    if (ortho ? (f.view_proj * vec4(c - f.camera_fwd.xyz * r, 1.0)).z >= 1.0 : vz - r < 4.0) return false; // reaches the near plane: drawn
+    vec4 clip = f.view_proj * vec4(c, 1.0);
+    // in the Hi-Z's level 0 texels (half the view's resolution)
+    vec2 px = (clip.xy / clip.w * 0.5 + 0.5) * vec2(f.hiz_w, f.hiz_h);
+    float rpx = (ortho ? r : r / (vz - r)) * f.cull_params.x * 0.55 + 1.0; // its radius on screen, from its nearest point (orthographic: cm -> px)
+    vec2 lo = px - rpx, hi = px + rpx;
+    if (hi.x < 0.0 || hi.y < 0.0 || lo.x >= float(f.hiz_w) || lo.y >= float(f.hiz_h)) return false;
+    lo = max(lo, vec2(0.0));
+    hi = min(hi, vec2(f.hiz_w, f.hiz_h) - 1.0);
+    // the level where the rectangle spans at most 2x2 texels: its 4 corners cover it
+    uint level = uint(clamp(ceil(log2(max(max(hi.x - lo.x, hi.y - lo.y), 1.0))), 0.0, float(f.hiz_levels - 1u)));
+    float s = exp2(-float(level));
+    ivec2 a = ivec2(lo * s), b = ivec2(hi * s);
+    float far_d = min(min(hiz_at(f, level, a), hiz_at(f, level, ivec2(b.x, a.y))),
+                      min(hiz_at(f, level, ivec2(a.x, b.y)), hiz_at(f, level, b)));
+    // reversed infinite Z: depth = near / view z; orthographic: linear, the nearest point's own
+    float near_d = ortho ? (f.view_proj * vec4(c - f.camera_fwd.xyz * r, 1.0)).z : f.view_proj[3][2] / (vz - r);
+    return near_d < far_d;
+}
+
+// Behind last frame's depth (its Hi-Z, still in the buffer before this frame's prepass): c and r seen by last frame's
+// view (tsr_prev_vp, without its jitter; reversed infinite Z: clip.w is the view depth, view_proj[3][2] the near plane).
+// The DAGs' first phase (render.c cluster_record group 0): what it rejects is tested again after this frame's Hi-Z
+bool occluded_prev(FrameBuf f, vec3 c, float r) {
+    if (view_ortho(f)) return false;
+    vec4 clip = f.tsr_prev_vp * vec4(c, 1.0);
+    float vz = clip.w;
+    if (vz - r < 4.0) return false;
+    vec2 px = (clip.xy / clip.w * 0.5 + 0.5) * vec2(f.hiz_w, f.hiz_h);
+    float rpx = r / (vz - r) * f.cull_params.x * 0.55 + 1.0;
+    vec2 lo = px - rpx, hi = px + rpx;
+    if (hi.x < 0.0 || hi.y < 0.0 || lo.x >= float(f.hiz_w) || lo.y >= float(f.hiz_h)) return false;
+    lo = max(lo, vec2(0.0));
+    hi = min(hi, vec2(f.hiz_w, f.hiz_h) - 1.0);
+    uint level = uint(clamp(ceil(log2(max(max(hi.x - lo.x, hi.y - lo.y), 1.0))), 0.0, float(f.hiz_levels - 1u)));
+    float s = exp2(-float(level));
+    ivec2 a = ivec2(lo * s), b = ivec2(hi * s);
+    float far_d = min(min(hiz_at(f, level, a), hiz_at(f, level, ivec2(b.x, a.y))),
+                      min(hiz_at(f, level, ivec2(a.x, b.y)), hiz_at(f, level, b)));
+    return f.view_proj[3][2] / (vz - r) < far_d;
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    uint n = f.pad_cull0; // the draws per list (render.c's NCMD: meshes x MAX_LODS)
+    DrawBuf draws = DrawBuf(f.draws);
+    UintBuf counts = UintBuf(addr_add(f.draws, 3u * n * 20u)); // 3 lists: 3n counts, then 3n cursors
+    MeshInfoBuf meshes = MeshInfoBuf(f.mesh_info);
+    uint tid = gl_LocalInvocationIndex;
+    uint i = gl_GlobalInvocationID.x;
+    uint count = uint(f.cull_params.w);
+    UintBuf vis = UintBuf(f.vis);
+
+    if (pc.pass == 6u || pc.pass == 7u || pc.pass == 8u) {
+        // The clusters of a big Masked mesh's instances (a workgroup: an instance's block of 64). 6: which are seen (a
+        // mask and their indices per block); 7: the seen ones' indices copied into the instance's draw in their order
+        // (the outer ones first, mesh_build.c: the prepass rejects the inner layers; atomics' order varied it 14-30 ms)
+        // (pc.pad 0, the DAGs' first phase: its own dispatch, x over the DAG entries' list (render_gpu.h CL_DAGLIST_AT),
+        // y their most blocks; the Masked entries' smaller block counts no longer pay the DAGs' y)
+        uint e = pc.pad == 0u ? UintBuf(addr_add(f.cl_work, 32u + 76u * f.cl_entries + 16u * CL_MAX_CHUNKS)).v[gl_WorkGroupID.x] : gl_WorkGroupID.x;
+        uint y = gl_WorkGroupID.y;
+        UintBuf info = UintBuf(addr_add(f.cl_work, 32u + 20u * f.cl_entries));
+        UintBuf blocks = UintBuf(addr_add(f.cl_work, 32u + 36u * f.cl_entries));
+        // (a DAG's instance, an opaque one: its draw in the second array, drawn by the opaque pipelines; pc.pad 0: the
+        // DAGs, before the prepass (no Hi-Z yet: they are the occluders), 1: the Masked ones, after the Hi-Z)
+        uint b0 = info.v[e * 4u + 3u];
+        bool dag = (b0 & 0x80000000u) != 0u;
+        // (pc.pad 1 with a DAG: its second phase, the clusters last frame's Hi-Z rejected, against this frame's; only when
+        // that Hi-Z was valid, hiz_pad 2: else the first phase drew them all)
+        bool late = dag && pc.pad == 1u;
+        if ((!dag && pc.pad == 0u) || (late && (f.hiz_pad & 2u) == 0u)) return;
+        uint d2 = 32u + 36u * f.cl_entries + 16u * CL_MAX_CHUNKS; // (the DAGs' draws; the late ones' after them)
+        DrawBuf cd = DrawBuf(addr_add(f.cl_work, late ? d2 + 20u * f.cl_entries : dag ? d2 : 32u));
+        uint slot = info.v[e * 4u], cf = info.v[e * 4u + 1u], cc = info.v[e * 4u + 2u], cb = (b0 & 0x3FFFFFFFu) + y;
+        uint vo = cc >> 29u; // (the view order pass 0 picked)
+        cc &= 0x1FFFFFFFu;
+        if (y * 64u >= cc) return;
+        uint k = y * 64u + tid;
+        if (pc.pass == 8u) {
+            // the room for this instance's seen clusters (all its blocks' counts), from the shared cursor: exactly what
+            // pass 6 saw (a whole LOD 0 reserved per instance in pass 0 left room for three 1.5 M rocks in 64 MB)
+            if (y != 0u) return;
+            uint nb = (cc + 63u) / 64u, sum = 0u;
+            for (uint q = tid; q < nb; q += 64u) sum += blocks.v[(cb + q) * 4u + 2u];
+            s_cnt[tid] = sum;
+            barrier();
+            if (tid == 0u) {
+                uint tot = 0u;
+                for (uint q = 0u; q < 64u; q++) tot += s_cnt[q];
+                // (Q17) a displaced instance's DAG: its triangles into R.tess (tess.comp dices them; its own draw stays
+                // empty), when they fit whole (a compare-and-swap: a failed one takes no room); else drawn here as
+                // before, its base vertices displaced (mesh.vert)
+                bool tess = false;
+                if (dag && (f.tess_u.x & TESS_SUBDIV) != 0u && f.tess_u.y != 0u) {
+                    Instance ti = InstanceBuf(pc.instances).i[slot];
+                    if (tess_inst(f, ti.ids.y, ti.emissive_rough)) {
+                        UintBuf th = UintBuf(f.tess_buf);
+                        uint n = tot / 3u, cur = th.v[0];
+                        for (uint g = 0u; g < 64u; g++) {
+                            if (n > f.tess_u.y || cur > f.tess_u.y - n) {
+                                atomicAdd(th.v[13], 1u); // (out of room: the fallback, counted)
+                                break;
+                            }
+                            uint prev = atomicCompSwap(th.v[0], cur, cur + n);
+                            if (prev == cur) {
+                                tess = true;
+                                cd.d[e].first_index = cur * 3u, cd.d[e].index_count = 0u;
+                                break;
+                            }
+                            cur = prev;
+                        }
+                    }
+                }
+                info.v[e * 4u + 3u] = (b0 & ~CL_TESS) | (tess ? CL_TESS : 0u);
+                if (tess) return;
+                uint base = atomicAdd(UintBuf(f.cl_work).v[3], tot);
+                bool ok = base <= f.cl_idx_cap && tot <= f.cl_idx_cap - base;
+                cd.d[e].first_index = ok ? base : 0u;
+                cd.d[e].index_count = 0u;
+                if (!ok) cd.d[e].instance_count = 0u; // (out of room: nothing drawn, pass 7 skips it)
+            }
+            return;
+        }
+        if (pc.pass == 7u) {
+            if (cd.d[e].instance_count == 0u) return;
+            bool tess = (b0 & CL_TESS) != 0u; // (Q17: into R.tess, each triangle's entry beside it; the draw stays empty)
+            uint part = 0u; // the blocks before this one: where its indices start
+            for (uint q = tid; q < y; q += 64u) part += blocks.v[(cb - y + q) * 4u + 2u];
+            bool seen = (blocks.v[cb * 4u + (tid >> 5u)] & (1u << (tid & 31u))) != 0u;
+            Cluster cl;
+            if (seen) cl = ClusterBuf(f.clusters).c[cf + UintBuf(f.cl_perm).v[cf * 6u + vo * cc + k]];
+            s_cnt[tid] = part;
+            s_cnt[64u + tid] = seen ? cl.index_count : 0u;
+            s_cnt[192u + tid] = seen ? cl.first_index : 0u;
+            barrier();
+            if (tid == 0u) {
+                uint at = cd.d[e].first_index; // (pass 8's room)
+                for (uint q = 0u; q < 64u; q++) at += s_cnt[q];
+                for (uint q = 0u; q < 64u; q++) { s_cnt[128u + q] = at; at += s_cnt[64u + q]; }
+                if (!tess) atomicAdd(cd.d[e].index_count, blocks.v[cb * 4u + 2u]);
+            }
+            barrier();
+            UintBuf src = UintBuf(f.indices), dst = UintBuf(tess ? addr_add(f.tess_buf, TESS_IDX_AT) : f.cl_idx);
+            UintBuf own = UintBuf(addr_add(f.tess_buf, TESS_OWNER_AT));
+            for (uint j = 0u; j < 64u; j++) {
+                uint nj = s_cnt[64u + j];
+                for (uint t = tid; t < nj; t += 64u) {
+                    dst.v[s_cnt[128u + j] + t] = src.v[s_cnt[192u + j] + t];
+                    if (tess && t % 3u == 0u) own.v[(s_cnt[128u + j] + t) / 3u] = e;
+                }
+            }
+            return;
+        }
+        // (the second phase: what the first one drew, before this block's mask is written again)
+        bool drawn1 = late && (blocks.v[cb * 4u + (tid >> 5u)] & (1u << (tid & 31u))) != 0u;
+        if (tid < 3u) s_cnt[tid] = 0u;
+        barrier();
+        bool seen = false;
+        Cluster cl;
+        if (k < cc) {
+            cl = ClusterBuf(f.clusters).c[cf + UintBuf(f.cl_perm).v[cf * 6u + vo * cc + k]];
+            InstanceBuf ib = InstanceBuf(pc.instances);
+            vec4 row0 = ib.i[slot].row0, row1 = ib.i[slot].row1, row2 = ib.i[slot].row2;
+            vec4 lc = vec4(cl.sphere.xyz, 1.0);
+            vec3 c = vec3(dot(row0, lc), dot(row1, lc), dot(row2, lc));
+            vec3 sx = vec3(row0.x, row1.x, row2.x), sy = vec3(row0.y, row1.y, row2.y), sz = vec3(row0.z, row1.z, row2.z);
+            float r = cl.sphere.w * sqrt(max(dot(sx, sx), max(dot(sy, sy), dot(sz, sz))));
+            // in the view and not behind the prepass's depth (the opaque meshes, the Masked ones drawn whole); a DAG's: in
+            // the view and the right level here, its own error on screen under the limit and its parent's over it (the
+            // same group's sphere and error on both sides of a level: exactly one cut, no gap, no overlap)
+            if (dag) {
+                float s = sqrt(max(dot(sx, sx), max(dot(sy, sy), dot(sz, sz)))), lim = max(uintBitsToFloat(f.pad_cull1), 0.25);
+                vec4 ls = vec4(cl.self_sphere.xyz, 1.0), lp = vec4(cl.parent_sphere.xyz, 1.0);
+                vec3 cs = vec3(dot(row0, ls), dot(row1, ls), dot(row2, ls)), cp = vec3(dot(row0, lp), dot(row1, lp), dot(row2, lp));
+                float ds = view_ortho(f) ? 1.0 : max(length(cs - f.camera_pos.xyz) - cl.self_sphere.w * s, 1.0);
+                float dp = view_ortho(f) ? 1.0 : max(length(cp - f.camera_pos.xyz) - cl.parent_sphere.w * s, 1.0);
+                bool fits = cl.self_err * s / ds * f.cull_params.x <= lim;
+                bool parent_fits = cl.parent_err < 1e30 && cl.parent_err * s / dp * f.cull_params.x <= lim;
+                seen = fits && !parent_fits && sphere_inside(f.cull_planes, c, r); // (a cone test for the back half: measured no gain, the raster drops those cheaply)
+                // two phases (Nanite's): first behind last frame's depth, skipped; then those, against this frame's
+                if (seen && !late && (f.hiz_pad & 2u) != 0u) seen = !occluded_prev(f, c, r);
+                if (late) seen = seen && !drawn1 && !occluded(f, c, r);
+            } else
+                seen = sphere_inside(f.cull_planes, c, r) && !occluded(f, c, r);
+        }
+        if (seen) {
+            atomicOr(s_cnt[tid >> 5u], 1u << (tid & 31u));
+            atomicAdd(s_cnt[2], cl.index_count);
+        }
+        barrier();
+        if (tid < 3u) blocks.v[cb * 4u + tid] = s_cnt[tid];
+        return;
+    }
+
+    if (pc.pass == 1u || pc.pass == 4u) { // the draws and their ranges: lists 0 and 1, or list 2
+        if (tid != 0u) return;
+        if (pc.pass == 4u && f.cl_entries != 0u) { // (pass 6's workgroups: the instances that got a draw)
+            UintBuf h = UintBuf(f.cl_work);
+            h.v[0] = min(h.v[0], f.cl_entries);
+        }
+        // ... and each run's non-empty ones packed at its start, with its count (render.c draw_runs: DrawIndexedIndirectCount;
+        // a mesh's 4 LOD commands are mostly empty, and empty draws cost +10% of the main pass with 89 meshes registered).
+        // A run: the meshes of one class (Masked or not, a shape or imported: render.c's RUN_CLASS)
+        uint cbase = (3u * n * 20u + (6u * n + 1u) * 4u + 15u) & ~15u, nm = n / MAX_LODS;
+        DrawBuf packed = DrawBuf(addr_add(f.draws, cbase));
+        UintBuf packed_n = UintBuf(addr_add(f.draws, cbase + 3u * n * 20u));
+        uint l0 = pc.pass == 1u ? 0u : 2u, l1 = pc.pass == 1u ? 2u : 3u;
+        for (uint list = l0; list < l1; list++) {
+            uint at = 0u, run = 0u, run_n = 0u;
+            for (uint mc = 0u; mc < n; mc++) {
+                uint c = list * n + mc;
+                uint m = mc / MAX_LODS;
+                MeshInfo mi = meshes.m[m];
+                uint l = mc % MAX_LODS;
+                if (l == 0u && m > 0u && (m == 5u || ((mi.lod_count ^ meshes.m[m - 1u].lod_count) & 0x500u) != 0u)) { // (5: SHAPE_COUNT; Masked, Translucent)
+                    packed_n.v[list * nm + run] = run_n;
+                    run = m, run_n = 0u;
+                }
+                DrawCmd d;
+                d.index_count = l < (mi.lod_count & 0xFFu) ? u4at(mi.index_count, l) : 0u;
+                d.instance_count = counts.v[c];
+                d.first_index = u4at(mi.first_index, l);
+                d.vertex_offset = i4at(mi.vertex_offset, l);
+                d.first_instance = at;
+                at += counts.v[c];
+                draws.d[c] = d;
+                if (d.instance_count != 0u && d.index_count != 0u) packed.d[list * n + run * MAX_LODS + run_n++] = d;
+                counts.v[3u * n + c] = 0u; // the cursor
+            }
+            packed_n.v[list * nm + run] = run_n;
+        }
+        return;
+    }
+
+    for (uint k = tid; k < 2u * n; k += 64u) s_cnt[k] = 0u;
+    if (tid < 2u) s_rel[tid] = 0u;
+    if (tid == 0u) s_occ = 0u;
+    barrier();
+
+    if (pc.pass == 2u || pc.pass == 5u) { // scatter into the lists
+        uint v = i < count ? vis.v[i] : (NONE | (NONE << 16));
+        uint cm = v & 0xFFFu, cs = (v >> 16) & 0xFFFu;
+        bool late = pc.pass == 5u;
+        // pass 2: the early main draws (shared 0..n-1) and the shadow ones (n..2n-1); pass 5: the late ones (0..n-1)
+        bool main_here = cm != NONE && (v & (late ? LATE : EARLY)) != 0u;
+        bool shadow_here = !late && cs != NONE;
+        uint lm = main_here ? atomicAdd(s_cnt[cm], 1u) : 0u;
+        uint ls = shadow_here ? atomicAdd(s_cnt[n + cs], 1u) : 0u;
+        barrier();
+        for (uint k = tid; k < 2u * n; k += 64u)
+            if (s_cnt[k] != 0u) {
+                uint list = k < n ? (late ? 2u : 0u) : 1u;
+                s_cnt[k] = atomicAdd(counts.v[3u * n + list * n + k % n], s_cnt[k]); // (now the base)
+            }
+        barrier();
+        if (main_here) {
+            uint c = (late ? 2u : 0u) * n + cm;
+            UintBuf(late ? f.visible_late : f.visible_main).v[draws.d[c].first_instance + s_cnt[cm] + lm] = i;
+        }
+        if (shadow_here) UintBuf(f.visible_shadow).v[draws.d[n + cs].first_instance + s_cnt[n + cs] + ls] = i;
+        return;
+    }
+
+    if (pc.pass == 3u) { // the occlusion test, next frame's early flag, the late counts
+        if (i < count) {
+            uint v = vis.v[i];
+            uint cm = v & 0xFFFu;
+            bool drawn = false;
+            if ((v & SEEN) != 0u) {
+                InstanceBuf ib = InstanceBuf(pc.instances);
+                vec4 row0 = ib.i[i].row0, row1 = ib.i[i].row1, row2 = ib.i[i].row2;
+                vec4 sphere = meshes.m[ib.i[i].ids.y >> INST_SHAPE_SHIFT].sphere;
+                vec4 lc = vec4(sphere.xyz, 1.0);
+                vec3 c = vec3(dot(row0, lc), dot(row1, lc), dot(row2, lc));
+                vec3 sx = vec3(row0.x, row1.x, row2.x), sy = vec3(row0.y, row1.y, row2.y), sz = vec3(row0.z, row1.z, row2.z);
+                float r = sphere.w * sqrt(max(dot(sx, sx), max(dot(sy, sy), dot(sz, sz))));
+                drawn = !occluded(f, c, r);
+                if (!drawn) atomicAdd(s_occ, 1u);
+                if (drawn && (v & (EARLY | CLUSTERED)) == 0u) {
+                    vis.v[i] = v | LATE;
+                    atomicAdd(s_cnt[cm], 1u);
+                }
+            }
+            UintBuf(f.vis_prev).v[i] = drawn ? 1u : 0u;
+        }
+        barrier();
+        for (uint k = tid; k < n; k += 64u)
+            if (s_cnt[k] != 0u) atomicAdd(counts.v[2u * n + k], s_cnt[k]);
+        if (tid == 0u && s_occ != 0u) atomicAdd(counts.v[6u * n], s_occ); // the occluded ones (render.c's auto mode)
+        return;
+    }
+
+    // pass 0: classify (only the fields the test needs are read: rows and flags, 64 of the 112 bytes)
+    uint result = NONE | (NONE << 16);
+    bool relevant = false;
+    if (i < count) {
+        InstanceBuf ib = InstanceBuf(pc.instances);
+        uint flags = ib.i[i].ids.y;
+        if ((flags & INST_ALIVE) != 0u) {
+            vec4 row0 = ib.i[i].row0, row1 = ib.i[i].row1, row2 = ib.i[i].row2;
+            uint shape = flags >> INST_SHAPE_SHIFT;
+            vec4 sphere = meshes.m[shape].sphere;
+            uint lods = meshes.m[shape].lod_count & 0xFFu;
+            bool masked = (meshes.m[shape].lod_count & 0x100u) != 0u; // (a Masked material: always in the prepass)
+            vec4 lc = vec4(sphere.xyz, 1.0);
+            vec3 c = vec3(dot(row0, lc), dot(row1, lc), dot(row2, lc));
+            // the largest axis scale (the rows' columns)
+            vec3 sx = vec3(row0.x, row1.x, row2.x), sy = vec3(row0.y, row1.y, row2.y), sz = vec3(row0.z, row1.z, row2.z);
+            float r = sphere.w * sqrt(max(dot(sx, sx), max(dot(sy, sy), dot(sz, sz))));
+            float dist = view_ortho(f) ? 1.0 : max(length(c - f.camera_pos.xyz) - r, 1.0); // (orthographic: cull_params.x is px per cm)
+            float px = r / dist * f.cull_params.x; // its radius on screen
+            uint lod = 0u;
+            // (Q9) a soft body's mesh (bent on its LOD 0's vertices, a mesh that isn't a skin): that LOD, whole. A skin's
+            // LODs are on its LOD 0's vertices: they stay
+            bool own_verts = (flags & INST_SKINNED) != 0u && (meshes.m[shape].lod_count & 0x1000u) == 0u;
+            if (own_verts) {
+            } else if ((meshes.m[shape].lod_count & 0x200u) != 0u) {
+                // an imported mesh's simplified LODs (mesh_build.c): the coarsest whose error (cm in the mesh, times its
+                // scale) stays under a pixel on screen. A 2 M triangle model seen small draws its few thousand
+                float k = r / max(sphere.w, 1e-6) / dist * f.cull_params.x; // (px per cm of the mesh)
+                float lim = max(uintBitsToFloat(f.pad_cull1), 0.25); // (render_scalability: Epic 1 px .. Low 8)
+                for (uint l = 1u; l < lods && meshes.m[shape].lod_error[l - 1u] * k < lim; l++) lod = l;
+            } else {
+                for (float t = f.cull_params.z; lod + 1u < lods && px < t; t *= 0.4) lod++;
+            }
+            uint cmd = shape * MAX_LODS + lod;
+            // a round shape under 2 px of radius: drawn as the cube (12 triangles): its form doesn't show, its triangles cost
+            // (a field of a million seen from far above is mostly these). Shape 0 is the cube, 4 the plane (kept)
+            if (px < 2.0 && shape > 0u && shape < 4u && !own_verts) cmd = 0u;
+            // (Q21) far away an instance whose mesh has an impostor for its material: the card (one draw for every
+            // impostor, farview.c), its shadow the mesh's coarsest LOD (the sun's maps keep a solid caster)
+            uint scmd = cmd;
+            bool imp = false;
+            if ((f.far_u.x & FAR_IMP) != 0u && px < f.far_f.w && !own_verts && (flags & (INST_SKINNED | INST_DYNAMIC)) == 0u) {
+                uvec4 te = ImpTabBuf(f.imp_tab).e[shape];
+                uint key = (flags & INST_MATERIAL) != 0u ? floatBitsToUint(ib.i[i].emissive_rough.x) + 1u : 0xFFFFFFFFu;
+                if (te.x != 0u && te.x == key) imp = true, scmd = shape * MAX_LODS + (lods > 0u ? lods - 1u : 0u), cmd = f.far_u.y;
+            }
+            if (px >= f.cull_params.y) {
+                if (sphere_inside(f.cull_planes, c, r)) {
+                    result = (result & ~0xFFFu) | cmd | SEEN;
+                    // drawn last frame and big on screen: early (the prepass: the occluders); the small ones wait for
+                    // the Hi-Z test (late), the prepass costs only what hides much
+                    // (occlusion off, hiz_pad 0: everything in the view is early, there's no prepass nor late list)
+                    if (f.hiz_pad == 0u || masked || imp || (UintBuf(f.vis_prev).v[i] != 0u && px >= f.cull_params.z * 0.4)) {
+                        // a big Masked mesh: drawn by its clusters (pass 6, after the Hi-Z of what is drawn whole): the
+                        // ones behind the opaque meshes or out of the view cost nothing. Its draw and its indices'
+                        // room taken here (no room: drawn whole)
+                        bool clustered = false;
+                        // an opaque mesh with a cluster LOD DAG near the camera: drawn by the DAG's cut (its near side
+                        // fine, its far side coarse, what leaves the view skipped; mesh_clod.h), from LOD 0's vertices.
+                        // At LOD 0; at LOD 1 only across the view's edge (the DAG's errors, merged up its levels, are more
+                        // careful than a whole LOD's: in the middle distance it drew more than LOD 1, +0.3 ms in the heavy
+                        // scene; across the edge its clusters outside pay it back)
+                        // (Q17: a displaced instance the same: diced where its DAG is drawn; farther, its LOD's vertices displaced
+                        // (mesh.vert): every rock by its DAG diced 360 k base triangles in the rocks scene, +7 ms)
+                        bool dag = !imp && !masked && meshes.m[shape].dag_count != 0u && (lod == 0u || (lod == 1u && !sphere_inside(f.cull_planes, c, -r)) ||
+                                                                                  ((f.tess_u.x & TESS_SEAMS) != 0u && tess_inst(f, flags, ib.i[i].emissive_rough))); // (the seam check: its rock by the DAG at any distance)
+                        uint ncl = dag ? meshes.m[shape].dag_count : u4at(meshes.m[shape].cluster_count, lod);
+                        uint lodd = dag ? 0u : lod;
+                        if ((masked || dag) && !imp && !own_verts && f.hiz_pad != 0u && f.cl_entries != 0u && ncl != 0u && (meshes.m[shape].lod_count & 0x400u) == 0u) {
+                            UintBuf h = UintBuf(f.cl_work);
+                            uint e = atomicAdd(h.v[0], 1u);
+                            if (e < f.cl_entries) {
+                                // (the indices' room: taken in pass 8, what pass 6 saw)
+                                uint nb = (ncl + 63u) / 64u, base = 0u;
+                                uint b0 = atomicAdd(h.v[4], nb);
+                                clustered = b0 + nb <= CL_MAX_CHUNKS;
+                                int vofs = i4at(meshes.m[shape].vertex_offset, lodd);
+                                DrawBuf(addr_add(f.cl_work, 32u)).d[e] = DrawCmd(0u, dag ? 0u : 1u, base, vofs, e);
+                                DrawBuf(addr_add(f.cl_work, 32u + 36u * f.cl_entries + 16u * CL_MAX_CHUNKS)).d[e] = DrawCmd(0u, dag ? 1u : 0u, base, vofs, e);
+                                DrawBuf(addr_add(f.cl_work, 32u + 56u * f.cl_entries + 16u * CL_MAX_CHUNKS)).d[e] = DrawCmd(0u, dag ? 1u : 0u, base, vofs, e);
+                                UintBuf info = UintBuf(addr_add(f.cl_work, 32u + 20u * f.cl_entries));
+                                info.v[e * 4u] = i;
+                                info.v[e * 4u + 1u] = dag ? meshes.m[shape].dag_first : u4at(meshes.m[shape].cluster_first, lod);
+                                // the view order: the axis nearest the camera -> the instance's center in mesh space
+                                // (its rows' columns: the inverse's direction up to the scale)
+                                vec3 vd = c - f.camera_pos.xyz;
+                                vec3 md = vec3(dot(vd, sx), dot(vd, sy), dot(vd, sz));
+                                vec3 am = abs(md);
+                                uint ax = am.x >= am.y && am.x >= am.z ? 0u : am.y >= am.z ? 1u : 2u;
+                                float mda = ax == 0u ? md.x : ax == 1u ? md.y : md.z; // (not md[ax]: a vector indexed by a variable crashed Adreno's compiler)
+                                uint vo = ax * 2u + (mda < 0.0 ? 1u : 0u);
+                                info.v[e * 4u + 2u] = clustered ? ncl | (vo << 29u) : 0u;
+                                info.v[e * 4u + 3u] = b0 | (dag ? 0x80000000u : 0u);
+                                // (the dispatches' y: the DAGs' first phase its own, h 5-7; the second, h 0-2: the
+                                // Masked ones, and the DAGs' only while their late phase runs)
+                                if (clustered && (!dag || (f.hiz_pad & 2u) != 0u)) atomicMax(h.v[1], (ncl + 63u) / 64u);
+                                if (clustered && dag) {
+                                    atomicMax(h.v[6], (ncl + 63u) / 64u);
+                                    UintBuf(addr_add(f.cl_work, 32u + 76u * f.cl_entries + 16u * CL_MAX_CHUNKS)).v[atomicAdd(h.v[5], 1u)] = e;
+                                }
+                            }
+                        }
+                        if (clustered) result |= CLUSTERED;
+                        else {
+                            result |= EARLY;
+                            atomicAdd(s_cnt[cmd], 1u);
+                        }
+                    }
+                }
+                // a local light's map drawn this frame (lsm.c): the casters inside its sphere (only the dynamic ones when
+                // none of its faces is drawn whole)
+                bool local = false;
+                if ((flags & INST_CAST_SHADOW) != 0u && f.lsm_cull != 0u) {
+                    LsmBuf lb = LsmBuf(f.lsm_tab);
+                    bool dyn = (flags & INST_DYNAMIC) != 0u;
+                    for (uint k = 0u; k < f.lsm_cull && !local; k++) {
+                        vec4 ls = lb.cull[k];
+                        float lr = abs(ls.w) + r;
+                        vec3 dd = c - ls.xyz;
+                        local = (dyn || ls.w > 0.0) && dot(dd, dd) <= lr * lr;
+                    }
+                }
+                if ((flags & INST_CAST_SHADOW) != 0u && (local || (((f.gi_flags & GI_VSM_DYN) == 0u || (flags & INST_DYNAMIC) != 0u) && sphere_inside(f.shadow_planes, c, r) &&
+                    ((f.gi_flags & GI_VSM) != 0u || shadow_into_view(f.cull_planes, c, r, -f.sun_dir.xyz))))) { // only casters whose shadow can be seen (the virtual shadow maps: every one, they are kept)
+                    result = (result & 0xF000FFFFu) | (scmd << 16);
+                    atomicAdd(s_cnt[n + scmd], 1u);
+                }
+            }
+            // relevant: seen, its shadow seen (the sun's sweep), or near enough to light the view or be reflected in it
+            // (gi_range: a local light's shadow, the GI, reflections)
+            relevant = (result & SEEN) != 0u || ((result >> 16) & 0xFFFu) != NONE || dist < f.gi_range ||
+                       ((flags & INST_CAST_SHADOW) != 0u && shadow_into_view(f.cull_planes, c, r, -f.sun_dir.xyz));
+            if (relevant) atomicOr(s_rel[tid >> 5u], 1u << (tid & 31u));
+        }
+        vis.v[i] = result;
+    }
+    barrier();
+    if (tid < 2u && (f.relevance.x | f.relevance.y) != 0u) UintBuf(f.relevance).v[gl_WorkGroupID.x * 2u + tid] = s_rel[tid];
+    for (uint k = tid; k < 2u * n; k += 64u) // list 0 then list 1: contiguous
+        if (s_cnt[k] != 0u) atomicAdd(counts.v[k], s_cnt[k]);
+}

@@ -1,0 +1,58 @@
+#version 460
+// A material's static part baked (material.c): one thread per texel of its textures runs the bake program (mat_vm.glsl)
+// at the texel's uv: the base color (sRGB-encoded, alpha), the tangent-space normal with the roughness and metallic, the
+// emission, and the intermediate values the per-pixel program reads (slots).
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+#define MAT_SET 0
+#define MAT_REGS MAT_BAKE_REGS
+#define MAT_BAKE
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D u_out8[];   // base, normal / roughness / metallic
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D u_out16[]; // emission, the slots
+
+layout(push_constant, scalar) uniform BakePush {
+    uvec2 prog, params;
+    uint off, len, w, h;
+    uint tex_base, tex_nrm, tex_emis, flags;
+    uvec4 slot_tex;
+    uvec2 org; // the region's origin (a bake in tiles over several frames: texture streaming)
+    uvec2 udim;   // (Q18) the parameters buffer: the UDIM images' tables
+    vec2 uv_off;  // (Q18) a UDIM tile's origin: the bake covers that unit square of the UV
+} pc;
+
+ivec2 g_px;
+void mat_store_slot(uint slot, vec4 v) { imageStore(u_out16[pc.slot_tex[slot]], g_px, v); }
+
+#include "mat_vm.glsl"
+
+vec3 linear_to_srgb(vec3 c) {
+    c = max(c, 0.0);
+    return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+}
+
+void main() {
+    g_px = ivec2(gl_GlobalInvocationID.xy) + ivec2(pc.org);
+    if (g_px.x >= int(pc.w) || g_px.y >= int(pc.h)) return;
+    MatEnv e;
+    e.uv = (vec2(g_px) + 0.5) / vec2(pc.w, pc.h) + pc.uv_off;
+    e.udim = pc.udim;
+    e.duvdx = e.duvdy = vec2(0.0);
+    e.view = vec3(0.0, 0.0, 1.0);
+    e.texel = 1.0 / float(pc.w);
+    e.params = pc.params;
+    e.param_off = 0u;
+    e.slot_tex = pc.slot_tex;
+    e.bake = true;
+    mat_run(pc.prog, pc.off, pc.len, e);
+    if ((pc.flags & MATF_PROGRAM) != 0u) return; // the result is the per-pixel program's: only the slots here
+    imageStore(u_out8[pc.tex_base], g_px, vec4(linear_to_srgb(mo_base.rgb), mo_nrm.w));
+    vec3 n = normalize(mo_nrm.xyz);
+    imageStore(u_out8[pc.tex_nrm], g_px, vec4(n.xy * 0.5 + 0.5, mo_emis.w, mo_base.w));
+    if ((pc.flags & MATF_EMISSIVE) != 0u) imageStore(u_out16[pc.tex_emis], g_px, vec4(mo_emis.rgb, clamp(max(mo_emis.r, max(mo_emis.g, mo_emis.b)) * 0.05, 0.0, 1.0))); // (a: how much it glows, the editor's preview)
+}

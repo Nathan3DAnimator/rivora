@@ -1,0 +1,5 @@
+newmtl Crate
+Kd 1 1 1
+map_Kd D:/Artist/Exports/Old Project/Crate_Diffuse.tga
+newmtl M_Barrel
+Kd 0.8 0.8 0.8

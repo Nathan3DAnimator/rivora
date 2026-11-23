@@ -1,0 +1,170 @@
+#version 460
+// Temporal super resolution (render.c; notas-dev/render.md "Upscaling temporal"): the scene rendered at a share of the
+// output's pixels, its projection shifted by a sub-pixel jitter each frame (Halton 2, 3: 8 phases); here, at the output's
+// size, each pixel gathers the render samples around it (a Gaussian by their jittered distance), reprojects its history
+// (the camera's motion from the depth, the moved actors' own from the velocity pass), clips that history to the
+// neighborhood's color box (variance clipping in YCoCg: no ghost of what moved or appeared), and blends. Colors in a tone
+// mapped space (c / (1 + luma)): a firefly doesn't stay in the history. pc.pass bit 0: the history's parity (reads
+// [pass], writes [1 - pass]); bit 1 (Q20): last frame's depth is in u_prev_depth (an actor moved then: render.c).
+// (Q20, notas-dev/gi-estavel.md) A disocclusion: a point of the still scene that something nearer covered last frame (a
+// character walking off it) has no history of its own there, only the one of what left. The color box alone, wide at
+// rest, let that history through (a trail behind a moving actor: the ghosting probe 0.5-0.8% against a background of
+// 0.2-0.3%): where last frame's depth at this point's place is nearer than this point was, the history is dropped.
+// The history (RGBA16 UNORM): the color as c / (1 + max(c)) (in [0, 1): 16 bits are ~30x finer than a half float near 1;
+// at rest the blend's steps are smaller than a half's, which then flipped a step every frame: a flicker), alpha the frames
+// it accumulated / 64 (a new pixel, a cut or a clipped history take the new samples fast, then ever less of them).
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 55) uniform sampler2D u_scene;      // the render (render size)
+layout(set = 0, binding = 21) uniform sampler2D u_depth;      // its depth, one sample (reversed Z)
+layout(set = 0, binding = 40) uniform sampler2D u_velocity;   // the moved actors' screen motion (uv, current - previous)
+layout(set = 0, binding = 56) uniform sampler2D u_hist0;
+layout(set = 0, binding = 57) uniform sampler2D u_hist1;
+layout(set = 0, binding = 58, rgba16) uniform writeonly image2D o_hist0;
+layout(set = 0, binding = 59, rgba16) uniform writeonly image2D o_hist1;
+layout(set = 0, binding = 60, rgba16f) uniform writeonly image2D o_out; // the output (the post pass reads it)
+layout(set = 0, binding = 85) uniform sampler2D u_prev_depth; // (Q20) last frame's depth (render size), when bit 1
+
+const float HIST_FRAMES = 64.0; // the alpha channel's scale (frames accumulated)
+// The render samples' Gaussian exp(-k d^2) (d in render pixels). Unreal 4's TAA 2.29 (sigma 0.47 px) left a third of the
+// finest detail's contrast: a checker floor's fine pattern gone a few tiles away even at 100% (2026-11-23). 4.5 (sigma
+// 0.33): the jitter over the frames still fills the pixel, the pattern holds as far as without TSR; the flicker probe
+// 0.47% -> 0.43% at High, 0.29% at 100%
+const float TSR_KERNEL = 4.5;
+
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+vec3 tm(vec3 c) { return c / (1.0 + luma(c)); }
+vec3 itm(vec3 c) { return c / max(1.0 - luma(c), 1e-4); }
+float max3(vec3 c) { return max(c.r, max(c.g, c.b)); }
+vec3 ycocg(vec3 c) { return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b); }
+vec3 rgb(vec3 y) { return vec3(y.x + y.y - y.z, y.x + y.z, y.x - y.y - y.z); }
+
+// The history at uv: Catmull-Rom by 5 bilinear taps (sharp; a bilinear history blurs a little more every frame), still
+// in its stored encoding
+vec4 history(vec2 uv, vec2 size) {
+    vec2 p = uv * size, tc = floor(p - 0.5) + 0.5, f = p - tc;
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f)), w1 = 1.0 + f * f * (-2.5 + 1.5 * f), w2 = f * (0.5 + f * (2.0 - 1.5 * f)), w3 = f * f * (-0.5 + 0.5 * f);
+    vec2 w12 = w1 + w2, tc0 = (tc - 1.0) / size, tc3 = (tc + 2.0) / size, tc12 = (tc + w2 / w12) / size;
+    vec4 c = vec4(0.0);
+    float ws = 0.0;
+    vec4 t[5] = vec4[5](vec4(tc12.x, tc0.y, w12.x * w0.y, 0), vec4(tc0.x, tc12.y, w0.x * w12.y, 0), vec4(tc12, w12.x * w12.y, 0),
+                        vec4(tc3.x, tc12.y, w3.x * w12.y, 0), vec4(tc12.x, tc3.y, w12.x * w3.y, 0));
+    for (int i = 0; i < 5; i++) {
+        vec4 h = (pc.pass & 1u) == 0u ? textureLod(u_hist0, t[i].xy, 0.0) : textureLod(u_hist1, t[i].xy, 0.0);
+        c += h * t[i].z;
+        ws += t[i].z;
+    }
+    return clamp(c / max(ws, 1e-4), vec4(0.0), vec4(0.999, 0.999, 0.999, 1.0));
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    ivec2 op = ivec2(gl_GlobalInvocationID.xy);
+    vec2 rsize = f.tsr_size.xy, osize = f.tsr_size.zw;
+    if (op.x >= int(osize.x) || op.y >= int(osize.y)) return;
+    vec2 uv = (vec2(op) + 0.5) / osize;
+    vec2 jit = f.tsr.xy;            // render pixels: a point at q (unjittered) was drawn at q + jit
+    vec2 q = uv * rsize;            // this pixel's center in render pixels (unjittered)
+    ivec2 c0 = ivec2(floor(q + jit)); // the render sample whose pixel holds it
+    ivec2 rmax = ivec2(rsize) - 1;
+    // the 3x3 render samples around: their Gaussian by distance (the current color), their moments (the clip box), the
+    // nearest depth (whose motion this pixel takes: an edge moves with what is in front)
+    // (2026-11-23) the distances in OUTPUT pixels: in render pixels a 67% render's Gaussian spread 1.5x wider on the
+    // screen and wiped what the jitter had resolved past the render's resolution (a floor's fine pattern gone a few
+    // meters away at High, there at 100%); the weights relative to the nearest (no division by ~0 when none fell near:
+    // wnear says how near it was)
+    float scale = rsize.x / osize.x;
+    vec3 cols[9], sum = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0);
+    float dd[9], ddmin = 1e30, wsum = 0.0, dnear = -1.0;
+    ivec2 pnear = c0;
+    for (int k = 0; k < 9; k++) {
+        ivec2 s = clamp(c0 + ivec2(k % 3 - 1, k / 3 - 1), ivec2(0), rmax);
+        vec3 col = tm(max(texelFetch(u_scene, s, 0).rgb, vec3(0.0)));
+        vec2 d = (vec2(s) + 0.5 - jit - q) / scale;
+        cols[k] = col, dd[k] = dot(d, d), ddmin = min(ddmin, dd[k]);
+        vec3 y = ycocg(col);
+        m1 += y, m2 += y * y;
+        float z = texelFetch(u_depth, s, 0).r;
+        if (z > dnear) dnear = z, pnear = s;
+    }
+    for (int k = 0; k < 9; k++) {
+        float w = exp(-TSR_KERNEL * (dd[k] - ddmin));
+        sum += cols[k] * w, wsum += w;
+    }
+    float wnear = exp(-TSR_KERNEL * ddmin);
+    vec3 cur = sum / max(wsum, 1e-5);
+    vec3 mean = m1 / 9.0, sigma = sqrt(max(m2 / 9.0 - mean * mean, vec3(0.0)));
+    // the motion: the camera's (this point's world position by last frame's view) plus the actor's own (the velocity
+    // pass: its motion under this frame's camera)
+    vec2 motion = f.tsr.z > 0.5 ? texelFetch(u_velocity, pnear, 0).xy : vec2(0.0);
+    bool own = dot(motion, motion) > 1e-12; // (an actor that moved: its point's last depth isn't the camera's to say)
+    bool disoccluded = false;
+    { // (the sky, at depth 0: a point very far along its ray, rotating with the camera)
+        vec2 ndc = ((vec2(pnear) + 0.5) / rsize) * 2.0 - 1.0;
+        vec4 wp = f.tsr_inv * vec4(ndc, max(dnear, 1e-7), 1.0);
+        wp /= wp.w;
+        vec4 a = f.tsr_vp * wp, b = f.tsr_prev_vp * wp;
+        if (b.w > 1e-4) {
+            motion += (a.xy / a.w - b.xy / b.w) * 0.5;
+            // (Q20) last frame's depth around where this point was: all 4 texels nearer by over 3% (reversed Z: larger)
+            // than this point then -> something stood in front of it, now gone (an edge, half and half, keeps the box)
+            if ((pc.pass & 2u) != 0u && !own && dnear > 0.0) {
+                float ze = b.z / b.w;
+                vec2 pp = (b.xy / b.w * 0.5 + 0.5) * rsize - 0.5;
+                ivec2 q0 = ivec2(floor(pp));
+                float zmin = 1e30;
+                for (int k = 0; k < 4; k++) zmin = min(zmin, texelFetch(u_prev_depth, clamp(q0 + ivec2(k & 1, k >> 1), ivec2(0), rmax), 0).r);
+                disoccluded = zmin > ze * 1.03 + 1e-8;
+            }
+        }
+    }
+    vec2 puv = uv - motion;
+    // (Q20) a disoccluded pixel starts from the 3x3 samples' mean, not the nearest one's: what it shows the first frames
+    // is the raw per-frame noise of the GTAO's turned slices, the stochastic shadows and the jitter, which the history
+    // would have averaged (a third of it)
+    if (disoccluded) cur = mix(cur, rgb(mean), 0.75);
+    vec3 outc = cur;
+    float frames = 0.0; // the frames accumulated (0: none, the new samples alone)
+    bool fresh = f.tsr.w > 0.5 || disoccluded || any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0)));
+    if (!fresh) {
+        vec4 hs = history(puv, osize);
+        // decoded; then from last frame's pre-exposure into this frame's (exposure.comp runs after this pass: e.exposure
+        // is what this frame rendered with, e.pre_exposure what the last one did). Without it every small adaptation
+        // step showed through the history as the whole image pulsing
+        ExposureBuf e = ExposureBuf(f.exposure);
+        float es = e.pre_exposure > 0.0 ? e.exposure / e.pre_exposure : 1.0;
+        vec3 h = tm(hs.rgb / max(1.0 - max3(hs.rgb), 1e-3) * es);
+        frames = hs.a * HIST_FRAMES;
+        // at rest (under half a pixel of motion a frame): a wider clip box and a smaller weight for the new samples (the
+        // box itself moves with the jitter: a tight one flickers); moving: tight, and more of the new samples (the history
+        // resampled every frame softens)
+        float speed = length(motion * osize);
+        float moving = clamp(speed * 2.0, 0.0, 1.0);
+        // variance clip toward the box's center (not a clamp: no bands of color at the box's corners)
+        vec3 hy = ycocg(h), ext = sigma * mix(2.5, 1.25, moving) + 1e-4, dv = hy - mean;
+        vec3 t = abs(dv / ext);
+        float tmax = max(t.x, max(t.y, t.z));
+        if (tmax > 1.0) {
+            hy = mean + dv / tmax;
+            // (a history that disagreed: trusted less, while moving. At rest the clip alone: the jitter pushes thin lines
+            // out of the box every frame, even past twice it, and cutting their count raised their new samples' weight:
+            // they flickered, 0.10% of the house with a character walking against 0.05% without TSR and 0.054% now)
+            if (moving > 0.0) frames /= tmax;
+        }
+        h = rgb(hy);
+        // the new samples' weight: more where one fell near this pixel's center; at least 1 / (frames + 1) (an even mean
+        // of the frames so far: a new pixel converges in a few frames). (2026-11-23: weighting the frames by that nearness
+        // alone, the confidence, raised the ghosting probe 0.5 -> 1.0% for ~10% more fine detail: left out)
+        float alpha = mix(mix(0.010, 0.025, wnear), mix(0.03, 0.08, wnear), moving) + clamp(speed * 0.01, 0.0, 0.1);
+        alpha = max(alpha, 1.0 / (frames + 1.0));
+        outc = mix(h, cur, clamp(alpha, 0.0, 1.0));
+    }
+    outc = max(outc, vec3(0.0));
+    if (any(isnan(outc))) outc = cur, frames = 0.0;
+    vec3 lin = itm(outc);
+    vec4 store = vec4(lin / (1.0 + max3(lin)), min(frames + 1.0, HIST_FRAMES - 1.0) / HIST_FRAMES);
+    if ((pc.pass & 1u) == 0u) imageStore(o_hist1, op, store);
+    else imageStore(o_hist0, op, store);
+    imageStore(o_out, op, vec4(min(lin, vec3(60000.0)), 1.0));
+}

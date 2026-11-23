@@ -1,0 +1,86 @@
+#version 460
+// GI probes, step 1: the rays. One workgroup per probe updated this frame (a quarter of the grid), one thread per ray
+// (spherical Fibonacci, turned by a new random rotation every frame). A hit is lit by every light (with shadow rays)
+// and by the probes themselves (last frame's irradiance: the bounces add up frame after frame); a miss sees the sky.
+// A Movable actor moving right now stays out of the probes: their rays saw it walk past, the probes beside it went dark a
+// few frames late and it read its own shadow back (a dark trail at its feet); the contact GI shades it, per pixel
+#define RT_STILL_ONLY
+#include "common.glsl"
+#include "weather.glsl"
+#include "gi.glsl"
+#include "atmosphere.glsl"
+#define MAT_SET 1 // (2026-11-17, Q4: the Light Functions read their materials)
+#include "mat_common.glsl"
+#include "lightfn.glsl"
+#include "rt.glsl"
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 3) uniform sampler2D u_probe_irr;
+layout(set = 0, binding = 4) uniform sampler2D u_probe_dist;
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer RayBuf { vec4 r[]; };
+
+uint hash(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+float rnd(inout uint s) { s = hash(s); return float(s >> 8) / 16777216.0; }
+
+// A random rotation (the same for every ray of every probe this frame: the pattern changes between frames)
+mat3 frame_rotation(uint frame) {
+    uint s = frame * 747796405u + 1u;
+    float u1 = rnd(s), u2 = rnd(s), u3 = rnd(s);
+    // a uniform random quaternion (Shoemake)
+    vec4 q = vec4(sqrt(1.0 - u1) * sin(6.2831853 * u2), sqrt(1.0 - u1) * cos(6.2831853 * u2),
+                  sqrt(u1) * sin(6.2831853 * u3), sqrt(u1) * cos(6.2831853 * u3));
+    float x = q.x, y = q.y, z = q.z, w = q.w;
+    return mat3(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + w * z), 2.0 * (x * z - w * y),
+                2.0 * (x * y - w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + w * x),
+                2.0 * (x * z + w * y), 2.0 * (y * z - w * x), 1.0 - 2.0 * (x * x + y * y));
+}
+
+vec3 fibonacci(uint i, uint n) {
+    float phi = 2.399963229728653 * float(i); // the golden angle
+    float z = 1.0 - (2.0 * float(i) + 1.0) / float(n);
+    float r = sqrt(max(1.0 - z * z, 0.0));
+    return vec3(r * cos(phi), r * sin(phi), z);
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    int cascade = int(pc.pad & 1u); // (A2: 1 the far grid, gi.glsl probe_grid)
+    ProbeGrid G = probe_grid(f, cascade);
+    ivec3 dims = G.dims;
+    uint total = uint(dims.x * dims.y * dims.z);
+    // probe_dims.w: the phase (low byte) and the stride (a probe out of every stride; 1 during a bake); the far grid's a
+    // probe out of 16 (its light changes slowly) and its rays after the near grid's
+    uint stride = cascade == 0 ? uint(f.probe_dims.w) >> 8 : 16u, phase = cascade == 0 ? uint(f.probe_dims.w) & 0xFFu : f.frame_index & 15u;
+    uint pi = gl_WorkGroupID.x * stride + phase;
+    uint ray = gl_LocalInvocationID.x;
+    uint nrays = uint(f.probe_min.w);
+    if (pi >= total || ray >= nrays) return;
+    ivec3 local = ivec3(int(pi) % dims.x, (int(pi) / dims.x) % dims.y, int(pi) / (dims.x * dims.y));
+    vec3 origin = (vec3(G.lo + local) + 0.5) * G.spacing; // cell centers (gi.glsl)
+    vec3 dir = normalize(frame_rotation(f.frame_index) * fibonacci(ray, nrays));
+    uint ray_base = cascade == 0 ? 0u : total * 32u;
+
+    float maxd = G.spacing * 1.5;
+    vec4 result;
+    // during a bake the volume holds the Static meshes' light only (the movable actors stay out of baked light)
+    uint mask = (f.gi_flags & GI_BAKING) != 0u ? RT_MASK_STATIC : RT_MASK_VISIBLE;
+    Hit h = trace_closest_mask(f, origin, dir, 1e6, mask);
+    if (!h.hit) {
+        result = vec4(sky_clouds(f, dir, false) * f.gi_params.y, 1e6);
+    } else if (!h.front) {
+        // the back of a surface: the probe is inside an object or under a floor (no light there; the negative distance
+        // tells probe_update.comp, which then leaves the probe out of the sampling)
+        result = vec4(0.0, 0.0, 0.0, -h.t);
+    } else {
+        vec3 diff = h.base * (1.0 - h.metal);
+        vec3 e = direct_irradiance_mask(f, h.pos, h.normal, (f.gi_flags & GI_BAKING) != 0u ? RT_MASK_STATIC : RT_MASK_SHADOW);
+        vec3 indirect = vec3(0.0);
+        if ((f.gi_flags & GI_PROBES) != 0u) indirect = probe_irradiance(f, u_probe_irr, u_probe_dist, h.pos, h.normal, -dir);
+        result = vec4(diff * (e / PI + indirect * f.gi_params.x) + ((f.gi_flags & GI_NO_EMISSIVE) != 0u ? vec3(0.0) : h.glow), h.t); // (a Lighting Level's bake: the base has it)
+    }
+    RayBuf(f.probe_rays).r[ray_base + gl_WorkGroupID.x * nrays + ray] = result;
+}

@@ -1,0 +1,149 @@
+#version 460
+// (Q11) The outline (outline.c, notas-dev/toon.md): Auto Adaptive Outline over the outlined actors' ids.
+// Pass 0 (64 x 4 tiles): each pixel of an outlined actor that sits on a silhouette is a seed (an edge to another id or to
+// the background behind it, a jump of its own depth past what its slope predicts, a crease of its normal), its radius
+// from its own distance by its entry's curve (the width in px at 1440p, times the render's height / 1440: near thin, far
+// thick, or as the curve says); then along x each pixel keeps the seed that reaches it farthest: (r + 1/2)^2 - dx^2.
+// Pass 1 (8 x 32 tiles): along y the same, - dy^2: the exact disk of every seed (two rows of shared memory a pixel, not
+// a 25 x 25 window); its edge's coverage (anti-aliased) mixes the line's color into the scene's (before the TSR, which
+// smooths it with the render's jitter). An outlined actor hidden behind another (the scene's depth) has no seed there.
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 8, rgba16f) uniform image2D o_hdr;    // the render's color
+layout(set = 0, binding = 21) uniform sampler2D u_depth;        // the scene's depth (one sample, reversed Z)
+layout(set = 1, binding = 0) uniform usampler2D u_id;           // outline_id.frag's
+layout(set = 1, binding = 1) uniform sampler2D u_odepth;        // its depth
+layout(set = 1, binding = 2, r32ui) uniform uimage2D u_h;       // pass 0's result
+
+struct OlEntry { vec4 color; vec4 curve; vec4 edge; vec4 pad; }; // (outline.h OutlineEntry)
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer OlBuf { OlEntry e[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer OlStats { uint lines, tiles; }; // (pc.vertices: the test's measure)
+
+#define RMAX 12 // (outline.h OUTLINE_MAX_RADIUS)
+#define T0W 64
+#define T0H 4
+#define T1W 8
+#define T1H 32
+shared uint s_v[(T1H + 2 * RMAX) * T1W > (T0W + 2 * RMAX) * T0H ? (T1H + 2 * RMAX) * T1W : (T0W + 2 * RMAX) * T0H];
+shared uint s_any, s_lines;
+
+ivec2 g_size;
+float g_near;
+
+float lin(float d) { return d > 0.0 ? g_near / d : 1e9; }
+
+struct Px { uint id; float z; };
+Px px_at(ivec2 q) {
+    q = clamp(q, ivec2(0), g_size - 1);
+    uint id = texelFetch(u_id, q, 0).r;
+    float zs = lin(texelFetch(u_depth, q, 0).r);
+    if ((id & 0xFFu) != 0u) {
+        float zo = lin(texelFetch(u_odepth, q, 0).r);
+        if (zo <= zs * 1.01 + 2.0) return Px(id, zo); // (visible: the scene's depth there is its own, a coarser LOD's within 1%)
+    }
+    return Px(0u, zs);
+}
+vec3 nrm(uint id) { return oct_decode_f(vec2(float((id >> 16) & 255u), float(id >> 24)) / 255.0 * 2.0 - 1.0); }
+
+// The seed at p: its entry (bits 0-7) and its reach r + 1/2 in eighths of a pixel (bits 8-15); 0: not on a silhouette
+uint seed_at(ivec2 p) {
+    Px c = px_at(p);
+    uint e = c.id & 0xFFu;
+    if (e == 0u) return 0u;
+    OlEntry E = OlBuf(pc.instances).e[e];
+    if (E.color.w <= 0.0) return 0u;
+    float sens = E.edge.y * c.z;
+    uint cid = c.id & 0xFFFFu;
+    ivec2 dirs[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+    Px nb[4];
+    for (int k = 0; k < 4; k++) nb[k] = px_at(p + dirs[k]);
+    bool edge = false;
+    for (int k = 0; k < 4 && !edge; k++) {
+        Px q = nb[k], o = nb[k ^ 1];
+        if ((q.id & 0xFFFFu) != cid) edge = q.z > c.z - sens * 0.1; // (another actor or the background behind: the silhouette)
+        else edge = q.z - c.z > sens + 1.5 * abs(c.z - o.z); // (its own depth jumps past its slope: a part in front of itself)
+    }
+    if (!edge && E.edge.z > -1.5) { // the creases (one side: toward +x and +y)
+        vec3 n = nrm(c.id);
+        for (int k = 0; k < 4 && !edge; k += 2)
+            if ((nb[k].id & 0xFFFFu) == cid) edge = dot(n, nrm(nb[k].id)) < E.edge.z;
+    }
+    if (!edge) return 0u;
+    // Auto Adaptive: the width at this distance (the curve between near and far), in render px
+    float x = pow(clamp((c.z - E.curve.x) / max(E.curve.y - E.curve.x, 1.0), 0.0, 1.0), E.edge.x);
+    float r = 0.5 * E.color.w * (float(g_size.y) / 1440.0) * mix(E.curve.z, E.curve.w, x);
+    r = min(r, float(RMAX)) + 0.5;
+    return e | (clamp(uint(r * 8.0 + 0.5), 1u, 255u) << 8);
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    g_size = ivec2(int(pc.pad & 0xFFFFu), int(pc.pad >> 16));
+    g_near = f.pp[5].w;
+    uint li = gl_LocalInvocationIndex;
+    if (li == 0u) s_any = 0u, s_lines = 0u;
+    barrier();
+    if (pc.pass == 0u) {
+        ivec2 o = ivec2(int(gl_WorkGroupID.x) * T0W - RMAX, int(gl_WorkGroupID.y) * T0H);
+        const uint RW = T0W + 2 * RMAX;
+        bool ortho = view_ortho(f); // (the editor's orthographic views: no outlines)
+        for (uint i = li; i < RW * T0H; i += 256u) {
+            uint s = ortho ? 0u : seed_at(o + ivec2(int(i % RW), int(i / RW)));
+            s_v[i] = s;
+            if (s != 0u) s_any = 1u;
+        }
+        barrier();
+        ivec2 lp = ivec2(int(li % T0W), int(li / T0W));
+        ivec2 p = o + ivec2(RMAX, 0) + lp;
+        if (any(greaterThanEqual(p, g_size))) return;
+        uint best = 0u;
+        if (s_any != 0u) {
+            float bv = 0.0;
+            uint row = uint(lp.y) * RW + uint(lp.x);
+            for (int k = 0; k <= 2 * RMAX; k++) {
+                uint s = s_v[row + uint(k)];
+                if (s == 0u) continue;
+                float R = float(s >> 8) / 8.0, dx = float(k - RMAX), v = R * R - dx * dx;
+                if (v > bv) bv = v, best = (s & 0xFFFFu) | (min(uint(v * 16.0 + 0.5), 4095u) << 16);
+            }
+        }
+        imageStore(u_h, p, uvec4(best));
+        return;
+    }
+    // pass 1: along y, then the color
+    ivec2 o = ivec2(int(gl_WorkGroupID.x) * T1W, int(gl_WorkGroupID.y) * T1H - RMAX);
+    const uint RH = T1H + 2 * RMAX;
+    for (uint i = li; i < RH * T1W; i += 256u) {
+        ivec2 q = o + ivec2(int(i % T1W), int(i / T1W));
+        uint v = all(greaterThanEqual(q, ivec2(0))) && all(lessThan(q, g_size)) ? imageLoad(u_h, q).r : 0u;
+        s_v[i] = v;
+        if (v != 0u) s_any = 1u;
+    }
+    barrier();
+    if (s_any == 0u) return;
+    ivec2 lp = ivec2(int(li % T1W), int(li / T1W));
+    ivec2 p = o + ivec2(0, RMAX) + lp;
+    bool inside = all(lessThan(p, g_size));
+    float bv = 0.0;
+    uint bs = 0u;
+    for (int k = 0; k <= 2 * RMAX && inside; k++) {
+        uint s = s_v[(uint(lp.y) + uint(k)) * T1W + uint(lp.x)];
+        if (s == 0u) continue;
+        float dy = float(k - RMAX), v = float(s >> 16) / 16.0 - dy * dy;
+        if (v > bv) bv = v, bs = s;
+    }
+    if (bs != 0u) {
+        OlEntry E = OlBuf(pc.instances).e[bs & 0xFFu];
+        float R = float((bs >> 8) & 0xFFu) / 8.0, d = sqrt(max(R * R - bv, 0.0));
+        float cov = clamp(R - d, 0.0, 1.0) * clamp((R - 0.5) * 2.0, 0.0, 1.0) * E.edge.w; // (thinner than a pixel: fainter, not aliased)
+        if (cov > 0.0) {
+            vec4 c = imageLoad(o_hdr, p);
+            imageStore(o_hdr, p, vec4(mix(c.rgb, E.color.rgb, cov), c.a));
+            if (cov > 0.5) atomicAdd(s_lines, 1u);
+        }
+    }
+    // (the line's pixels counted: the test's image measure, a share of the view)
+    barrier();
+    if (li == 0u && s_lines != 0u && (pc.vertices.x | pc.vertices.y) != 0u) atomicAdd(OlStats(pc.vertices).lines, s_lines);
+}

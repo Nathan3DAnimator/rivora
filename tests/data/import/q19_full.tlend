@@ -1,0 +1,283 @@
+TLENDER 97
+anim 1 30 1 24
+meshes 3
+mesh 4 1
+v -0.5 -0.5 0
+v 0.5 -0.5 0
+v 0.5 0.5 0
+v -0.5 0.5 0
+f 4 0 1 2 3
+t 0 0 0 1 0 1 1 0 1
+vgroups 1 0
+vg 0 Side.L
+w 1 1 2 1
+mesh 8 6
+v -0.5 -0.5 -0.5
+v 0.5 -0.5 -0.5
+v 0.5 0.5 -0.5
+v -0.5 0.5 -0.5
+v -0.5 -0.5 0.5
+v 0.5 -0.5 0.5
+v 0.5 0.5 0.5
+v -0.5 0.5 0.5
+f 4 0 3 2 1
+t 0 0 0 0 1 1 1 1 0
+f 4 4 5 6 7
+t 0 0 0 1 0 1 1 0 1
+f 4 0 1 5 4
+t 0 0 0 1 0 1 1 0 1
+f 4 1 2 6 5
+t 0 0 0 1 0 1 1 0 1
+f 4 2 3 7 6
+t 0 0 0 1 0 1 1 0 1
+f 4 3 0 4 7
+t 0 0 0 1 0 1 1 0 1
+mesh 6 2
+v -0.5 0 0
+v 0.5 0 0
+v -0.5 0 1
+v 0.5 0 1
+v -0.5 0 2
+v 0.5 0 2
+f 4 0 1 3 2
+t 0 0 0 1 0 1 0.5 0 0.5
+f 4 2 3 5 4
+t 0 0 0.5 1 0.5 1 1 0 1
+vgroups 2 0
+vg 0 Bone
+w 0 1 1 1 2 0.5 3 0.5
+vg 1 Bone.001
+w 2 0.5 3 0.5 4 1 5 1
+shapekeys 2 0 1 0 0 0 Key
+sk 1 0 1 0 0 0 0 0 0 Basis
+skg
+o
+sk 0 0 1 0 0 0 0 0.1 2 Smile
+skg
+o 4 0.2 0 0 5 -0.2 0 0
+materials 2
+material Bricks
+tree 9 9 -1 0 0 1
+node ShaderNodeTexBrick -600 0 0 0 0 0 0 4
+in 0 0 0 0
+in 0.8 0.3 0.2 1
+in 0.6 0.25 0.2 1
+in 0.2 0.2 0.2 1
+value 0 0 0 0
+ramp 0
+label
+node ShaderNodeRGBCurve -350 0 0 1 0 0 0 2
+in 1 0 0 0
+in 0.5 0.5 0.5 1
+value 0 0 0 0
+ramp 9 0 0 3 0 0 1 1 3 0 0 0 0 0 0 0 0.5 0.7 0 0 0 1 1 0 0 0 0 0 1 0 0 1 1 1 0 0 0 0 2 0 0 1 1 2 0 0
+label
+node ShaderNodeLightPath -600 -300 0 0 0 0 0 0
+value 0 0 0 0
+ramp 0
+label
+node ShaderNodeBlackbody -600 -450 0 0 0 0 0 1
+in 3200 0 0 0
+value 0 0 0 0
+ramp 0
+label
+node ShaderNodeMix -200 -200 0 2 0 0 0 7
+in 0.5 0 0 0
+in 0 0 0 0
+in 0 0 0 0
+in 0 0 0 0
+in 0 0 0 0
+in 0 0 0 1
+in 1 1 1 1
+value 0 0 0 0
+ramp 0
+label
+node ShaderNodeBsdfPrincipled 0 0 0 0 0 0 0 6
+in 0.8 0.8 0.8 1
+in 0 0 0 0
+in 0.5 0 0 0
+in 1.45 0 0 0
+in 1 0 0 0
+in 0 0 0 0
+value 0 0 0 0
+ramp 0
+label
+node ShaderNodeAmbientOcclusion -350 -600 0 0 0 0 0 3
+in 1 1 1 1
+in 1 0 0 0
+in 0 0 0 0
+value 0 0 0 0
+ramp 0
+label
+node ShaderNodeVolumeScatter 0 -400 0 0 0 0 0 3
+in 0.8 0.8 0.8 1
+in 1 0 0 0
+in 0 0 0 0
+value 0 0 0 0
+ramp 0
+label
+node ShaderNodeOutputMaterial 300 0 0 0 0 0 0 3
+in 0 0 0 0
+in 0 0 0 0
+in 0 0 0 0
+value 0 0 0 0
+ramp 0
+label
+link 0 0 1 1
+link 1 0 4 6
+link 2 0 4 0
+link 3 0 4 5
+link 4 2 5 0
+link 6 1 5 2
+link 5 0 8 0
+link 7 0 8 1
+link 0 1 6 0
+material Metal
+tree 6 5 -1 0 0 1
+node TlShaderNodeTexStones -600 0 0 0 0 0 0 6
+in 0 0 0 0
+in 5 0 0 0
+in 0.08 0 0 0
+in 0.6 0 0 0
+in 0.15 0 0 0
+in 1 0 0 0
+value 0 0 0 0
+ramp 0
+label
+node ShaderNodeTexImage -600 -300 0 1 0 0 0 1
+in 0 0 0 0
+value 0 0 0 0
+ramp 0
+image UVGrid
+label
+node ShaderNodeTexImage -600 -500 0 1 0 0 0 1
+in 0 0 0 0
+value 0 0 0 0
+ramp 0
+image textures/missing_q19.png
+label
+node ShaderNodeBsdfMetallic -200 0 0 0 1 0 0 8
+in 0.9 0.9 0.9 1
+in 1 1 1 1
+in 2.5 0 0 0
+in 3 0 0 0
+in 0.3 0 0 0
+in 0 0 0 0
+in 0 0 0 0
+in 0 0 0 0
+value 0 0 0 0
+ramp 0
+label
+node ShaderNodeAttribute -600 -700 0 0 0 0 0 0
+value 0 0 0 0
+ramp 0
+label
+attrname Col
+node ShaderNodeOutputMaterial 100 0 0 0 0 0 0 3
+in 0 0 0 0
+in 0 0 0 0
+in 0 0 0 0
+value 0 0 0 0
+ramp 0
+label
+link 0 3 3 0
+link 1 0 3 4
+link 4 2 3 5
+link 3 0 5 0
+link 2 1 3 6
+actions 1
+action 1 0 0 0 0 0 Bend
+fc 3 2
+fb Bone.001
+k 1 0 0 0 0 0 1
+k 25 0.38 0 0 0 0 1
+armatures 1
+armature 2
+bone -1 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 Bone
+pose 0 0 0 1 0 0 0 1 1 1
+bone 0 0 0 1 0 0 2 0 1 0 0 0 0 0 0 0 0 0 Bone.001
+pose 0 0 0 1 0 0 0 1 1 1
+con 8 1 0.25 0 0 0 0 0 0 1 1 1 0 0 0 0 -1 -1 -1 1 1 1 0 1
+ct
+cp
+cn LimitRot
+objects 8 active 0
+o 0 0 0 0 1 0.3 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.1 Plane
+slots 0 0 1 0
+mods 4
+md MIRROR 3 Mirror
+mp use_axis=1,0,0;use_mirror_merge=1;merge_threshold=0.001;use_mirror_vertex_groups=1
+md ARRAY 3 Array
+mp fit_type=FIXED_COUNT;count=3;use_relative_offset=1;relative_offset_displace=0,1.1,0;use_merge_vertices=0
+md SOLIDIFY 3 Solidify
+mp thickness=0.05;offset=-1;use_rim=1
+md BEVEL 3 Bevel
+mp width=0.02;segments=2
+o 0 0 3 0 2.5 0 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.1 Flag
+slots 0 0 1 1
+mods 1
+md CLOTH 3 Cloth
+mp quality=5
+o 0 1 -3 0 1 0 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.1 Cube
+slots 0 0 1 1
+mods 4
+md SUBSURF 3 Subdivision
+mp levels=2;render_levels=2;subdivision_type=CATMULL_CLARK;uv_smooth=NONE;use_creases=0
+md DISPLACE 3 Displace
+mp direction=NORMAL;strength=0.1;mid_level=0
+md DECIMATE 3 Decimate
+mp decimate_type=COLLAPSE;ratio=0.5
+md EDGE_SPLIT 3 EdgeSplit
+mp split_angle=0.5;use_edge_angle=1
+o 2 -1 0 -3 3 0.6 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 0.9 0.8 0.1 Lamp
+slots 0 0 0
+light 2 0.8 0.15 0.01 0 0.25 0.25
+o 1 -1 0 -6 1.5 1.4 0 0 1 1 1 0.8 0.8 0.8 1 0 35 1000 1 1 1 0.1 Cam
+slots 0 0 0
+o 3 -1 6 0 0 0 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.1 Rig
+slots 0 0 0
+arm 0
+anim -1 0 1 0
+o 0 2 6 0 0 0 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.1 Face
+slots 0 0 1 0
+parent 5 0 1 0 0 0 0 1 0 0 0 0 1 0 -6 0 0 1
+modifier 1 5 Armature
+mods 1
+md ARMATURE 3 Armature
+mp object=5
+o 4 -1 0 0 4 0 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.1 Marker
+slots 0 0 0
+rig 1 3 0 0
+pr 5 0 1 1 0 1 0 1
+prb Bone
+prn Switch
+dr 6 10 4 1 0 1 0 0 0
+drb
+drp key_blocks["Smile"].value
+dre clamp(var * 2, 0, 1)
+dv 1 0 5 0 3 1 -1 0 0 0
+dvn var
+dvb Bone.001
+dvp
+dvb
+dvp
+dr 5 10 4 1 0 1 0 0 0
+drb Bone.001
+drp con0
+dre var + False
+dv 0 0 5 10 0 0 -1 0 0 0
+dvn var
+dvb Bone
+dvp ["Switch"]
+dvb
+dvp
+dr -2 10 4 1 0 0 0 0 0
+drb
+drp render.fps
+dre 24
+rigend
+images 1
+img 0
+imgname UVGrid
+imgpath generated:1:1:256:256:0:0:0:1
+end

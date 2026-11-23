@@ -1,0 +1,32 @@
+TLENDER 90
+anim 1 250 1 24
+meshes 1
+mesh 6 2
+v -1 0 0
+v 0 0 0
+v 1 0 0
+v -1 0 1
+v 0 0 1
+v 1 0 1
+f 4 0 1 4 3
+t 0 0 0 0.5 0 0.5 1 0 1
+f 4 1 2 5 4
+t 0 0.5 0 1 0 1 1 0.5 1
+vgroups 1 0
+vg 3 Top
+w 3 1 4 0.5 5 1
+shapekeys 3 0 1 0 0 0 Key
+sk 1 0 1 0 0 0 0 0 0 Basis
+skg
+o
+sk 0.25 0 1 0 0 0 0 0.1 3 Up
+skg Top
+o 3 0 0 0.5 4 0 0 0.5 5 0 0 0.5
+sk 0 0 1 1 0 0 0 0.2 3 Wide
+skg
+o 3 -0.3 0 0.5 4 0 0 0.5 5 0.3 0 0.5
+materials 0
+objects 1 active 0
+o 0 0 0 0 0 0 0 0 1 1 1 0.8 0.8 0.8 1 0 50 1000 1 1 1 0.100000001 Face
+slots 0 0 0
+end

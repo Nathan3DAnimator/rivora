@@ -1,0 +1,23 @@
+#version 460
+// The decals' tiles (M6, render.c, decal.c; notas-dev/materiais.md "Decals"): a thread per 16 px tile of the render
+// lists the decals whose screen rectangle (the CPU's, from their boxes' corners) touches it, up to DECAL_TILE_MAX, in
+// their order (sort order, then size: decal.c). mesh.frag (RE_EXT) reads its pixel's tile and tests each box.
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    uvec2 t = gl_GlobalInvocationID.xy;
+    if (t.x >= f.decal_tiles_x || t.y >= f.decal_tiles_y) return;
+    vec2 lo = vec2(t) * float(DECAL_TILE), hi = lo + float(DECAL_TILE);
+    uint base = (t.y * f.decal_tiles_x + t.x) * (DECAL_TILE_MAX + 1u), n = 0u;
+    UintBuf o = UintBuf(f.decal_tiles);
+    for (uint i = 0u; i < f.decal_count && n < DECAL_TILE_MAX; i++) {
+        vec4 r = DecalBuf(f.decals).d[i].rect;
+        if (r.z < lo.x || r.x > hi.x || r.w < lo.y || r.y > hi.y) continue;
+        o.v[base + 1u + n] = i;
+        n++;
+    }
+    o.v[base] = n;
+}

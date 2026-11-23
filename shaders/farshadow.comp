@@ -1,0 +1,53 @@
+#version 460
+// (Q21) The terrain's far shadow (farview.c, notas-dev/visao-distante.md): per texel of the landscapes' heightfield, the
+// steepest rise toward the sun along its azimuth (tan of the angle over the horizontal) and how far it is. Marched in
+// steps growing 9% each (a texel first, the whole field after ~90), heights read bilinear. Run when the sun turned or
+// the landscapes changed (a still sun: never). mesh.frag reads it past the sun's virtual maps (farview.glsl).
+// pc.frame: the parameters (grid: origin xy cm, texel cm, res; sun: the direction toward it), pc.vertices: the buffer
+// (res^2 heights in cm, then res^2 pairs of words written here, two halves each: the steepest rise nearer than sun.w
+// cm and its distance, then the one past it: inside the sun's virtual maps only the far one is read, the maps draw the near)
+#include "common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer FarParamBuf { vec4 grid; vec4 sun; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer FarBuf { float v[]; };
+
+float height_at(FarBuf b, uint res, vec2 g) {
+    g = clamp(g, vec2(0.0), vec2(float(res - 1u)) - 0.001);
+    uvec2 i = uvec2(g);
+    vec2 f = g - vec2(i);
+    uint a = i.y * res + i.x;
+    return mix(mix(b.v[a], b.v[a + 1u], f.x), mix(b.v[a + res], b.v[a + res + 1u], f.x), f.y);
+}
+
+void main() {
+    FarParamBuf P = FarParamBuf(pc.frame);
+    FarBuf B = FarBuf(pc.vertices);
+    uint res = uint(P.grid.w);
+    uvec2 id = gl_GlobalInvocationID.xy;
+    if (id.x >= res || id.y >= res) return;
+    vec3 s = P.sun.xyz;
+    float hl = length(s.xy);
+    float best = -1e4, dist = 0.0, bestf = -1e4, distf = 0.0;
+    float split = P.sun.w;
+    if (s.z > -0.2 && hl > 1e-4) { // (the sun overhead: nothing rises to it; under the horizon: the map isn't read)
+        vec2 dir = s.xy / hl; // (texels and cm along the same axes)
+        float texel = P.grid.z;
+        float h0 = B.v[id.y * res + id.x] + 30.0; // (a lift: the texel's own ground doesn't shade it)
+        vec2 g0 = vec2(id);
+        float d = 1.0;
+        for (int k = 0; k < 96; k++) {
+            vec2 g = g0 + dir * d;
+            if (any(lessThan(g, vec2(0.0))) || any(greaterThan(g, vec2(float(res - 1u))))) break;
+            float t = (height_at(B, res, g) - h0) / (d * texel);
+            if (d * texel < split) {
+                if (t > best) best = t, dist = d * texel * 0.01;
+            } else if (t > bestf) bestf = t, distf = d * texel * 0.01;
+            d *= 1.09;
+        }
+    }
+    UintBuf o = UintBuf(addr_add(pc.vertices, res * res * 4u));
+    uint at = (id.y * res + id.x) * 2u;
+    o.v[at] = packHalf2x16(vec2(clamp(best, -60000.0, 60000.0), dist));
+    o.v[at + 1u] = packHalf2x16(vec2(clamp(bestf, -60000.0, 60000.0), distf));
+}

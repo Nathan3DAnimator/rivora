@@ -1,0 +1,159 @@
+#version 460
+// GI probes, step 2: the rays into the probe's octahedral tiles. One workgroup per probe updated this frame, one
+// thread per interior texel (8x8). Irradiance: the cosine-weighted mean of the rays' radiance (E / pi); distance:
+// the mean and mean square of the hit distance (the Chebyshev visibility test). The history lives in the probe, in
+// world space: it doesn't move with the camera, so there is no ghosting. Its weight (hysteresis) drops where the
+// light changed a lot (fast response), and a probe that just entered the grid (a new world cell) starts from zero.
+#include "common.glsl"
+#include "gi.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 5, rgba16f) uniform coherent image2D u_irr;
+layout(set = 0, binding = 6, rg16f) uniform coherent image2D u_dist;
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer RayBuf { vec4 r[]; };
+// Per probe slot: the world cell it holds (w: 1 once written), and its light statistics: the running mean of its rays'
+// luminance (x) and of how far a frame strays from it (y: the noise), which tell a real change from noise
+struct ProbeState { ivec4 cell; vec4 stats; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer StateBuf { ProbeState s[]; };
+
+shared vec4 s_rays[64];
+shared vec3 s_dirs[64];
+shared bool s_reset;
+shared float s_hyst, s_valid;
+
+uint hash(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+float rnd(inout uint s) { s = hash(s); return float(s >> 8) / 16777216.0; }
+mat3 frame_rotation(uint frame) { // the same as probe_trace.comp
+    uint s = frame * 747796405u + 1u;
+    float u1 = rnd(s), u2 = rnd(s), u3 = rnd(s);
+    vec4 q = vec4(sqrt(1.0 - u1) * sin(6.2831853 * u2), sqrt(1.0 - u1) * cos(6.2831853 * u2),
+                  sqrt(u1) * sin(6.2831853 * u3), sqrt(u1) * cos(6.2831853 * u3));
+    float x = q.x, y = q.y, z = q.z, w = q.w;
+    return mat3(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + w * z), 2.0 * (x * z - w * y),
+                2.0 * (x * y - w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + w * x),
+                2.0 * (x * z + w * y), 2.0 * (y * z - w * x), 1.0 - 2.0 * (x * x + y * y));
+}
+vec3 fibonacci(uint i, uint n) {
+    float phi = 2.399963229728653 * float(i);
+    float z = 1.0 - (2.0 * float(i) + 1.0) / float(n);
+    float r = sqrt(max(1.0 - z * z, 0.0));
+    return vec3(r * cos(phi), r * sin(phi), z);
+}
+
+void main() {
+    FrameBuf f = FrameBuf(pc.frame);
+    int cascade = int(pc.pad & 1u); // (A2: 1 the far grid, gi.glsl probe_grid; as probe_trace.comp)
+    ProbeGrid G = probe_grid(f, cascade);
+    ivec3 dims = G.dims;
+    uint total = uint(dims.x * dims.y * dims.z);
+    uint stride = cascade == 0 ? uint(f.probe_dims.w) >> 8 : 16u, phase = cascade == 0 ? uint(f.probe_dims.w) & 0xFFu : f.frame_index & 15u;
+    uint pi = gl_WorkGroupID.x * stride + phase;
+    if (pi >= total) return;
+    uint nrays = uint(f.probe_min.w);
+    uint tid = gl_LocalInvocationIndex;
+    ivec3 local = ivec3(int(pi) % dims.x, (int(pi) / dims.x) % dims.y, int(pi) / (dims.x * dims.y));
+    ivec3 cell = G.lo + local;
+    ivec3 slot = probe_slot(cell, dims); // (gi.glsl: never a modulo of a negative number)
+    uint slot_index = G.state_base + uint(slot.x + dims.x * (slot.y + dims.y * slot.z));
+    uint ray_base = cascade == 0 ? 0u : total * 32u;
+    mat3 rot = frame_rotation(f.frame_index);
+    if (tid < nrays) {
+        s_rays[tid] = RayBuf(f.probe_rays).r[ray_base + gl_WorkGroupID.x * nrays + tid];
+        s_dirs[tid] = normalize(rot * fibonacci(tid, nrays));
+    }
+    barrier(); // thread 0 reads every ray below
+    if (tid == 0u) {
+        StateBuf st = StateBuf(f.probe_state);
+        ProbeState ps = st.s[slot_index];
+        s_reset = ps.cell.xyz != cell || ps.cell.w == 0;
+        // the slots' check (gi.c, the measures): a slot holds one cell of the grid at a time, so another cell found here
+        // that is inside the grid too means two probes share the slot (they would reset each other at every update).
+        // Counted after the last slot; never during a bake (its own grid)
+        if ((f.gi_flags & GI_BAKING) == 0u && ps.cell.w != 0 && ps.cell.xyz != cell &&
+            all(greaterThanEqual(ps.cell.xyz, G.lo)) && all(lessThan(ps.cell.xyz, G.lo + dims)))
+            atomicAdd(st.s[total].cell.x, 1);
+        // the rays' mean luminance against the probe's running mean and noise: only a change well above the noise (a light
+        // switched, an object moved in front) shortens the history; noise alone never does (that was the flicker)
+        float lum = 0.0, back = 0.0;
+        for (uint r = 0u; r < nrays; r++) {
+            lum += dot(s_rays[r].rgb, vec3(0.2126, 0.7152, 0.0722));
+            back += s_rays[r].w < 0.0 ? 1.0 : 0.0;
+        }
+        lum /= float(nrays);
+        // stats: x the running mean of the rays' luminance, y its noise, z the updates averaged, w deviations in a row. The
+        // history is the running mean of the updates since the light changed (1, 1/2, 1/3... of weight, up to 64: the
+        // surface cache's scheme): lit at the first update, still after; three deviations in a row the same way (a light
+        // switched, an object moved) shorten it to a quarter. A bake keeps its own running mean (probe_params.y)
+        float h = f.probe_params.y;
+        if (s_reset) {
+            ps.stats = vec4(lum, lum * 0.25, 1.0, 0.0);
+        } else if ((f.gi_flags & GI_BAKING) == 0u) {
+            float d = lum - ps.stats.x, cnt = ps.stats.z, streak = ps.stats.w;
+            bool off = abs(d) > 3.0 * ps.stats.y + 0.05 * ps.stats.x + 1e-9;
+            streak = off ? (streak * d > 0.0 ? streak + sign(d) : sign(d)) : 0.0;
+            if (abs(streak) >= 3.0) cnt = max(1.0, floor(cnt * 0.25)), streak = 0.0;
+            h = cnt / (cnt + 1.0);
+            ps.stats.x = mix(lum, ps.stats.x, h);
+            ps.stats.y = mix(abs(d), ps.stats.y, 0.9);
+            ps.stats.z = min(cnt + 1.0, 64.0);
+            ps.stats.w = streak;
+        }
+        st.s[slot_index] = ProbeState(ivec4(cell, 1), ps.stats);
+        s_hyst = s_reset ? 0.0 : h;
+        // inside an object or under a floor: a quarter of its rays see backs (DDGI); left out of the sampling
+        s_valid = back > float(nrays) * 0.25 ? 0.0 : 1.0;
+    }
+    barrier();
+
+    ivec2 tile = ivec2(slot.x + slot.z * dims.x, slot.y + G.tile_y) * 10; // PROBE_TILE (rt.glsl)
+    ivec2 t = ivec2(gl_LocalInvocationID.xy);
+    vec3 dir = oct_decode_f((vec2(t) + 0.5) / 4.0 - 1.0);
+    vec3 irr = vec3(0.0);
+    float wi = 0.0;
+    vec2 dist = vec2(0.0);
+    float wd = 0.0;
+    float maxd = G.spacing * 1.5;
+    for (uint r = 0u; r < nrays; r++) {
+        float c = max(dot(dir, s_dirs[r]), 0.0);
+        irr += s_rays[r].rgb * c;
+        wi += c;
+        float d = min(abs(s_rays[r].w), maxd);
+        float cd = pow(c, 50.0);
+        dist += vec2(d, d * d) * cd;
+        wd += cd;
+    }
+    irr = wi > 0.0 ? irr / wi : vec3(0.0);
+    dist = wd > 0.0 ? dist / wd : vec2(maxd, maxd * maxd);
+    ivec2 px = tile + 1 + t;
+    float h = s_hyst;
+    irr *= GI_STORE; // the atlas's scale (gi.glsl)
+    vec4 old = imageLoad(u_irr, px);
+    // a texel whose light grew or fell fourfold (a light switched in one direction only) responds fast too
+    float lo = max(max(old.r, old.g), old.b), ln = max(max(irr.r, irr.g), irr.b);
+    if (!s_reset && (f.gi_flags & GI_BAKING) == 0u && (ln > 4.0 * lo + 1e-5 || lo > 4.0 * ln + 1e-5)) h = min(h, 0.75);
+    vec2 old_d = imageLoad(u_dist, px).rg;
+    // alpha: the probe's validity (gi.glsl weighs it), with the same history
+    imageStore(u_irr, px, vec4(mix(irr, old.rgb, h), s_reset ? s_valid : mix(s_valid, old.a, h)));
+    imageStore(u_dist, px, vec4(mix(dist, old_d, s_reset ? 0.0 : max(0.95, s_hyst)), 0.0, 0.0));
+    memoryBarrierImage();
+    barrier();
+
+    // The 1-texel border, copied from the interior so bilinear filtering wraps around the octahedron
+    if (tid < 36u) {
+        ivec2 b, s;
+        if (tid < 8u) { b = ivec2(1 + tid, 0); s = ivec2(8 - tid, 1); }
+        else if (tid < 16u) { uint k = tid - 8u; b = ivec2(1 + k, 9); s = ivec2(8 - k, 8); }
+        else if (tid < 24u) { uint k = tid - 16u; b = ivec2(0, 1 + k); s = ivec2(1, 8 - k); }
+        else if (tid < 32u) { uint k = tid - 24u; b = ivec2(9, 1 + k); s = ivec2(8, 8 - k); }
+        else if (tid == 32u) { b = ivec2(0, 0); s = ivec2(8, 8); }
+        else if (tid == 33u) { b = ivec2(9, 0); s = ivec2(1, 8); }
+        else if (tid == 34u) { b = ivec2(0, 9); s = ivec2(8, 1); }
+        else { b = ivec2(9, 9); s = ivec2(1, 1); }
+        imageStore(u_irr, tile + b, imageLoad(u_irr, tile + s));
+        imageStore(u_dist, tile + b, imageLoad(u_dist, tile + s));
+    }
+}

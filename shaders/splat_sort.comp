@@ -1,0 +1,81 @@
+#version 460
+// Gaussian Splatting's sort (A9.5d, splat.glsl, splat.c): back to front, by a counting sort on a 16-bit key of the view
+// depth (log spaced from 10 cm to 100 km: finer near), three passes (pc.pass):
+//   0 each Gaussian of the actor pc.pad: culled (behind, outside the view with its 3 sigmas' margin, too faint), its
+//     key into the histogram (atomics), its key and value kept (value: the actor << 26 | its index; culled: no key)
+//   1 one workgroup: the histogram's exclusive prefix (each thread 64 bins), the draw's arguments (6 vertices a visible)
+//   2 each kept one to its place: the prefix of its key plus a slot taken by an atomic
+#include "common.glsl"
+#include "splat.glsl"
+
+layout(local_size_x = 256) in;
+shared uint s_sum[1024];
+
+void main() {
+    SplatFrame S = SplatFrameBuf(pc.instances).f;
+    FrameBuf f = FrameBuf(pc.frame);
+    SplatUint keys = SplatUint(S.keys), vals = SplatUint(S.vals), hist = SplatUint(S.hist);
+    if (pc.pass == 0u) {
+        SplatActor A = SplatActorBuf(S.actors).a[pc.pad];
+        uint i = gl_GlobalInvocationID.x;
+        if (i >= A.count) return;
+        uint g = A.first + i;
+        SplatGpu sp = SplatBuf(S.data).s[g];
+        uint key = 0xFFFFFFFFu;
+        vec3 w = splat_world(A, sp.pos_op.xyz);
+        vec3 rel = w - f.camera_pos.xyz;
+        float z = dot(rel, f.camera_fwd.xyz);
+        // its size: the covariance's largest axis, roughly (the trace), in the world
+        float sc = length(A.rows[0].xyz);
+        float r3 = 3.0 * sqrt(max(sp.cov0.x + sp.cov0.w + sp.cov1.y, 0.0)) * sc;
+        if (z > 1.0 - r3 && sp.pos_op.w * A.look.y > 1.0 / 255.0) {
+            vec4 c = f.view_proj * vec4(w, 1.0);
+            float m = 1.2 + r3 / max(abs(c.w), 1.0) * 2.0; // (the margin: its 3 sigmas on the screen)
+            if (c.w > 0.0 && all(lessThan(abs(c.xy / c.w), vec2(m)))) {
+                float k = clamp((log2(max(z, 10.0)) - 3.3219) / (23.2534 - 3.3219), 0.0, 1.0); // (log2 10 cm .. 10^7 cm)
+                key = 65535u - uint(k * 65535.0); // (far first)
+                atomicAdd(hist.v[key], 1u);
+                atomicAdd(hist.v[SPLAT_BINS], 1u);
+            }
+        }
+        keys.v[g] = key;
+        vals.v[g] = (pc.pad << SPLAT_ACTOR_SHIFT) | i;
+        return;
+    }
+    if (pc.pass == 1u) { // (1024 threads, each 64 bins)
+        uint t = gl_LocalInvocationID.x * 4u; // (local size 256: each thread does 4 of the 1024 rows)
+        for (uint r = 0u; r < 4u; r++) {
+            uint row = t + r, sum = 0u;
+            for (uint b = 0u; b < 64u; b++) sum += hist.v[row * 64u + b];
+            s_sum[row] = sum;
+        }
+        barrier();
+        // Hillis-Steele inclusive scan over the 1024 rows (4 a thread)
+        for (uint o = 1u; o < 1024u; o <<= 1u) {
+            uint v[4];
+            for (uint r = 0u; r < 4u; r++) v[r] = t + r >= o ? s_sum[t + r - o] : 0u;
+            barrier();
+            for (uint r = 0u; r < 4u; r++) s_sum[t + r] += v[r];
+            barrier();
+        }
+        for (uint r = 0u; r < 4u; r++) {
+            uint row = t + r, run = row > 0u ? s_sum[row - 1u] : 0u;
+            for (uint b = 0u; b < 64u; b++) {
+                uint c = hist.v[row * 64u + b];
+                hist.v[row * 64u + b] = run;
+                run += c;
+            }
+        }
+        if (gl_LocalInvocationID.x == 0u) { // the draw's arguments: vertexCount, instanceCount, firstVertex, firstInstance
+            uint n = hist.v[SPLAT_BINS];
+            hist.v[SPLAT_BINS + 1u] = 6u * n, hist.v[SPLAT_BINS + 2u] = 1u, hist.v[SPLAT_BINS + 3u] = 0u, hist.v[SPLAT_BINS + 4u] = 0u;
+        }
+        return;
+    }
+    uint g = gl_GlobalInvocationID.x; // pass 2
+    if (g >= S.total) return;
+    uint key = keys.v[g];
+    if (key == 0xFFFFFFFFu) return;
+    uint at = atomicAdd(hist.v[key], 1u);
+    SplatUint(S.sorted).v[at] = vals.v[g];
+}

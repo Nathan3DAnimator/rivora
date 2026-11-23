@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Android game (notas-dev/android.md): android/package_apk.ps1 fills the @...@ fields from the project's settings
+     (its package name, its title, its orientation; ARCore's with -AR, the Meta Quest's VR with -Quest: notas-dev/xr.md)
+     and passes versionCode/versionName to aapt2. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.realengine.game">
+
+    <!-- Vulkan 1.3 (dynamic rendering, synchronization2, buffer device address) -->
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x403000" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen.multitouch.distinct" android:required="false" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+@AR_MANIFEST@
+@VR_MANIFEST@
+
+    <application
+        android:label="@TITLE@"
+        android:icon="@mipmap/ic_launcher"
+        android:hasCode="true"
+        android:extractNativeLibs="true"
+        android:largeHeap="true"
+        android:isGame="true"
+        android:appCategory="game"
+        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+@AR_APPLICATION@
+@VR_APPLICATION@
+
+        <activity
+            android:name="com.realengine.game.GameActivity"
+            android:label="@TITLE@"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="@ORIENTATION@"
+            android:windowSoftInputMode="adjustNothing|stateHidden"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection">
+            <meta-data android:name="android.app.lib_name" android:value="realengine_game" />
+@VR_ACTIVITY@
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+@VR_CATEGORY@
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
