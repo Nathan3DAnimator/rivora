@@ -320,8 +320,8 @@ bool xr_init(bool sim) {
         XrInstanceCreateInfoAndroidKHR aci = { XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR, NULL, X.android_vm, X.android_activity };
         ci.next = &aci;
 #endif
-        snprintf(ci.applicationInfo.applicationName, sizeof ci.applicationInfo.applicationName, "Real Engine");
-        snprintf(ci.applicationInfo.engineName, sizeof ci.applicationInfo.engineName, "Real Engine");
+        snprintf(ci.applicationInfo.applicationName, sizeof ci.applicationInfo.applicationName, "Rivora Engine");
+        snprintf(ci.applicationInfo.engineName, sizeof ci.applicationInfo.engineName, "Rivora Engine");
         ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
         ci.enabledExtensionCount = ne, ci.enabledExtensionNames = exts;
         if (p_xrCreateInstance && XR_SUCCEEDED(p_xrCreateInstance(&ci, &X.instance))) {

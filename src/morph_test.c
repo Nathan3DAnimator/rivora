@@ -79,7 +79,7 @@ static bool write_gltf(const char* dir, char* path, size_t cap, bool anim) {
                                 "\"samplers\":[{\"input\":5,\"output\":6,\"interpolation\":\"LINEAR\"}]}]");
     }
     fprintf(f,
-            "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Real Engine morph test\"},\"scenes\":[{\"nodes\":[0]}],"
+            "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Rivora Engine morph test\"},\"scenes\":[{\"nodes\":[0]}],"
             "\"nodes\":[{\"name\":\"%s\",\"mesh\":0}],"
             "\"meshes\":[{\"name\":\"Grid\",\"primitives\":[{\"attributes\":{\"POSITION\":0,\"NORMAL\":1},\"indices\":4,"
             "\"targets\":[{\"POSITION\":2},{\"POSITION\":3}]}],\"weights\":[0.5,0.0],\"extras\":{\"targetNames\":[\"Wave\",\"Bulge\"]}}],"

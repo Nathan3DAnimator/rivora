@@ -85,7 +85,7 @@ bool sublevels_write(const char* level_path, const SublevelSet* set) {
     snprintf(tmp, sizeof tmp, "%s.tmp", p);
     FILE* f = re_fopen(tmp, "wb");
     if (!f) return false;
-    fprintf(f, "# Real Engine sublevels (Window > Levels): name|visible|initially loaded|lighting level|locked|color|lighting blend\n");
+    fprintf(f, "# Rivora Engine sublevels (Window > Levels): name|visible|initially loaded|lighting level|locked|color|lighting blend\n");
     for (uint32_t i = 0; i < set->n; i++) {
         const Sublevel* s = &set->s[i];
         fprintf(f, "%s|%d|%d|%d|%d|%.3f %.3f %.3f|%.3f\n", s->name, s->visible, s->initially_loaded, s->lighting, s->locked, s->color[0], s->color[1], s->color[2], s->weight);

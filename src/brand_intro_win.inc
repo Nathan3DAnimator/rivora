@@ -181,7 +181,7 @@ static DWORD WINAPI li_thread(LPVOID arg) {
     int W = (int)(620.0f * dpi), H = (int)(480.0f * dpi), L = (int)(250.0f * dpi);
     LiMask logo = { 0 }, logo_sh = { 0 }, title = { 0 }, title_sh = { 0 }, ver = { 0 }, glow = { 0 };
     int lpad = (int)(24.0f * dpi);
-    bool ok = li_logo(L, lpad, &logo) && li_copy(&logo, &logo_sh) && li_text("Real Engine", (int)(44.0f * dpi), &title) && li_copy(&title, &title_sh);
+    bool ok = li_logo(L, lpad, &logo) && li_copy(&logo, &logo_sh) && li_text("Rivora Engine", (int)(44.0f * dpi), &title) && li_copy(&title, &title_sh);
     char vs[48];
     snprintf(vs, sizeof vs, "%s", RE_VERSION_STRING);
     ok = ok && li_text(vs, (int)(19.0f * dpi), &ver);
@@ -214,7 +214,7 @@ static DWORD WINAPI li_thread(LPVOID arg) {
             x = (wa.left + wa.right - W) / 2, y = (wa.top + wa.bottom - H) / 2;
         }
         if (g_li.background) x = GetSystemMetrics(SM_XVIRTUALSCREEN) - W - 200, y = GetSystemMetrics(SM_YVIRTUALSCREEN) + 40;
-        wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | (g_li.background || g_li.mon_w > 0 ? WS_EX_NOACTIVATE : WS_EX_TOPMOST), L"RealEngineIntro", L"Real Engine", WS_POPUP,
+        wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | (g_li.background || g_li.mon_w > 0 ? WS_EX_NOACTIVATE : WS_EX_TOPMOST), L"RealEngineIntro", L"Rivora Engine", WS_POPUP,
                               x, y, W, H, NULL, NULL, wc.hInstance, NULL);
         BITMAPINFO bi;
         memset(&bi, 0, sizeof bi);

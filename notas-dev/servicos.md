@@ -496,10 +496,10 @@ Pedido: "deixar a engine pronta para distribuição open source gratuita, no meu
   pessoal, nome do computador e e-mails). O Worker já tem limite por IP (12 por hora com o KV `RATE`).
 - **`README.md`** (pt/en): o que é, como compilar, avisos (sem afiliação com a Epic), site.
 - **Pacotes**: `make_dist.ps1` põe LICENSE, THIRD_PARTY_NOTICES.md, PRIVACY.md e README.md ao lado do editor; o
-  Empacotar Jogo põe `RealEngine_LICENSE.txt` e `THIRD_PARTY_NOTICES.md` ao lado de todo jogo (de uma build, da raiz do
+  Empacotar Jogo põe `Rivora_LICENSE.txt` e `THIRD_PARTY_NOTICES.md` ao lado de todo jogo (de uma build, da raiz do
   repositório).
 - **Doação**: Ajuda > Apoiar a Real Engine (Doar) e o botão no Sobre abrem `[support] donate_url` do `endpoints.ini`
-  (https://createanimateplay.com; vazio esconde o item). O Sobre diz a licença, "sem afiliação com a Epic" e abre os
+  (hoje https://createanimateplay.nathan3danimator.workers.dev/#doar: o domínio createanimateplay.com ainda não foi comprado; ao comprá-lo, trocar aqui; vazio esconde o item). O Sobre diz a licença, "sem afiliação com a Epic" e abre os
   avisos.
 - **Marcas da Epic fora da interface**: MetaSound virou **Sound Graph** ("Grafo de Som"; a pasta de dados
   `/Content/Audio/MetaSounds` ficou, é dado dos projetos), Nanite Tessellation virou **Geometry Tessellation** (os
@@ -518,3 +518,26 @@ Pedido: "deixar a engine pronta para distribuição open source gratuita, no meu
   texturas procedurais dos nós seguem o kernel do Cycles (Apache 2.0): creditado no THIRD_PARTY_NOTICES.md com a licença
   (`data/licenses/Apache-2.0.txt`), assim como as declarações do OpenXR.
 - **Falta (do usuário)**: busca de marca do nome "Real Engine" (ou um nome novo).
+
+## Real Engine -> Rivora Engine (2026-11-23)
+Pedido: o nome novo (o "Real Engine" lembrava "Unreal" e "Reality Engine"; "Rivora" é inventado: marca mais forte).
+- **O que o usuário vê**: 97 textos de `src/` (títulos, menus, Sobre, intro, Project Browser, crash, atualizador; as
+  chaves de tradução mudam junto), "© 2026 Rivora Engine" no splash (sem "todos os direitos reservados": é MIT), pasta
+  padrão de projetos novos `Documentos\Rivora Projects`, recurso de versão do .exe, README/PRIVACY/avisos, artigos.
+- **Executáveis**: os alvos do CMake mantêm os nomes (os testes `COMMAND realengine` rodam o `rivora.exe`), os arquivos
+  mudam por `OUTPUT_NAME`: `rivora.exe`, `rivora_game.exe`, `rivora_updater.exe`. O alvo `realengine_legacy`
+  (`src/legacy_launcher.c`, 93 KB) gera o `realengine.exe` que só abre o `rivora.exe` com os mesmos argumentos: os
+  atalhos das instalações antigas e o atualizador da 0.49 (que exige o `realengine.exe` no pacote e o abre ao fim).
+- **Pasta do usuário**: `%APPDATA%\Rivora` e `%LOCALAPPDATA%\Rivora`; na primeira vez o `%APPDATA%\RealEngine` é
+  copiado (preferências, layouts, temas, base offline do Assistente, outbox; o cache local começa do zero).
+- **Pacote**: `make_dist.ps1` gera `Rivora-<versão>-win64.zip` e uma cópia `RealEngine-<versão>-win64.zip` (mesmos bytes,
+  a mesma assinatura; o `.sha256` com o outro nome): a 0.49 procura `RealEngine-*`, a 0.50 em diante `Rivora-*`
+  (`endpoints.ini [update] asset`). O atualizador aceita tags `rivora`/`realengine`.
+- **Ficam de propósito** (dados e compatibilidade): o formato `"RealEngine Material"`, os nós `RealEngine*`, a API dos
+  scripts (`using RealEngine;`, `from realengine import *`, `realengine.h`), o id Android padrão `com.realengine.*`
+  (mudar trocaria o id de apps publicados), `librealengine_game.so`, as variáveis `REALENGINE_*`, o prefixo `[RealEngine]`
+  dos logs (os testes), o `produto = realengine` e "- Produto: Real Engine" dos relatórios (Worker e visualizador), os
+  repositórios de releases e do Assistente (os clientes antigos os leem), a pasta `RealEngine/` e o `RealEngine.md`.
+- **Repositórios**: `rivora-dev` (privado, histórico) e `rivora` (público, `publish_source.ps1`).
+- **Testes**: os 21 ligados (Assistente, dicas, traduções, empacotar, layouts antigos, intro, projetos) passam; o
+  `realengine.exe` abre o `rivora.exe` com os argumentos (`--preload-test` gravou o arquivo).

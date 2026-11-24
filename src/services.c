@@ -420,7 +420,7 @@ static void update_window(Editor* ed) {
     bool signed_ok = endpoints_get("update", "pubkey")[0] != 0;
     switch (st) {
     case UPD_CHECKING: igTextDisabled("%s", TR("Checking...")); break;
-    case UPD_NONE: igTextUnformatted(TR("Real Engine is up to date."), NULL); break;
+    case UPD_NONE: igTextUnformatted(TR("Rivora Engine is up to date."), NULL); break;
     case UPD_ERROR: igTextWrapped(TR("Could not check: %s"), U.msg); break;
     case UPD_AVAILABLE:
     case UPD_DOWNLOADING:
@@ -489,6 +489,6 @@ void services_on_exit(Editor* ed) {
     if (re_atomic_load(&U.state) != UPD_READY) return;
     char work[1024], exe[1024], err[256];
     if (update_work_dir(work, sizeof work) && update_exe_dir(exe, sizeof exe) &&
-        !update_launch_installer(work, &U.stage, exe, "realengine.exe", err, sizeof err))
+        !update_launch_installer(work, &U.stage, exe, "rivora.exe", err, sizeof err))
         printf("[RealEngine] The installer did not start: %s\n", err);
 }

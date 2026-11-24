@@ -133,8 +133,8 @@ static int write_thread(void* arg) {
     FILE* f = re_fopen(j->path, "wb");
     if (f) {
         setvbuf(f, NULL, _IOFBF, 1 << 20);
-        fputs("{\"displayTimeUnit\":\"ms\",\"otherData\":{\"engine\":\"Real Engine\"},\"traceEvents\":[\n", f);
-        fputs("{\"ph\":\"M\",\"name\":\"process_name\",\"pid\":1,\"tid\":0,\"args\":{\"name\":\"Real Engine\"}}", f);
+        fputs("{\"displayTimeUnit\":\"ms\",\"otherData\":{\"engine\":\"Rivora Engine\"},\"traceEvents\":[\n", f);
+        fputs("{\"ph\":\"M\",\"name\":\"process_name\",\"pid\":1,\"tid\":0,\"args\":{\"name\":\"Rivora Engine\"}}", f);
         for (uint32_t k = 0; k < j->ntracks; k++) {
             fprintf(f, ",\n{\"ph\":\"M\",\"name\":\"thread_name\",\"pid\":1,\"tid\":%u,\"args\":{\"name\":", k);
             put_name(f, j->names[k] ? j->names[k] : "Thread");

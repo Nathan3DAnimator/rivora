@@ -644,7 +644,7 @@ static void gather_sysinfo(void) {
 #endif
 
 static void program_info(Buf* b) {
-    bprintf(b, "- **Versão**: Real Engine %s, commit `%s`", RE_VERSION_STRING, RE_COMMIT);
+    bprintf(b, "- **Versão**: Rivora Engine %s, commit `%s`", RE_VERSION_STRING, RE_COMMIT);
 #ifdef NDEBUG
     bput(b, ", build Release");
 #else
@@ -939,7 +939,7 @@ static void module_of(DWORD64 addr, char* name, size_t cap, DWORD64* base) {
     }
 }
 
-// One frame as text: "função + 0x1a  src/mesh.c:123  [realengine.exe+0x1234]". A return address is looked up one byte
+// One frame as text: "função + 0x1a  src/mesh.c:123  [rivora.exe+0x1234]". A return address is looked up one byte
 // back (the call, not the next statement).
 static void describe_frame(DWORD64 addr, bool is_return, char* out, size_t cap) {
     char mod[256];
@@ -1219,10 +1219,10 @@ static void write_report(void) {
     crash_timestamp(stamp, sizeof stamp);
     stamp[10] = ' ';
     stamp[13] = stamp[16] = ':';
-    out_puts(o, "# Real Engine: relatório de crash\n\n");
+    out_puts(o, "# Rivora Engine: relatório de crash\n\n");
     out_puts(o, "> Para corrigir: \"Onde\" e \"Pilha da thread que travou\" dizem a função e a linha; \"Últimas ações\" e "
                 "\"Log\" dizem o que o usuário fazia. O `.dmp` de mesmo nome abre no Visual Studio ou no WinDbg com o "
-                "`realengine.pdb` da mesma build (variáveis e memória).\n\n");
+                "`rivora.pdb` da mesma build (variáveis e memória).\n\n");
     // --- Summary ---
     __try {
         const char* ident = "";
@@ -1272,7 +1272,7 @@ static void write_report(void) {
             out_printf(o, "- **Onde**: `%s`\n", own);
         } else {
             out_printf(o, "- **Onde**: `%s`\n", where);
-            if (own[0] && strcmp(own, where)) out_printf(o, "- **No código da Real Engine**: `%s`\n", own);
+            if (own[0] && strcmp(own, where)) out_printf(o, "- **No código da Rivora Engine**: `%s`\n", own);
         }
         char tname[256];
         HANDLE th = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, g_req.thread);
@@ -1360,11 +1360,11 @@ static void write_report(void) {
     if (g_cfg.dialog) {
         set_phase(PHASE_DIALOG);
         char msg[2400];
-        snprintf(msg, sizeof msg, "%s\n\n%s\n%s\n\n%s", TR("Real Engine crashed and must close."),
+        snprintf(msg, sizeof msg, "%s\n\n%s\n%s\n\n%s", TR("Rivora Engine crashed and must close."),
                  TR("A report was saved at:"), txt, TR("Open the reports folder?"));
         wchar_t wmsg[2400], wtitle[128];
         to_w(msg, wmsg, 2400);
-        to_w(TR("Real Engine: crash"), wtitle, 128);
+        to_w(TR("Rivora Engine: crash"), wtitle, 128);
         if (MessageBoxW(NULL, wmsg, wtitle, MB_YESNO | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND) == IDYES)
             crash_open_folder(g_crash_dir, txt);
     }
@@ -1543,7 +1543,7 @@ static void hang_report(ULONGLONG stalled_ms, int shot) {
     text[0] = 0;
     char stamp[64];
     crash_timestamp(stamp, sizeof stamp);
-    bput(&b, "# Real Engine: travamento (a janela parou de responder)\n\n");
+    bput(&b, "# Rivora Engine: travamento (a janela parou de responder)\n\n");
     program_info(&b);
     bprintf(&b, "- **Quando**: %s\n- **Thread principal parada há**: %.1f s%s\n", stamp, (double)stalled_ms / 1000.0,
             shot > 1 ? " (segunda leitura: ainda no mesmo quadro)" : "");

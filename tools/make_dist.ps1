@@ -1,15 +1,15 @@
-﻿# Packages a build of the Real Engine (copied from the Tlender's tools/make_dist.ps1 and adapted): builds Release in
+﻿# Packages a build of the Rivora Engine (Real Engine until 0.49; copied from the Tlender's tools/make_dist.ps1 and adapted): builds Release in
 # build-release with the version of VERSION (-Beta adds "_b": "faz a build" without saying = beta) and writes
-# dist/RealEngine-<version>-win64/ + .zip at the repository root (exe, pdb, updater, the Visual C++ runtime, LEIA-ME.txt).
+# dist/Rivora-<version>-win64/ + .zip at the repository root (exe, pdb, updater, the Visual C++ runtime, LEIA-ME.txt).
 #   powershell -ExecutionPolicy Bypass -File tools/make_dist.ps1 [-Beta] [-SignKey <private key file>]
 param([switch]$Beta,
-      [string]$SignKey) # signs the zip (realengine_updater --sign: <zip>.sig, <zip>.sha256)
+      [string]$SignKey) # signs the zip (rivora_updater --sign: <zip>.sig, <zip>.sha256)
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot          # RealEngine/
 $verText = (Get-Content (Join-Path $root "VERSION") -TotalCount 1).Trim()
 if ($Beta) { $verText = "${verText}_b" }
-Write-Host "Real Engine $verText"
+Write-Host "Rivora Engine $verText"
 
 # 1. Release build (the version goes in with -DRE_VERSION_STRING)
 $cmake = "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
@@ -17,20 +17,23 @@ $build = Join-Path $root "build-release"
 & $cmake -S $root -B $build -G "Visual Studio 17 2022" -A x64 "-DRE_VERSION_STRING=$verText"
 if ($LASTEXITCODE -ne 0) { throw "cmake configure falhou" }
 $env:CL = "/MP"
-& $cmake --build $build --config Release --target realengine realengine_updater realengine_game -- /m /v:m
+& $cmake --build $build --config Release --target realengine realengine_updater realengine_game realengine_legacy -- /m /v:m
 if ($LASTEXITCODE -ne 0) { throw "a build falhou" }
 $rel = Join-Path $build "Release"
 
 # 2. The package folder
-$name = "RealEngine-$verText-win64"
+$name = "Rivora-$verText-win64"
 $dist = Join-Path $root "dist"
 $dir = Join-Path $dist $name
 if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
 New-Item -ItemType Directory -Force $dir | Out-Null
+Copy-Item (Join-Path $rel "rivora.exe") $dir
+Copy-Item (Join-Path $rel "rivora.pdb") $dir # the crash reports name the functions with it (crashlog.c)
+Copy-Item (Join-Path $rel "rivora_updater.exe") $dir # installs the updates after the editor closes (updater.h)
+Copy-Item (Join-Path $rel "rivora_game.exe") $dir # Build > Package Game copies it as the game (editor_package_game)
+# (2026-11-23, Real Engine -> Rivora Engine) realengine.exe: the launcher that starts rivora.exe (src/legacy_launcher.c): the
+# older installs' shortcuts and updater open it
 Copy-Item (Join-Path $rel "realengine.exe") $dir
-Copy-Item (Join-Path $rel "realengine.pdb") $dir # the crash reports name the functions with it (crashlog.c)
-Copy-Item (Join-Path $rel "realengine_updater.exe") $dir # installs the updates after the editor closes (updater.h)
-Copy-Item (Join-Path $rel "realengine_game.exe") $dir # Build > Package Game copies it as the game (editor_package_game)
 # (2026-11-23, the open source release) the license, the third-party notices (tools/make_notices.py), the privacy note and
 # the readme beside the editor; Package Game copies the first two next to every game
 foreach ($f in "LICENSE", "THIRD_PARTY_NOTICES.md", "PRIVACY.md", "README.md") { Copy-Item (Join-Path $root $f) $dir }
@@ -65,7 +68,7 @@ foreach ($d in "nvngx_dlss.dll", "nvngx_dlss_LICENSE.txt", "amd_fidelityfx_vk.dl
 $commit = (& git -C $root rev-parse --short HEAD).Trim()
 $date = Get-Date -Format "yyyy-MM-dd"
 $body = [IO.File]::ReadAllText((Join-Path $PSScriptRoot "dist_leiame.txt")) -replace "`r", ""
-$text = "Real Engine $verText (Windows x64), build de main $commit ($date)`n`n$body"
+$text = "Rivora Engine $verText (Windows x64), build de main $commit ($date)`n`n$body"
 [IO.File]::WriteAllText((Join-Path $dir "LEIA-ME.txt"), ($text -replace "`n", "`r`n"), (New-Object Text.UTF8Encoding $true))
 
 # 3. The zip
@@ -77,7 +80,14 @@ Write-Host "Pacote: $zip ($mb MB)"
 # 4. The signature (the updater installs only signed packages). Upload the zip, the .sig and the .sha256 to the
 # GitHub release; the private key stays out of the repository.
 if ($SignKey) {
-    & (Join-Path $rel "realengine_updater.exe") --sign $SignKey $zip
+    & (Join-Path $rel "rivora_updater.exe") --sign $SignKey $zip
     if ($LASTEXITCODE -ne 0) { throw "a assinatura falhou" }
     Write-Host "Assinado: $zip.sig, $zip.sha256"
 }
+# (2026-11-23) the same package under the old name too: the 0.49 and older updaters look for RealEngine-*-win64.zip (the
+# signature is of its bytes, the same; the .sha256 names the file)
+$old = Join-Path $dist ("RealEngine-$verText-win64.zip")
+Copy-Item $zip $old -Force
+if (Test-Path "$zip.sig") { Copy-Item "$zip.sig" "$old.sig" -Force }
+if (Test-Path "$zip.sha256") { (Get-Content "$zip.sha256" -Raw).Replace("$name.zip", "RealEngine-$verText-win64.zip") | Set-Content "$old.sha256" -NoNewline -Encoding ascii }
+Write-Host "Também como: $old (para os atualizadores da 0.49 e anteriores)"

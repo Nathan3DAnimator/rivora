@@ -1,18 +1,18 @@
-﻿# Publishes the Real Engine's source to its public repository (the open source release, notas-dev/servicos.md "Código
+﻿# Publishes the Rivora Engine's source to its public repository (the open source release, notas-dev/servicos.md "Código
 # aberto"): the files of this repository's HEAD (git archive) in a clone of the public one beside this folder
-# (..\realengine-public), without what is only the author's (CLAUDE.md: the AI's instructions) and with the home folder
+# (..\rivora-public), without what is only the author's (CLAUDE.md: the AI's instructions) and with the home folder
 # in paths made anonymous ("Users\Player" -> "Users\Player": the same length, so binary test files stay valid); one
-# commit per release ("Real Engine <VERSION>"), pushed. The development history stays in the private repository.
+# commit per release ("Rivora Engine <VERSION>"), pushed. The development history stays in the private repository.
 #   powershell -ExecutionPolicy Bypass -File tools/publish_source.ps1 [-Message "..."] [-NoPush]
 param([string]$Message,
-      [string]$Repo = "Nathan3DAnimator/realengine",
+      [string]$Repo = "Nathan3DAnimator/rivora",
       [switch]$NoPush)
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$pub = Join-Path (Split-Path -Parent $root) "realengine-public"
+$pub = Join-Path (Split-Path -Parent $root) "rivora-public"
 $ver = (Get-Content (Join-Path $root "VERSION") -TotalCount 1).Trim()
-if (-not $Message) { $Message = "Real Engine $ver" }
+if (-not $Message) { $Message = "Rivora Engine $ver" }
 
 # 1. the public clone (made once)
 if (-not (Test-Path (Join-Path $pub ".git"))) {
@@ -20,9 +20,9 @@ if (-not (Test-Path (Join-Path $pub ".git"))) {
     if ($LASTEXITCODE -ne 0) { throw "could not clone $Repo" }
 }
 # the public commits under the account's GitHub no-reply address (the author's e-mail never goes public)
-$who = gh api user --jq '.login + " " + (.id|tostring)'
-if ($LASTEXITCODE -eq 0 -and $who) {
-    $login, $id = $who.Trim().Split(" ")
+$login = (gh api user --jq .login | Out-String).Trim()
+$id = (gh api user --jq .id | Out-String).Trim()
+if ($login -and $id) {
     git -C $pub config user.name $login
     git -C $pub config user.email "$id+$login@users.noreply.github.com"
 }

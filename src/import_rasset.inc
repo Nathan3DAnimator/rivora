@@ -117,7 +117,7 @@ static bool ra_view(const uint8_t* data, size_t size, RaView* v, char* err, size
     if (size < sizeof(RaHeader) || memcmp(data, "RASSET\0\0", 8)) RA_FAIL(TR("not a .rasset"));
     const RaHeader* h = (const RaHeader*)data;
     if (h->version < 1 || h->version > RA_VERSION)
-        return snprintf(err, cap, TR("version %u of the .rasset is newer than this one (%d): update the Real Engine"), h->version, RA_VERSION), false;
+        return snprintf(err, cap, TR("version %u of the .rasset is newer than this one (%d): update the Rivora Engine"), h->version, RA_VERSION), false;
     if (h->file_size > size || !ra_range(v, sizeof *h, (uint64_t)h->chunk_count * sizeof(RaChunk))) RA_FAIL(TR("size"));
     static const char* const TAGS[RC_N] = { "NODE", "MESH", "MATL", "TEXR", "SKEL", "LGHT", "CAMR", "ANIM", "MRPH", "MWGT" };
     static const size_t RECS[RC_N] = { sizeof(RaNode), sizeof(RaMesh), sizeof(RaMaterial), sizeof(RaTexture), sizeof(RaSkeleton),

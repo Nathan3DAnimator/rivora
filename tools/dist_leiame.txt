@@ -1,4 +1,4 @@
-Real Engine - editor de jogos (editor, renderer com GI híbrida e path tracing, Blueprints, UI do jogo, física,
+Rivora Engine - editor de jogos (editor, renderer com GI híbrida e path tracing, Blueprints, UI do jogo, física,
 animação, IA, multidões, terreno, projetos)
 
 COMO USAR

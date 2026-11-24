@@ -1,4 +1,6 @@
-# Real Engine
+# Rivora Engine
+
+*(chamada Real Engine até a versão 0.49 / called Real Engine up to 0.49)*
 
 **Uma game engine gratuita e de código aberto, feita para jogos.** Escrita do zero em C11 e Vulkan 1.3, orientada a
 dados, com um editor completo: Blueprints visuais, scripts em quatro linguagens, iluminação global em tempo real,
@@ -6,9 +8,10 @@ física, animação, áudio, multiplayer com Steam, VR e exportação para Andro
 
 *A free, open source game engine made for games, written from scratch in C11 and Vulkan 1.3. English below.*
 
-- **Site e doações:** https://createanimateplay.com
+- **Site e doações:** https://createanimateplay.nathan3danimator.workers.dev
+- **Apoiar:** [GitHub Sponsors](https://github.com/sponsors/Nathan3DAnimator) ou a seção de doação do site
 - **Downloads:** a página de releases (o editor também se atualiza sozinho, com o pacote assinado)
-- **Licença:** MIT (veja `LICENSE`). Os jogos feitos com a Real Engine são seus: venda à vontade, sem royalties.
+- **Licença:** MIT (veja `LICENSE`). Os jogos feitos com a Rivora Engine são seus: venda à vontade, sem royalties.
 
 ## O que tem
 
@@ -33,7 +36,7 @@ ferramentas. Uma GPU com Vulkan 1.3 para rodar.
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --target realengine
-build\Release\realengine.exe
+build\Release\rivora.exe
 ```
 
 - Os assets das demos (CC0) são baixados na primeira compilação (`tools/fetch_demo_assets.cmake`).
@@ -47,7 +50,7 @@ As notas de desenvolvimento de cada área estão em `notas-dev/` (o índice est�
 
 ## Avisos
 
-- A Real Engine **não é afiliada nem endossada pela Epic Games**. A Unreal Engine é a referência de usabilidade
+- A Rivora Engine **não é afiliada nem endossada pela Epic Games**. A Unreal Engine é a referência de usabilidade
   (layout, atalhos, nomes de conceitos comuns), mas nenhum código dela foi usado. Nomes de outros produtos citados
   na documentação pertencem aos seus donos e aparecem só para descrever compatibilidade ou comparar recursos.
 - O que a engine envia pela internet está em `PRIVACY.md`: sem telemetria. Relatórios de bug só com a sua confirmação.
@@ -57,12 +60,13 @@ As notas de desenvolvimento de cada área estão em `notas-dev/` (o índice est�
 
 ## English
 
-**Real Engine** is a free, open source game engine written from scratch in C11 and Vulkan 1.3, data-oriented, with a
+**Rivora Engine** is a free, open source game engine written from scratch in C11 and Vulkan 1.3, data-oriented, with a
 full editor: visual Blueprints, scripting in four languages, real-time global illumination, physics, animation, audio,
 Steam multiplayer, VR and Android export.
 
-- **Website and donations:** https://createanimateplay.com
-- **License:** MIT (see `LICENSE`). Games made with the Real Engine are yours: sell them freely, no royalties.
+- **Website and donations:** https://createanimateplay.nathan3danimator.workers.dev
+- **Support:** [GitHub Sponsors](https://github.com/sponsors/Nathan3DAnimator) or the website's donation section
+- **License:** MIT (see `LICENSE`). Games made with the Rivora Engine are yours: sell them freely, no royalties.
 - **Build:** Visual Studio 2022, the Vulkan SDK 1.3 and Python 3; see the commands above.
 - **Not affiliated with or endorsed by Epic Games.** Unreal Engine is the reference for usability only; none of its
   code is used.

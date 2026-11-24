@@ -1,7 +1,7 @@
 # Third-Party Notices
-The Real Engine itself is under the MIT License (see `LICENSE`). It is built with, and ships, the works below; each keeps its own license, reproduced here as its authors require. Games made with the Real Engine carry this file too (Build > Package Game puts it next to the game).
+The Rivora Engine itself is under the MIT License (see `LICENSE`). It is built with, and ships, the works below; each keeps its own license, reproduced here as its authors require. Games made with the Rivora Engine carry this file too (Build > Package Game puts it next to the game).
 
-The Real Engine is not affiliated with or endorsed by Epic Games, Inc. Unreal Engine and other product names mentioned in the documentation are trademarks of their owners and are used only to describe compatibility or to compare features.
+The Rivora Engine is not affiliated with or endorsed by Epic Games, Inc. Unreal Engine and other product names mentioned in the documentation are trademarks of their owners and are used only to describe compatibility or to compare features.
 
 ## Summary
 

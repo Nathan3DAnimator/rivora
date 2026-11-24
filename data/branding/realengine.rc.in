@@ -14,12 +14,12 @@ BEGIN
     BEGIN
         BLOCK "041604b0"
         BEGIN
-            VALUE "CompanyName", "Real Engine"
-            VALUE "FileDescription", "Real Engine Editor"
+            VALUE "CompanyName", "Rivora Engine"
+            VALUE "FileDescription", "Rivora Engine Editor"
             VALUE "FileVersion", "@RE_VERSION_STRING@"
-            VALUE "ProductName", "Real Engine"
+            VALUE "ProductName", "Rivora Engine"
             VALUE "ProductVersion", "@RE_VERSION_STRING@"
-            VALUE "OriginalFilename", "realengine.exe"
+            VALUE "OriginalFilename", "rivora.exe"
         END
     END
     BLOCK "VarFileInfo"

@@ -1,13 +1,13 @@
 id: import-rasset-rigid
 kind: howto
 title: .rasset e rigs rígidos (peças presas a ossos) | .rasset and rigid rigs (pieces parented to bones)
-keys: rasset, empacotado, packed, normalroughnessmetallic, basecolor, emissive, exportar para a real engine, export to real engine, formato de troca, exchange format, osso pai, bone parent, parent to bone, rig rigido, rigid rig, robo, robot, capsula, maquina, machine, skeletal mesh nao criado, no skeletal mesh, controles do rig, rig widgets, custom shape, textura borrada, blurry texture, 4k, 4096, relative parenting, parentesco relativo, deslocado, offset, fora do lugar, out of place, static meshes soltas, loose static meshes, exportar de novo, export again, udim 1001, um tile, one tile
+keys: rasset, empacotado, packed, normalroughnessmetallic, basecolor, emissive, exportar para a real engine, export to real engine, formato de troca, exchange format, osso pai, bone parent, parent to bone, rig rigido, rigid rig, robo, robot, capsula, maquina, machine, skeletal mesh nao criado, no skeletal mesh, controles do rig, rig widgets, custom shape, textura borrada, blurry texture, 4k, 4096, relative parenting, parentesco relativo, deslocado, offset, fora do lugar, out of place, static meshes soltas, loose static meshes, exportar de novo, export again, udim 1001, um tile, one tile, rivora, rivora engine
 --- pt
 ```diagram steps
-Tlender: Exportar > Real Engine (.rasset) | Arquivo > Importar ou arrastar o .rasset | Malhas, materiais, esqueleto, animações | Skeletal Mesh no nível
+Tlender: Exportar > Rivora Engine (.rasset) | Arquivo > Importar ou arrastar o .rasset | Malhas, materiais, esqueleto, animações | Skeletal Mesh no nível
 ```
 ## O .rasset
-- O **.rasset** é o formato de troca com o Tlender (Exportar > Real Engine). **Arquivo > Importar** ou arraste o arquivo: viram malhas, materiais PBR com as imagens que vêm dentro dele, o esqueleto, a malha com skin como **Skeletal Mesh**, as animações, morph targets, luzes e câmeras. [Mostrar onde](show:File>Import Into Level...)
+- O **.rasset** é o formato de troca com o Tlender (Exportar > Rivora Engine). **Arquivo > Importar** ou arraste o arquivo: viram malhas, materiais PBR com as imagens que vêm dentro dele, o esqueleto, a malha com skin como **Skeletal Mesh**, as animações, morph targets, luzes e câmeras. [Mostrar onde](show:File>Import Into Level...)
 - Um .rasset que já está no Content Browser: arraste-o para o viewport e ele é importado e colocado.
 - Pesos de morph animados viram curvas de morph da animação.
 - As trilhas de objeto (um objeto que se move, não um osso) ainda não entram: o Relatório de Importação avisa.
@@ -20,14 +20,14 @@ Tlender: Exportar > Real Engine (.rasset) | Arquivo > Importar ou arrastar o .ra
 
 ## Texturas 4K e o conjunto empacotado
 - O material é assado no tamanho da maior textura que ele lê, até 4096: uma textura 4K (UDIM ou não) não perde detalhe. Vale também para um UDIM de **um tile só** (só o 1001, comum em exportações do Substance e do Tlender).
-- Texturas exportadas pelo Tlender no preset **Real Engine (empacotado)**: clique direito na `_BaseColor` > Criar > **Material**; a `_NormalRoughnessMetallic` e a `_Emissive` da mesma pasta entram ligadas sozinhas.
+- Texturas exportadas pelo Tlender no preset **Rivora Engine (empacotado)**: clique direito na `_BaseColor` > Criar > **Material**; a `_NormalRoughnessMetallic` e a `_Emissive` da mesma pasta entram ligadas sozinhas.
 
 --- en
 ```diagram steps
-Tlender: Export > Real Engine (.rasset) | File > Import or drag the .rasset | Meshes, materials, skeleton, animations | Skeletal Mesh in the level
+Tlender: Export > Rivora Engine (.rasset) | File > Import or drag the .rasset | Meshes, materials, skeleton, animations | Skeletal Mesh in the level
 ```
 ## The .rasset
-- The **.rasset** is the exchange format with the Tlender (Export > Real Engine). **File > Import** or drag the file: it becomes meshes, PBR materials with the images it carries, the skeleton, the skinned mesh as a **Skeletal Mesh**, animations, morph targets, lights and cameras. [Show me where](show:File>Import Into Level...)
+- The **.rasset** is the exchange format with the Tlender (Export > Rivora Engine). **File > Import** or drag the file: it becomes meshes, PBR materials with the images it carries, the skeleton, the skinned mesh as a **Skeletal Mesh**, animations, morph targets, lights and cameras. [Show me where](show:File>Import Into Level...)
 - A .rasset already in the Content Browser: drag it into the viewport and it is imported and placed.
 - Animated morph weights become the animation's morph curves.
 - Object tracks (an object that moves, not a bone) don't come in yet: the Import Report says so.
@@ -40,4 +40,4 @@ Tlender: Export > Real Engine (.rasset) | File > Import or drag the .rasset | Me
 
 ## 4K textures and the packed set
 - The material is baked at the size of the largest texture it reads, up to 4096: a 4K texture (UDIM or not) keeps its detail. That holds for a UDIM with **a single tile** too (1001 alone, common in Substance and Tlender exports).
-- Textures the Tlender exported with the **Real Engine (packed)** preset: right-click the `_BaseColor` > Create > **Material**; the `_NormalRoughnessMetallic` and the `_Emissive` in the same folder come wired in.
+- Textures the Tlender exported with the **Rivora Engine (packed)** preset: right-click the `_BaseColor` > Create > **Material**; the `_NormalRoughnessMetallic` and the `_Emissive` in the same folder come wired in.

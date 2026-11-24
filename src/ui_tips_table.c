@@ -174,7 +174,7 @@ const UiTip g_ui_tips[] = {
     T("Edit Blueprint", "Opens the Blueprint of the selected actor.", "Abre o Blueprint do ator selecionado."),
     T("Edit Material", "Opens the material of the selected mesh.", "Abre o material da malha selecionada."),
     T("Open Level Blueprint", "The level's own Blueprint: events of this level only.", "O Blueprint do próprio nível: eventos só deste nível."),
-    T("About Real Engine", "The version and the credits.", "A versão e os créditos."),
+    T("About Rivora Engine", "The version and the credits.", "A versão e os créditos."),
     T("Check for Updates...", "Looks for a newer version of the engine.", "Procura uma versão mais nova da engine."),
     T("Report a Bug...", "Sends a bug report with the log to the developers.", "Envia um relatório de bug com o log aos desenvolvedores."),
     T("Send a Suggestion...", "Sends an idea to the developers.", "Envia uma ideia aos desenvolvedores."),
@@ -1334,7 +1334,7 @@ const UiTip g_ui_tips[] = {
     T("Save Layout As...", "Saves where the panels are (docked, floating, their sizes) under a name: for this project or for all your projects.", "Salva onde estão os painéis (acoplados, flutuando, os tamanhos) com um nome: para este projeto ou para todos os seus."),
     T("Default Layout", "Puts the panels back in the factory arrangement: Outliner and Levels on the right, Details under them.", "Volta os painéis à arrumação de fábrica: Organizador e Níveis à direita, Detalhes embaixo."),
     T("This project", "The layout is kept in the project's Config/Layouts folder and goes with the project.", "O layout fica na pasta Config/Layouts do projeto e vai junto com ele."),
-    T("All my projects (user)", "The layout is kept in your user folder (%APPDATA%\\RealEngine\\Layouts): every project lists it.", "O layout fica na sua pasta de usuário (%APPDATA%\\RealEngine\\Layouts): todo projeto o lista."),
+    T("All my projects (user)", "The layout is kept in your user folder (%APPDATA%\\Rivora\\Layouts): every project lists it.", "O layout fica na sua pasta de usuário (%APPDATA%\\Rivora\\Layouts): todo projeto o lista."),
     // (2026-11-17, Q6) the asset picker and Create from the selection
     T("IK Rig...", "Opens the asset picker on the Skeletal Meshes: an IK Rig is made for the one you pick.", "Abre o seletor de assets nas Skeletal Meshes: um IK Rig é feito para a que você escolher."),
     T("Physics Asset...", "Opens the asset picker on the Skeletal Meshes: a Physics Asset (bodies and joints) is made for the one you pick.", "Abre o seletor de assets nas Skeletal Meshes: um Physics Asset (corpos e juntas) é feito para a que você escolher."),

@@ -184,7 +184,7 @@ bool theme_editor_page(struct GLFWwindow* win) {
         igSameLine(0, -1);
         if (igButton(TR("Import..."), (ImVec2){ 0, 0 })) {
             char path[1024] = "";
-            if (platform_file_dialog_ext(win, false, TR("Real Engine Theme"), "rtheme", path, sizeof path)) {
+            if (platform_file_dialog_ext(win, false, TR("Rivora Engine Theme"), "rtheme", path, sizeof path)) {
                 int i = theme_import(path);
                 if (i >= 0) theme_select(i), ch = true, say(false, TR("Imported \"%s\"."), theme_at(i)->name);
                 else say(true, TR("Could not read %s."), path);
@@ -194,7 +194,7 @@ bool theme_editor_page(struct GLFWwindow* win) {
         if (igButton(TR("Export..."), (ImVec2){ 0, 0 })) {
             char path[1024];
             snprintf(path, sizeof path, "%s.rtheme", theme_at(cur)->name);
-            if (platform_file_dialog_ext(win, true, TR("Real Engine Theme"), "rtheme", path, sizeof path)) {
+            if (platform_file_dialog_ext(win, true, TR("Rivora Engine Theme"), "rtheme", path, sizeof path)) {
                 if (theme_export(cur, path)) say(false, TR("Exported to %s."), path);
                 else say(true, TR("Could not write %s."), path);
             }
@@ -244,7 +244,7 @@ bool theme_editor_page(struct GLFWwindow* win) {
     if (igButton(TR("Export..."), (ImVec2){ 0, 0 })) {
         char path[1024];
         snprintf(path, sizeof path, "%s.rtheme", g_new_name);
-        if (platform_file_dialog_ext(win, true, TR("Real Engine Theme"), "rtheme", path, sizeof path)) {
+        if (platform_file_dialog_ext(win, true, TR("Rivora Engine Theme"), "rtheme", path, sizeof path)) {
             snprintf(e->name, sizeof e->name, "%s", g_new_name);
             if (theme_export(-1, path)) say(false, TR("Exported to %s."), path);
             else say(true, TR("Could not write %s."), path);

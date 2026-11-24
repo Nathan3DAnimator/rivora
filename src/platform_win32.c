@@ -106,12 +106,35 @@ bool re_list_dir(const char* dir_utf8, void (*fn)(void* user, const char* name),
 
 bool re_system_language_portuguese(void) { return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_PORTUGUESE; }
 
+// (2026-11-23, Real Engine -> Rivora Engine) a folder's files and folders copied into another (the user's settings
+// moved once to the new name's folder; the old one stays for an older version)
+static void copy_tree(const wchar_t* from, const wchar_t* to) {
+    CreateDirectoryW(to, NULL);
+    wchar_t pat[1100];
+    _snwprintf(pat, 1100, L"%ls\\*", from);
+    pat[1099] = 0;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
+        wchar_t a[1100], b[1100];
+        _snwprintf(a, 1100, L"%ls\\%ls", from, fd.cFileName), _snwprintf(b, 1100, L"%ls\\%ls", to, fd.cFileName);
+        a[1099] = b[1099] = 0;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) copy_tree(a, b);
+        else CopyFileW(a, b, TRUE);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
 static bool user_dir(const wchar_t* var, char* out, size_t cap) {
     const wchar_t* appdata = _wgetenv(var);
     if (!appdata || !appdata[0]) return false;
-    wchar_t dir[1024];
-    _snwprintf(dir, 1024, L"%ls\\RealEngine", appdata);
-    dir[1023] = 0;
+    wchar_t dir[1024], old[1024];
+    _snwprintf(dir, 1024, L"%ls\\Rivora", appdata);
+    _snwprintf(old, 1024, L"%ls\\RealEngine", appdata);
+    dir[1023] = old[1023] = 0;
+    if (GetFileAttributesW(dir) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW(old) != INVALID_FILE_ATTRIBUTES && !wcscmp(var, L"APPDATA"))
+        copy_tree(old, dir); // (the preferences, layouts, themes, the Assistant's offline base, the outbox; the cache starts anew)
     CreateDirectoryW(dir, NULL); // fails harmlessly when it already exists
     DWORD attr = GetFileAttributesW(dir);
     if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY)) return false;

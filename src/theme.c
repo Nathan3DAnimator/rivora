@@ -528,7 +528,7 @@ bool theme_read_text(Theme* t, const char* text) {
 bool theme_write_text(const Theme* t, char* out, size_t cap) {
     size_t n = 0;
 #define PUT(...) do { int w_ = snprintf(out + n, n < cap ? cap - n : 0, __VA_ARGS__); if (w_ < 0) return false; n += (size_t)w_; } while (0)
-    PUT("rtheme 1\n; Real Engine theme (Editor Preferences > Appearance). #RRGGBB or #RRGGBBAA; the tokens not here are derived.\n");
+    PUT("rtheme 1\n; Rivora Engine theme (Editor Preferences > Appearance). #RRGGBB or #RRGGBBAA; the tokens not here are derived.\n");
     PUT("name = %s\n", t->name);
     if (t->base[0]) PUT("base = %s\n", t->base);
     PUT("light = %d\nhue_sat = %.3f\nhue_light = %.3f\n", t->light ? 1 : 0, t->hue_sat, t->hue_light);

@@ -23,6 +23,7 @@ void re_version_clean(const char* tag, char* out, size_t cap) {
     const char* s = tag ? tag : "";
     while (*s == ' ') s++;
     if (!_strnicmp(s, "realengine", 10)) s += 10;
+    else if (!_strnicmp(s, "rivora", 6)) s += 6; // (2026-11-23: the new name's tags)
     while (*s == ' ' || *s == '-' || *s == '_') s++;
     if (*s == 'v' || *s == 'V') s++;
     snprintf(out, cap, "%s", s);
@@ -275,9 +276,9 @@ bool update_download_and_stage(const UpdateInfo* u, const char* pubkey_hex, cons
     }
     re_remove_file(zip);
     char probe[1200];
-    snprintf(probe, sizeof probe, "%s/realengine.exe", out->stage_dir);
+    snprintf(probe, sizeof probe, "%s/rivora.exe", out->stage_dir);
     if (!re_file_stat(probe, NULL, NULL, NULL)) {
-        snprintf(err, err_cap, "o pacote não tem o realengine.exe");
+        snprintf(err, err_cap, "o pacote não tem o rivora.exe");
         return false;
     }
     snprintf(out->version, sizeof out->version, "%s", u->version);
@@ -316,7 +317,7 @@ bool update_work_dir(char* out, size_t cap) {
     if (!GetEnvironmentVariableW(L"LOCALAPPDATA", w, 1024)) return false;
     char base[1024];
     if (WideCharToMultiByte(CP_UTF8, 0, w, -1, base, sizeof base, NULL, NULL) <= 0) return false;
-    snprintf(out, cap, "%s\\Real Engine\\update", base);
+    snprintf(out, cap, "%s\\Rivora Engine\\update", base);
     return re_make_dirs(out);
 }
 
@@ -334,9 +335,9 @@ bool update_launch_installer(const char* work_dir, const UpdateStage* st, const 
                              char* err, size_t err_cap) {
     // The installer: the new one from the package when it has it, else the installed one; run from a copy
     char src[1200], dst[1200];
-    snprintf(src, sizeof src, "%s/realengine_updater.exe", st->stage_dir);
-    if (!re_file_stat(src, NULL, NULL, NULL)) snprintf(src, sizeof src, "%s/realengine_updater.exe", install_dir);
-    snprintf(dst, sizeof dst, "%s/realengine_updater_run.exe", work_dir);
+    snprintf(src, sizeof src, "%s/rivora_updater.exe", st->stage_dir);
+    if (!re_file_stat(src, NULL, NULL, NULL)) snprintf(src, sizeof src, "%s/rivora_updater.exe", install_dir);
+    snprintf(dst, sizeof dst, "%s/rivora_updater_run.exe", work_dir);
     wchar_t wsrc[1200], wdst[1200];
     MultiByteToWideChar(CP_UTF8, 0, src, -1, wsrc, 1200);
     MultiByteToWideChar(CP_UTF8, 0, dst, -1, wdst, 1200);

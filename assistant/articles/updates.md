@@ -1,6 +1,6 @@
 id: updates
 kind: howto
-title: Atualizar a Real Engine | Update the Real Engine
+title: Atualizar a Rivora Engine | Update the Rivora Engine
 keys: compilando os shaders, compiling the shaders, compilando shaders, travou ao abrir, freeze on start, nao responde, not responding, congelou, primeira vez, first time, erro 504, error 504, gateway timeout, falha ao atualizar, update failed, atualizar, atualizacao, versao nova, update, upgrade, nova versao, baixar versao, instalar atualizacao, beta, release
 --- pt
 ```diagram steps

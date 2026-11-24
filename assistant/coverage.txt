@@ -28,7 +28,7 @@ testes: test-suite
 jogo: package-game, hdr10-output
 landscape: landscape, foliage, landscape-paint
 luz: lights, sky-fog, shadows-pro, many-lights, contact-shadows, cine-camera, light-function, emissive-light
-marca: loading-screen, editor-intro, open-source-license
+marca: loading-screen, editor-intro, open-source-license, rivora-rename
 materiais: materials, material-vs-texture, change-color, texture-streaming, glass-translucent, material-pins-no-effect, vertex-color-detail, decals, parallax, digital-humans, wet-surface, transmission, interior-mapping, general-optimization, material-editor-flow, emissive-light, texture-autolink, drop-material-viewport
 multidao: crowds
 online: multiplayer, advanced-sessions, replication-pro, steam-pro, save-load, multiplayer-lag, online-prediction

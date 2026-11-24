@@ -615,18 +615,18 @@ bool vrh_export_fbx(int side, const char* path, char* err, size_t cap) {
     fbxw_node_i(w, "Version", 1000), fbxw_node_i(w, "Year", 1970), fbxw_node_i(w, "Month", 1), fbxw_node_i(w, "Day", 1);
     fbxw_node_i(w, "Hour", 10), fbxw_node_i(w, "Minute", 0), fbxw_node_i(w, "Second", 0), fbxw_node_i(w, "Millisecond", 0);
     fbxw_close(w);
-    fbxw_node_s(w, "Creator", "Real Engine (VR base hand)");
+    fbxw_node_s(w, "Creator", "Rivora Engine (VR base hand)");
     fbxw_open(w, "SceneInfo"), fbxw_objname(w, "GlobalInfo", "SceneInfo"), fbxw_s(w, "UserData");
     fbxw_node_s(w, "Type", "UserData"), fbxw_node_i(w, "Version", 100);
-    fbxw_open(w, "MetaData"), fbxw_node_i(w, "Version", 100), fbxw_node_s(w, "Title", "Real Engine VR base hand");
-    fbxw_node_s(w, "Subject", ""), fbxw_node_s(w, "Author", "Real Engine"), fbxw_node_s(w, "Keywords", "");
+    fbxw_open(w, "MetaData"), fbxw_node_i(w, "Version", 100), fbxw_node_s(w, "Title", "Rivora Engine VR base hand");
+    fbxw_node_s(w, "Subject", ""), fbxw_node_s(w, "Author", "Rivora Engine"), fbxw_node_s(w, "Keywords", "");
     fbxw_node_s(w, "Revision", ""), fbxw_node_s(w, "Comment", ""), fbxw_close(w);
     fbxw_close(w);
     fbxw_close(w);
     static const uint8_t file_id[16] = { 0x28, 0xb3, 0x2a, 0xeb, 0xb6, 0x24, 0xcc, 0xc2, 0xbf, 0xc8, 0xb0, 0x2a, 0xa9, 0x2b, 0xfc, 0xf1 };
     fbxw_open(w, "FileId"), fbxw_raw(w, file_id, 16), fbxw_close(w);
     fbxw_node_s(w, "CreationTime", "1970-01-01 10:00:00:000");
-    fbxw_node_s(w, "Creator", "Real Engine (VR base hand)");
+    fbxw_node_s(w, "Creator", "Rivora Engine (VR base hand)");
     // the axes: Z up, cm (the importers convert to theirs)
     fbxw_open(w, "GlobalSettings");
     fbxw_node_i(w, "Version", 1000);
@@ -923,7 +923,7 @@ bool vrh_export_folder(const char* dir, char* err, size_t cap) {
     snprintf(p, sizeof p, "%s/LEIA-ME_BaseHand.txt", dir);
     FILE* f = re_fopen(p, "wb");
     if (!f) return snprintf(err, cap, "could not write %s", p), false;
-    fputs("Real Engine - mao base do VR / VR base hand\r\n"
+    fputs("Rivora Engine - mao base do VR / VR base hand\r\n"
           "=============================================\r\n\r\n"
           "PT\r\n"
           "- RealEngine_BaseHand_L.fbx e _R.fbx: malha com pele (skin), esqueleto com as 26 juntas do OpenXR e 7 poses.\r\n"

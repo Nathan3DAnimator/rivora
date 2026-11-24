@@ -51,7 +51,7 @@ bool plugin_create(const char* project_dir, const char* name, char* err, size_t 
     if (!write_text(path, text)) return snprintf(err, cap, "%s %s", TR("Couldn't write"), path), false;
     snprintf(path, sizeof path, "%s/%s.c", src, name);
     snprintf(text, sizeof text,
-             "// %s: a Real Engine plugin (plugin_api.h). build.bat makes %s.dll next to plugin.json; the editor loads it at\n"
+             "// %s: a Rivora Engine plugin (plugin_api.h). build.bat makes %s.dll next to plugin.json; the editor loads it at\n"
              "// its next start (Edit > Plugins). Each add_function is a Blueprint node (Plugins category) and a script function.\n"
              "#include \"plugin_api.h\"\n\n"
              "static const RePluginApi* g_api;\n\n"

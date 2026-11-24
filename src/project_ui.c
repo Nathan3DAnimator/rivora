@@ -429,8 +429,8 @@ static void browser_refresh(void) {
 static void browser_init(void) {
     B.init = true;
     char home[512];
-    if (re_home_dir(home, sizeof home)) snprintf(B.location, sizeof B.location, "%s\\Documents\\Real Engine Projects", home);
-    else snprintf(B.location, sizeof B.location, "C:\\Real Engine Projects");
+    if (re_home_dir(home, sizeof home)) snprintf(B.location, sizeof B.location, "%s\\Documents\\Rivora Projects", home);
+    else snprintf(B.location, sizeof B.location, "C:\\Rivora Projects");
     B.sel_tpl = PROJECT_TEMPLATE_THIRD_PERSON;
     B.scalability = 3, B.ray_tracing = true, B.render_mode = PROJECT_RENDER_PERFORMANCE;
     for (int i = 0; i < PROJECT_TEMPLATE_COUNT; i++) template_thumb(i, &B.tpl_thumb[i]);
@@ -568,7 +568,7 @@ static void browser(Editor* ed, double now) {
         ui_icon(dl, ICON_GAMEPAD, o.x, o.y, ms, TH(TK_ACCENT));
     igSetCursorScreenPos((ImVec2){ o.x + ms + fs * 0.9f, o.y + fs * 0.05f });
     igPushFont(NULL, fs * 1.7f);
-    igTextUnformatted("Real Engine", NULL);
+    igTextUnformatted("Rivora Engine", NULL);
     igSameLine(0, fs * 0.5f);
     igPushStyleColor_U32(ImGuiCol_Text, TH(TK_ACCENT));
     igTextUnformatted(RE_VERSION_STRING, NULL);
@@ -724,7 +724,7 @@ static void browser(Editor* ed, double now) {
     } else {
         if (ui_icon_button("browse", ICON_OPEN, TR("Browse..."), TH(TK_N14), false, TR("Open a .rproject from anywhere"))) {
             char path[1024] = "";
-            if (platform_file_dialog_ext(ed->window, false, TR("Real Engine Project"), "rproject", path, sizeof path)) {
+            if (platform_file_dialog_ext(ed->window, false, TR("Rivora Engine Project"), "rproject", path, sizeof path)) {
                 B.error[0] = 0;
                 editor_open_project_later(ed, path, -1);
             }

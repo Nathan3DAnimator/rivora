@@ -8,7 +8,7 @@ L=${1:-run}
 HOUSE="${REALENGINE_HAUNTED_PROJECT:-$HOME/Documents/Real Engine Projects/CasaAssombrada/CasaAssombrada.rproject}"
 run() { # name, args...
     n=$1; shift
-    out=$(REALENGINE_BACKGROUND=1 REALENGINE_DEMO_AUTOPLAY=1 timeout 600 ./realengine.exe "$@" --bench 6 2>&1)
+    out=$(REALENGINE_BACKGROUND=1 REALENGINE_DEMO_AUTOPLAY=1 timeout 600 ./rivora.exe "$@" --bench 6 2>&1)
     gpu=$(echo "$out" | grep "GPU minimum" | sed 's/.*GPU minimum: \([0-9.]*\) ms.*/\1/')
     fps=$(echo "$out" | grep "Measure:" | sed 's/.*Measure: \([0-9]*\) fps.*/\1/')
     passes=$(echo "$out" | grep "Render: GPU" | sed 's/.*Render: GPU \(.*\) ms; CPU.*/\1/')

@@ -158,6 +158,6 @@ int main(void) {
     if (argc >= 3 && !strcmp(argv[1], "--keygen")) return keygen(argv[2]);
     if (argc >= 4 && !strcmp(argv[1], "--sign")) return sign(argv[2], argv[3]);
     if (argc >= 4 && !strcmp(argv[1], "--verify")) return verify(argv[2], argv[3]);
-    fprintf(stderr, "uso: realengine_updater --keygen <chave> | --sign <chave> <pacote> | --verify <pub> <pacote>\n");
+    fprintf(stderr, "uso: rivora_updater --keygen <chave> | --sign <chave> <pacote> | --verify <pub> <pacote>\n");
     return 2;
 }

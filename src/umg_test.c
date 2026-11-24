@@ -74,7 +74,7 @@ bool umg_test_setup(Editor* ed) {
     int box = add(t, UIW_VBOX, panel, "Lines");
     t->w[box].padding = 10;
     int title = add(t, UIW_TEXT, box, "Title");
-    snprintf(t->w[title].text, sizeof t->w[title].text, "Real Engine HUD");
+    snprintf(t->w[title].text, sizeof t->w[title].text, "Rivora Engine HUD");
     t->w[title].font_size = 34, t->w[title].size[1] = 44;
     int score = add(t, UIW_TEXT, box, "ScoreText");
     snprintf(t->w[score].bind_text, UI_NAME, "Score");

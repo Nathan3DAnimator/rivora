@@ -1,4 +1,7 @@
-# Real Engine
+# Rivora Engine (Real Engine até a 0.49)
+
+O nome do programa é **Rivora Engine** desde 2026-11-23 (notas-dev/servicos.md "Real Engine -> Rivora Engine"); a
+pasta, este arquivo e os identificadores internos (`RE_`, `REALENGINE_*`, `[RealEngine]`) ficaram com o nome antigo.
 
 Game engine própria, escrita do zero. Referência de usabilidade, layout e atalhos: **Unreal Engine 5.8** — mas mais
 simples e mais intuitiva. Foco em **games**, não em filme. Não é um fork da Unreal (nenhum código dela).

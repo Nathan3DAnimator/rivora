@@ -1638,7 +1638,7 @@ void ui_icon_sheet_draw(void) {
         int cols = (int)((vp->WorkSize.x - 16.0f) / cw);
         if (cols < 1) cols = 1;
         char head[96];
-        snprintf(head, sizeof head, "Real Engine icons: %d (16, 24, 32 px), theme %s", (int)ICON_COUNT, theme_current_name());
+        snprintf(head, sizeof head, "Rivora Engine icons: %d (16, 24, 32 px), theme %s", (int)ICON_COUNT, theme_current_name());
         ImDrawList_AddText_Vec2(dl, o, TH(TK_TEXT_STRONG), head, NULL);
         o.y += fs * 1.8f;
         uint32_t stroke = TH(TK_TEXT);

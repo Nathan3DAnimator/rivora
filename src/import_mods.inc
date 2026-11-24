@@ -1160,7 +1160,7 @@ static void apply_modifiers(TFile* f, int oi) {
             continue;
         }
         // the rest: the Engine can't apply it here
-        const char* why = TR("the Engine can't apply it: export the evaluated mesh from the Tlender (Export to Real Engine)");
+        const char* why = TR("the Engine can't apply it: export the evaluated mesh from the Tlender (Export to Rivora Engine)");
         if (!strcmp(type, "MESH_SEQUENCE_CACHE")) why = TR("an Alembic cache: the Engine doesn't read .abc (the mesh at rest came in)");
         else if (!strcmp(type, "LIQUID") || !strcmp(type, "TL_VOXEL_FLUID") || !strcmp(type, "GRANULAR_TERRAIN"))
             why = TR("a simulation of the Tlender's: the Engine has its own (Water Body, particles); the mesh at rest came in");

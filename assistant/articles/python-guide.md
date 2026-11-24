@@ -1,6 +1,6 @@
 id: python-guide
 kind: concept
-title: Python na Real Engine: o que funciona | Python in the Real Engine: what works
+title: Python na Rivora Engine: o que funciona | Python in the Rivora Engine: what works
 keys: python, py, def, self, snake_case, dataclass, f-string, range, class python, begin_play, tick
 --- pt
 - `class X(Actor):` (ou `Character`); atributos da classe ou `self.x = v` no `__init__` viram campos.

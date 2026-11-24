@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""THIRD_PARTY_NOTICES.md (the repository's root): every license of what the Real Engine is built with or ships, made
+"""THIRD_PARTY_NOTICES.md (the repository's root): every license of what the Rivora Engine is built with or ships, made
 from the license files themselves so it never drifts. Run after updating a library in external/ or a font in data/fonts.
 make_dist.ps1 copies it next to the editor; Build > Package Game copies it next to every game.
     python tools/make_notices.py
@@ -22,10 +22,10 @@ PARTS = [
 def main():
     out = []
     out.append("# Third-Party Notices\n")
-    out.append("The Real Engine itself is under the MIT License (see `LICENSE`). It is built with, and ships, the works below; ")
-    out.append("each keeps its own license, reproduced here as its authors require. Games made with the Real Engine carry this ")
+    out.append("The Rivora Engine itself is under the MIT License (see `LICENSE`). It is built with, and ships, the works below; ")
+    out.append("each keeps its own license, reproduced here as its authors require. Games made with the Rivora Engine carry this ")
     out.append("file too (Build > Package Game puts it next to the game).\n\n")
-    out.append("The Real Engine is not affiliated with or endorsed by Epic Games, Inc. Unreal Engine and other product names ")
+    out.append("The Rivora Engine is not affiliated with or endorsed by Epic Games, Inc. Unreal Engine and other product names ")
     out.append("mentioned in the documentation are trademarks of their owners and are used only to describe compatibility or ")
     out.append("to compare features.\n\n")
     out.append("## Summary\n\n| Component | Used for | License |\n|---|---|---|\n")

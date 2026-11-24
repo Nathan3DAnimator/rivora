@@ -1884,6 +1884,14 @@ if(WIN32)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/data/branding/realengine.rc.in ${RE_GENERATED_DIR}/realengine.rc @ONLY)
     target_sources(realengine PRIVATE ${RE_GENERATED_DIR}/realengine.rc)
     target_sources(realengine_game PRIVATE ${RE_GENERATED_DIR}/realengine.rc) # (the packaged game: the engine's icon until the project has its own)
+    # (2026-11-23, Real Engine -> Rivora Engine) the targets keep their names (the tests' COMMAND realengine runs rivora.exe);
+    # the files get the new one. realengine.exe: the launcher the older installs' shortcuts and updater open
+    set_target_properties(realengine PROPERTIES OUTPUT_NAME rivora)
+    set_target_properties(realengine_game PROPERTIES OUTPUT_NAME rivora_game)
+    set_target_properties(realengine_updater PROPERTIES OUTPUT_NAME rivora_updater)
+    add_executable(realengine_legacy WIN32 src/legacy_launcher.c ${RE_GENERATED_DIR}/realengine.rc)
+    set_target_properties(realengine_legacy PROPERTIES OUTPUT_NAME realengine)
+    add_dependencies(realengine realengine_legacy)
     set_property(SOURCE ${RE_GENERATED_DIR}/realengine.rc APPEND PROPERTY OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/data/branding/icon.ico)
 endif()
 # The Blueprint debugger (bp_debug.h, notas-dev/blueprints.md "Debugger"): a breakpoint stops BeginPlay (the world waits),

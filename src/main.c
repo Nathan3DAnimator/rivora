@@ -582,7 +582,7 @@ int main(int argc, char** argv) {
     if (on_monitor) re_test_monitor(&imx, &imy, &imw, &imh);
     bool intro_hidden = !pie_client && brand_intro_start(background, imx, imy, imw, imh) && !background && !on_monitor;
     if (intro_hidden) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-    GLFWwindow* window = glfwCreateWindow(bw, bh, pie_client ? "Real Engine - Client" : "Real Engine", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(bw, bh, pie_client ? "Rivora Engine - Client" : "Rivora Engine", NULL, NULL);
     if (!window) return 1;
     if (intro_hidden) glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
     // (Q2) the hints stay for every window created after: the windows dragged out of the editor (ImGui's viewports) were
@@ -604,8 +604,8 @@ int main(int argc, char** argv) {
     g_vk = &vk;
     vk.vsync = vsync;
     if (!vkctx_init(&vk, window, validation)) {
-        MessageBoxA(NULL, "Real Engine needs a GPU with Vulkan 1.3 (dynamic rendering, synchronization2, timeline "
-                          "semaphores). Update the graphics driver.", "Real Engine", MB_ICONERROR);
+        MessageBoxA(NULL, "Rivora Engine needs a GPU with Vulkan 1.3 (dynamic rendering, synchronization2, timeline "
+                          "semaphores). Update the graphics driver.", "Rivora Engine", MB_ICONERROR);
         return 1;
     }
     // Dear ImGui (through cimgui), rendering with dynamic rendering into the swapchain's format
@@ -681,7 +681,7 @@ int main(int argc, char** argv) {
     re_arena_init(&g_frame_arena, (size_t)256 << 20);
     render_set_wait_pump(glfwPollEvents); // (the pipelines compiled on threads: the window answers meanwhile)
     if (!render_init(&vk)) {
-        MessageBoxA(NULL, "Real Engine could not create its renderer (GPU memory or features).", "Real Engine", MB_ICONERROR);
+        MessageBoxA(NULL, "Rivora Engine could not create its renderer (GPU memory or features).", "Rivora Engine", MB_ICONERROR);
         return 1;
     }
     brand_splash_frame(&vk, 0.45f, TR("Starting the editor..."));

@@ -138,7 +138,7 @@ bool update_install_files(const char* stage_u8, const char* install_u8, int* cop
             if (!moved) {
                 char name[600];
                 WideCharToMultiByte(CP_UTF8, 0, o->rel, -1, name, sizeof name, NULL, NULL);
-                snprintf(err, err_cap, "%s está em uso (close the other Real Engine windows)", name);
+                snprintf(err, err_cap, "%s está em uso (close the other Rivora Engine windows)", name);
                 ok = false;
                 break;
             }

@@ -383,7 +383,7 @@ void look_menu_brand(Editor* ed) {
                             THA(TK_TEXT_STRONG, 70));
     }
     x += ls + fs * 0.4f;
-    const char* name = "Real Engine";
+    const char* name = "Rivora Engine";
     float tfs = fs * 1.18f;
     ImFont* tf = g_font_title ? g_font_title : igGetFont();
     ImVec2 ns = ImFont_CalcTextSizeA(tf, tfs, 1e9f, -1.0f, name, NULL, NULL);
@@ -492,7 +492,7 @@ void look_status_right(Editor* ed, double now) {
         if (gb >= 1.0) snprintf(dd, sizeof dd, "%s: %.1f GB", TR("Derived Data"), gb);
         else snprintf(dd, sizeof dd, "%s: %.0f MB", TR("Derived Data"), (double)D.result / (1024.0 * 1024.0));
     } else snprintf(dd, sizeof dd, "%s: ...", TR("Derived Data"));
-    snprintf(ver, sizeof ver, "Real Engine %s", RE_VERSION_STRING);
+    snprintf(ver, sizeof ver, "Rivora Engine %s", RE_VERSION_STRING);
     const char* state = ed->playing ? TR("Playing") : shaders ? TR("Compiling") : TR("Ready");
     float isz = fs * 0.95f, gap = fs * 1.4f;
     float w_state = isz + fs * 0.4f + igCalcTextSize(state, NULL, false, -1).x;
@@ -537,7 +537,7 @@ void look_status_right(Editor* ed, double now) {
     }
     // the version: a pill in the accent; About
     igSameLine(0, gap);
-    if (look_pill("##look_ver", ver, TK_ACCENT, TK_TEXT_ON_ACCENT, TR("The engine's version. Click: About Real Engine (and Help > Check for Updates)."))) ed->show_about = true;
+    if (look_pill("##look_ver", ver, TK_ACCENT, TK_TEXT_ON_ACCENT, TR("The engine's version. Click: About Rivora Engine (and Help > Check for Updates)."))) ed->show_about = true;
 }
 
 // --- The Platform Support panel ---------------------------------------------------------------------------------------
@@ -731,7 +731,7 @@ static void offer_card(Editor* ed) {
     igPopStyleColor(2);
     if (shown) {
         if (g_font_bold) igPushFont(g_font_bold, 0.0f);
-        igTextUnformatted(L.switched ? TR("Real Engine has a new look: Azul Real") : TR("There is a new default look: Azul Real"), NULL);
+        igTextUnformatted(L.switched ? TR("Rivora Engine has a new look: Azul Real") : TR("There is a new default look: Azul Real"), NULL);
         if (g_font_bold) igPopFont();
         igPushTextWrapPos(fs * 30.0f);
         igTextDisabled("%s", L.switched ? TR("The theme and the panels' layout of the new default (Platform Support, the Content Browser and the Output Log docked). Your previous layout is kept in Window > Layout.")

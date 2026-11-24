@@ -23,7 +23,7 @@ param(
     [switch]$Hidden
 )
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root "$Build\Release\realengine.exe"
+$exe = Join-Path $root "$Build\Release\rivora.exe"
 if (-not (Test-Path $exe)) { Write-Host "sem $exe"; exit 2 }
 if ($Hidden) { $env:REALENGINE_BACKGROUND = "1"; Remove-Item Env:REALENGINE_MONITOR -ErrorAction SilentlyContinue }
 else { $env:REALENGINE_MONITOR = "2"; Remove-Item Env:REALENGINE_BACKGROUND -ErrorAction SilentlyContinue }

@@ -145,7 +145,7 @@ static void trim(char* s) {
 // game.ini next to the executable; what it lacks keeps the defaults
 static void load_config(GameConfig* c, const char* exe_dir) {
     memset(c, 0, sizeof *c); // (what game.ini lacks: zero, the defaults below)
-    snprintf(c->title, sizeof c->title, "Real Engine Game");
+    snprintf(c->title, sizeof c->title, "Rivora Engine Game");
     c->ar_occlusion = true;
     xr_config_defaults(&c->vr);
     snprintf(c->level, sizeof c->level, "%s/Content/Game.rlevel", exe_dir);
@@ -386,7 +386,7 @@ static void game_input(World* w, bool look_on, double* last_x, double* last_y) {
 
 static void fail(const char* what) {
 #ifdef _WIN32
-    MessageBoxA(NULL, what, "Real Engine", MB_ICONERROR);
+    MessageBoxA(NULL, what, "Rivora Engine", MB_ICONERROR);
 #else
     fprintf(stderr, "[RealEngine] erro: %s\n", what);
 #endif

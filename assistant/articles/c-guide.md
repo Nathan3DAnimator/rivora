@@ -1,6 +1,6 @@
 id: c-guide
 kind: concept
-title: C na Real Engine: o que funciona | C in the Real Engine: what works
+title: C na Rivora Engine: o que funciona | C in the Rivora Engine: what works
 keys: linguagem c, c, ansi c, include, typedef struct, globais, ponteiro, parent comment, void beginplay
 --- pt
 - O arquivo é a classe; o pai vem do comentário `// parent: Character` (sem ele: Actor).

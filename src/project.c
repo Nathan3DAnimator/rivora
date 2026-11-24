@@ -289,7 +289,7 @@ bool project_save(const char* path) {
     jw_init(&w);
     jw_obj_begin(&w);
     jw_kint(&w, "version_file", 1);
-    jw_kstr(&w, "engine", "Real Engine");
+    jw_kstr(&w, "engine", "Rivora Engine");
     jw_kstr(&w, "name", p->name), jw_kstr(&w, "company", p->company), jw_kstr(&w, "version", p->version);
     jw_kstr(&w, "description", p->description);
     jw_kstr(&w, "editor_startup_map", p->editor_startup_map), jw_kstr(&w, "game_default_map", p->game_default_map);

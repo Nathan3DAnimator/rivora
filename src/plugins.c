@@ -310,7 +310,7 @@ static void builtin_refresh(void) {
         snprintf(p->name, sizeof p->name, "%s", PLUGIN_GAMEPLAY);
         snprintf(p->friendly, sizeof p->friendly, "Gameplay Framework");
         snprintf(p->version, sizeof p->version, "%s", RE_VERSION_STRING);
-        snprintf(p->author, sizeof p->author, "Real Engine");
+        snprintf(p->author, sizeof p->author, "Rivora Engine");
         snprintf(p->category, sizeof p->category, "Gameplay");
         snprintf(p->description, sizeof p->description,
                  "The ready-made game modules: Health and damage, Inventory and items, Interaction (doors, chests, levers), "

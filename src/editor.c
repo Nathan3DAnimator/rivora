@@ -6868,9 +6868,9 @@ static void update_title(Editor* ed) {
     if (ed->level_path[0])
         while (name > ed->level_path && name[-1] != '/' && name[-1] != '\\') name--;
     char t[256];
-    if (ed->show_browser) snprintf(t, sizeof t, "Real Engine - Project Browser");
-    else if (project_file()[0]) snprintf(t, sizeof t, "%s%s - %s - Real Engine", name, ed->dirty ? "*" : "", project()->name);
-    else snprintf(t, sizeof t, "%s%s - Real Engine", name, ed->dirty ? "*" : "");
+    if (ed->show_browser) snprintf(t, sizeof t, "Rivora Engine - Project Browser");
+    else if (project_file()[0]) snprintf(t, sizeof t, "%s%s - %s - Rivora Engine", name, ed->dirty ? "*" : "", project()->name);
+    else snprintf(t, sizeof t, "%s%s - Rivora Engine", name, ed->dirty ? "*" : "");
     if (strcmp(t, ed->title_shown) != 0) {
         snprintf(ed->title_shown, sizeof ed->title_shown, "%s", t);
         glfwSetWindowTitle(ed->window, t);
@@ -6887,7 +6887,7 @@ static bool ask_level_path(Editor* ed, bool save, char* path, size_t cap) {
     }
     for (char* c = path; *c; c++)
         if (*c == '/') *c = '\\';
-    return platform_file_dialog_ext(ed->window, save, TR("Real Engine Levels"), "rlevel", path, cap);
+    return platform_file_dialog_ext(ed->window, save, TR("Rivora Engine Levels"), "rlevel", path, cap);
 }
 
 bool editor_save_level(Editor* ed, const char* path, double now) {
@@ -7387,7 +7387,7 @@ void editor_vr_preview(Editor* ed, double now) {
         level_rlight_path(ed->level_path, a, sizeof a), level_rlight_path(lvl, b, sizeof b);
         copy_small_file(a, b);
     }
-    snprintf(exe, sizeof exe, "%s/realengine_game.exe", exe_dir);
+    snprintf(exe, sizeof exe, "%s/rivora_game.exe", exe_dir);
     char cmd[3600];
     snprintf(cmd, sizeof cmd, "\"%s\" --windowed --vr --project \"%s\" --level \"%s\"", exe, project_file(), lvl);
     if (!re_process_start(cmd)) {
@@ -7410,7 +7410,7 @@ static void pie_multi_play(Editor* ed, double now) {
     size_t bytes = 0;
     char exe_dir[900];
     bool have_exe = re_exe_dir(exe_dir, sizeof exe_dir);
-    if (have_exe) snprintf(exe, sizeof exe, "%s/realengine.exe", exe_dir);
+    if (have_exe) snprintf(exe, sizeof exe, "%s/rivora.exe", exe_dir);
     if (!level_save(&ed->world, &cam, lvl, &bytes) || !have_exe) {
         editor_status(ed, now, "%s", TR("Play: the level for the other players could not be written."));
         editor_play(ed, now);
@@ -7966,7 +7966,7 @@ static PackJob* package_prepare(Editor* ed, const char* out, bool show, double n
         pk_free(j);
         return NULL;
     }
-    snprintf(src, sizeof src, "%s\\realengine_game.exe", exe_dir);
+    snprintf(src, sizeof src, "%s\\rivora_game.exe", exe_dir);
     snprintf(j->exe, sizeof j->exe, "%s\\%s.exe", dir, name);
     pk_add(j, src, j->exe, PK_REQUIRED);
     // its identity: the icon (Explorer, the taskbar, the window) and the version (the file's Properties)
@@ -8038,7 +8038,7 @@ static PackJob* package_prepare(Editor* ed, const char* out, bool show, double n
     }
     { // (2026-11-23, the open source release) the engine's license and the third-party notices beside every game: what
       // the MIT License and the libraries' licenses ask of whoever ships their code (the editor's package has them)
-        static const char* const lic[2][2] = { { "LICENSE", "RealEngine_LICENSE.txt" }, { "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md" } };
+        static const char* const lic[2][2] = { { "LICENSE", "Rivora_LICENSE.txt" }, { "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md" } };
         for (int i = 0; i < 2; i++) {
             snprintf(src, sizeof src, "%s\\%s", exe_dir, lic[i][0]);
             if (!re_file_stat(src, NULL, NULL, NULL)) snprintf(src, sizeof src, "%s\\..\\..\\%s", exe_dir, lic[i][0]); // (a build: the repository's root)
@@ -8295,7 +8295,7 @@ bool editor_android_upload_key(Editor* ed, double now) {
         return false;
     }
     char owner[96];
-    snprintf(owner, sizeof owner, "%s", ps->company[0] ? ps->company : ps->name[0] ? ps->name : "Real Engine Game");
+    snprintf(owner, sizeof owner, "%s", ps->company[0] ? ps->company : ps->name[0] ? ps->name : "Rivora Engine Game");
     for (char* c = owner; *c; c++)
         if (*c == '"') *c = '\'';
     snprintf(cmd, sizeof cmd, "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%s\" -NewUploadKey \"%s\" -KeyOwner \"%s\"", script, ks, owner);
@@ -8783,9 +8783,9 @@ static void main_menu_items(Editor* ed, double now) {
         igSeparator();
         { // (2026-11-23) free and open source: the site's donation page (endpoints.ini [support] donate_url)
             const char* don = endpoints_get("support", "donate_url");
-            if (don && don[0] && ui_menu_item(ICON_GLOBE, TR("Support Real Engine (Donate)"), NULL, false, true)) update_open_url(don);
+            if (don && don[0] && ui_menu_item(ICON_GLOBE, TR("Support Rivora Engine (Donate)"), NULL, false, true)) update_open_url(don);
         }
-        if (ui_menu_item(ICON_INFO, TR("About Real Engine"), NULL, false, true)) ed->show_about = true;
+        if (ui_menu_item(ICON_INFO, TR("About Rivora Engine"), NULL, false, true)) ed->show_about = true;
         igEndMenu();
     }
 }
@@ -12594,13 +12594,13 @@ static void quit_popup(Editor* ed, double now) {
 
 static void about_popup(Editor* ed) {
     char title[64];
-    snprintf(title, sizeof title, "%s###about", TR("About Real Engine"));
+    snprintf(title, sizeof title, "%s###about", TR("About Rivora Engine"));
     if (ed->show_about) {
         igOpenPopup_Str(title, 0);
         ed->show_about = false;
     }
     if (igBeginPopupModal(title, NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        igText("Real Engine %s", RE_VERSION_STRING);
+        igText("Rivora Engine %s", RE_VERSION_STRING);
         igTextDisabled("%s", TR("C11 + Vulkan 1.3, data-oriented (archetype ECS)."));
         // (2026-11-23) the open source release: the license, the notices, who it isn't, the donations
         igTextWrapped("%s", TR("Free and open source software under the MIT License. Games made with it are yours: sell them freely, no royalties."));
@@ -12614,7 +12614,7 @@ static void about_popup(Editor* ed) {
         const char* don = endpoints_get("support", "donate_url");
         if (don && don[0]) {
             igSameLine(0, -1);
-            if (igButton(TR("Support Real Engine (Donate)"), (ImVec2){ 0, 0 })) update_open_url(don);
+            if (igButton(TR("Support Rivora Engine (Donate)"), (ImVec2){ 0, 0 })) update_open_url(don);
         }
         igSeparator();
         igTextUnformatted(TR("Alt+P play   Esc stop   F8 possess/eject   Shift+F1 free the mouse   Pause pause\n"

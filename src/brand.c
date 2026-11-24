@@ -472,7 +472,7 @@ static void intro_draw(double t, float w, float h) {
     }
     // the name and what it does
     float name = smooth(1.9f, 2.5f, ft) * fade_out, tag = smooth(2.25f, 2.8f, ft) * fade_out;
-    if (name > 0.0f) text_spaced(dl, cx, cy + L * 0.5f + s * 0.02f, s * 0.07f, s * 0.012f + (1.0f - name) * s * 0.03f, rgba(0.92f, 0.93f, 0.96f, name), "REAL ENGINE");
+    if (name > 0.0f) text_spaced(dl, cx, cy + L * 0.5f + s * 0.02f, s * 0.07f, s * 0.012f + (1.0f - name) * s * 0.03f, rgba(0.92f, 0.93f, 0.96f, name), "RIVORA ENGINE");
     if (tag > 0.0f) {
         char line[160];
         snprintf(line, sizeof line, "%s   \xe2\x80\xa2   %s   \xe2\x80\xa2   %s", TR("CREATE"), TR("RENDER"), TR("PLAY"));
@@ -589,7 +589,7 @@ void brand_splash_draw(double t, float progress, const char* status) {
         float fs = 13.0f * sc;
         // top left: the engine, its version, its build; top right: what it stands for
         ImVec2_c tl = at(&c, 74, 40);
-        text_at(dl, tl.x, tl.y, fs, dim, "REAL ENGINE", 0);
+        text_at(dl, tl.x, tl.y, fs, dim, "RIVORA ENGINE", 0);
         char v[64];
         snprintf(v, sizeof v, "v%s", RE_VERSION_STRING);
         text_at(dl, tl.x, tl.y + fs * 1.5f, fs, faint, v, 0);
@@ -617,8 +617,8 @@ void brand_splash_draw(double t, float progress, const char* status) {
             if (nl) text_at(dl, p.x, p.y + 15.0f * sc, 11.5f * sc, faint, nl + 1, 1);
         }
         ImVec2_c br = at(&c, 1628, 870);
-        text_at(dl, br.x, br.y, 13.0f * sc, dim, "REAL ENGINE", 2);
-        text_at(dl, br.x, br.y + 18.0f * sc, 10.5f * sc, faint, TR("\xc2\xa9 2026 Real Engine. All rights reserved."), 2);
+        text_at(dl, br.x, br.y, 13.0f * sc, dim, "RIVORA ENGINE", 2);
+        text_at(dl, br.x, br.y + 18.0f * sc, 10.5f * sc, faint, TR("\xc2\xa9 2026 Rivora Engine"), 2);
     }
     // the status and the bar (the same place on any picture: the lower middle)
     float bw = w * 0.47f, bx = (w - bw) * 0.5f, by = h * 0.80f, bh = fmaxf(h * 0.006f, 4.0f), fsz = fmaxf(h * 0.017f, 13.0f);

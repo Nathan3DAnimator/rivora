@@ -1,6 +1,6 @@
 id: csharp-guide
 kind: concept
-title: C# na Real Engine: o que funciona | C# in the Real Engine: what works
+title: C# na Rivora Engine: o que funciona | C# in the Rivora Engine: what works
 keys: csharp, c#, c sharp, unity, monobehaviour, public class, using, foreach, list, var, new vector, editable, serializefield
 --- pt
 - `public class X : Actor { ... }` (ou `: Character`); `using` é ignorado; `MonoBehaviour` vira Actor.

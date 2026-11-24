@@ -359,9 +359,9 @@ static bool create_instance(VkCtx* ctx, bool validation) {
     if (use_validation) exts[ext_count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 
     VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
-    app.pApplicationName = "Real Engine Editor";
+    app.pApplicationName = "Rivora Engine Editor";
     app.applicationVersion = VK_MAKE_API_VERSION(0, 0, 1, 0);
-    app.pEngineName = "Real Engine";
+    app.pEngineName = "Rivora Engine";
     app.engineVersion = VK_MAKE_API_VERSION(0, 0, 1, 0);
     app.apiVersion = VK_API_VERSION_1_3;
 
