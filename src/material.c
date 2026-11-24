@@ -824,3 +824,4 @@ Material* mat_create(const char* path, bool instance, const char* parent_path) {
 }
 
 #include "material_gpu.inc"
+#include "material_live_test.inc" // (2026-11-24) --mat-live-test

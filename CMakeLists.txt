@@ -733,6 +733,10 @@ add_executable(realengine WIN32
     src/audio_import.c
     src/script_ide.c
     src/script_tools.c
+    src/mcp_server.c
+    src/mcp_tools.c
+    src/mcp_ui.c
+    src/mcp_test.c
     src/gameplay_tags_ui.c
     src/bp_debug_test.c
 )
@@ -1766,6 +1770,12 @@ add_test(NAME import_folder COMMAND realengine --validation --new-project ${CMAK
 set_tests_properties(import_folder PROPERTIES FIXTURES_REQUIRED projects FAIL_REGULAR_EXPRESSION "FAIL|Could not|Import lost"
                      PASS_REGULAR_EXPRESSION "Import folder .*: 7 folders, 2 models, 5 textures, 1 sounds, 1 unsupported, 2 skipped")
 # (2026-11-23) A Static Mesh's sockets (saved, read back, on a turned and scaled actor) and its material saved from the viewer
+# (2026-11-24) the MCP server (mcp.h, notas-dev/mcp.md): a client thread over HTTP (every kind of tool, a foreign Origin
+# refused, Play for a second) and the stdio bridge rivora_mcp.exe through pipes; a call's time there and back
+add_test(NAME mcp COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/MCPTEST --template 0 --mcp-test --bench 120)
+set_tests_properties(mcp PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "mcp: ok" FAIL_REGULAR_EXPRESSION "FAIL|VUID" TIMEOUT 300)
+add_test(NAME mat_live_edit COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/MATLIVE --template 0 --mat-live-test --bench 1) # (2026-11-24, #180)
+set_tests_properties(mat_live_edit PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "mat live: ok" FAIL_REGULAR_EXPRESSION "FAIL|VUID")
 add_test(NAME rig_detect COMMAND realengine --rig-test) # (2026-11-23) the rig's roles on Mixamo, Rigify, UE, no names, CC
 set_tests_properties(rig_detect PROPERTIES PASS_REGULAR_EXPRESSION "rig_detect: ok" FAIL_REGULAR_EXPRESSION "FAIL")
 add_test(NAME rig_fit COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/RIGFIT --template 0
@@ -1889,6 +1899,12 @@ if(WIN32)
     set_target_properties(realengine PROPERTIES OUTPUT_NAME rivora)
     set_target_properties(realengine_game PROPERTIES OUTPUT_NAME rivora_game)
     set_target_properties(realengine_updater PROPERTIES OUTPUT_NAME rivora_updater)
+    # (2026-11-24) rivora_mcp.exe: the MCP stdio bridge (src/mcp_bridge.c): the clients that start a program reach the
+    # editor's server through it; it opens the editor when it isn't running
+    add_executable(realengine_mcp src/mcp_bridge.c)
+    set_target_properties(realengine_mcp PROPERTIES OUTPUT_NAME rivora_mcp)
+    target_link_libraries(realengine_mcp PRIVATE ws2_32)
+    add_dependencies(realengine realengine_mcp)
     add_executable(realengine_legacy WIN32 src/legacy_launcher.c ${RE_GENERATED_DIR}/realengine.rc)
     set_target_properties(realengine_legacy PROPERTIES OUTPUT_NAME realengine)
     add_dependencies(realengine realengine_legacy)

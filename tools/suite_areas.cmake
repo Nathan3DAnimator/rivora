@@ -40,7 +40,7 @@ re_area(render contact_shadows color_grading_lut terror_filters terror_exposure 
         hair hair_low hair_dynamic hair_crowd skin_churn denoiser_house denoiser_area render_style_stylized render_style_photoreal render_style_video vrs
         view2 view2_pt path_trace_play heavy_mesh cluster_lod translucent splat light_function toon toon_msaa toon_low
         camshake_determinism fp_autofocus) # (Q12: the Camera Shakes, the autofocus)
-re_area(materiais materials material_lobes material_lobes_low masked_lobes masked_lobes_low decals decals_low mat_pins
+re_area(materiais materials mat_live_edit material_lobes material_lobes_low masked_lobes masked_lobes_low decals decals_low mat_pins
         texture_streaming transmission_medium interior_mapping city_night mated_ui emissive_light emissive_light_off) # (mated_ui: the Material Editor by injected input)
 re_area(udim udim_format udim_import udim_seams udim_stream) # (Q18, notas-dev/udim.md)
 re_area(rt-clusters rt_clusters rt_classic)
@@ -96,12 +96,13 @@ re_area(umg umg)
 re_area(async async)
 re_area(assistente assistant_pack assistant)
 re_area(scripts scripts)
+re_area(mcp mcp)
 re_area(projetos projects_clean project_third_person project_first_person project_quality project_top_down)
 re_area(demos demo_rpg demo_horror demo_fighting demo_rpg_flicker demo_horror_flicker demo_metro)
 
 # The quick kit (fixtures come along by themselves: game_fps brings game_package, the projects' tests projects_clean)
 set(RE_QUICK
-    ecs ui_popups ui_tips theme theme_literals editor_fps gpu_marks jobs i18n audio_mixer audio_play gi_house spec_leak
+    mcp ecs ui_popups ui_tips theme theme_literals editor_fps gpu_marks jobs i18n audio_mixer audio_play gi_house spec_leak
     render_style_photoreal materials mat_pins rt_clusters lights_scale world_partition budget_house upscale debug_viewer
     game_fps game_package_icon ar arcore cloth_mesh_graph water rain_scene vehicle_selftest vehicle_from_mesh
     net_protocol blueprints graph_menu gameplay_tags particles_selftest particles_scene ikphys_selftest procgen_selftest

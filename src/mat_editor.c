@@ -78,6 +78,7 @@ static const char* L(const char* en, const char* pt) { return i18n_language() ==
 static void touch(void) {
     E.unsaved = true;
     if (E.dirty_at <= 0.0) E.dirty_at = igGetTime() + 0.12;
+    if (E.m) E.m->live_until = re_time_seconds() + 2.5; // (#180) being edited: its bakes keep RGBA8 until it stops
 }
 
 static bool vpath_to_path(const char* vpath, char* out, size_t cap) {
@@ -140,6 +141,7 @@ typedef struct Geo {
     ImVec2 p0, p1;               // the node's box
     ImVec2 in[MAT_NODE_MAX_IN], out[MAT_NODE_MAX_OUT];
     bool in_shown[MAT_NODE_MAX_IN];
+    float props_y, value_y;      // (2026-11-24) the settings' first row and the value's row (their tops)
 } Geo;
 
 static ImVec2 V2(float x, float y) { return (ImVec2){ x, y }; }
@@ -224,6 +226,8 @@ static void node_geo(const MatNode* n, const MatNodeDef* d, ImVec2 o, float z, G
     g->p0 = V2(o.x + n->x * z, o.y + n->y * z);
     float y = g->p0.y + head + 6.0f * z;
     for (int i = 0; i < d->nout; i++, y += row) g->out[i] = V2(g->p0.x + w, y + row * 0.5f);
+    g->props_y = y, y += row * (float)d->nprops; // (2026-11-24) its settings, edited on the node (Blender's)
+    g->value_y = y;
     if (n->type == NODE_RGB || n->type == NODE_VALUE || n->type == NODE_TEX_IMAGE || n->type == NODE_COLOR_RAMP) y += row; // its value
     for (int i = 0; i < d->nin; i++) {
         // Principled's many inputs: the ones a Tlender material links show, plus the main ones
@@ -245,7 +249,7 @@ static void bezier(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float z) {
 
 static void value_text(const MatNode* n, const MatNodeDef* d, int i, char* out, size_t cap) {
     const MatSockDef* s = &d->in[i];
-    if (s->type == MSOCK_FLOAT) snprintf(out, cap, "%.3g", n->in[i][0]);
+    if (s->type == MSOCK_FLOAT && !(s->flags & MSF_HIDE_VALUE)) snprintf(out, cap, "%.3g", n->in[i][0]); // (a hidden one: only linked)
     else if (s->type == MSOCK_VECTOR && !(s->flags & MSF_HIDE_VALUE)) snprintf(out, cap, "%.2g %.2g %.2g", n->in[i][0], n->in[i][1], n->in[i][2]);
     else out[0] = 0;
 }
@@ -259,7 +263,7 @@ static float node_h(int type) {
     const MatNodeDef* d = mat_node_def(type);
     if (!d) return 120.0f;
     bool value = type == NODE_RGB || type == NODE_VALUE || type == NODE_TEX_IMAGE || type == NODE_COLOR_RAMP;
-    return 24.0f + 6.0f + 20.0f * (float)(d->nout + d->nin + (value ? 1 : 0)) + 6.0f;
+    return 24.0f + 6.0f + 20.0f * (float)(d->nout + d->nprops + d->nin + (value ? 1 : 0)) + 6.0f;
 }
 // Textures dropped: onto a Principled BSDF (pbr >= 0) each into the input its name says (mat_map_slot) - color, metallic,
 // roughness (gloss through an Invert), an ORM through a Separate Color, opacity (the material cut by it), a normal
@@ -412,6 +416,96 @@ static bool organize_nodes(MatGraph* g) {
     return true;
 }
 
+// (2026-11-24, the user: "the materials like the Tlender's: changed right on the node, without the properties bar, which
+// stays") A node's fields over its rows (z >= 0.8: legible): its settings (lists, checkboxes), a Value node's number, an
+// RGB node's color, each unlinked input's value - a number dragged or typed with its name inside (Blender's slider), a
+// color's swatch opening a picker, a vector's X Y Z. The canvas under them lets them have the mouse (AllowOverlap); a
+// change bakes as the Details' do (touch: batched, the live editing's RGBA8). The Details keep every field.
+static bool color_swatch(const char* id, float* rgb, ImVec2 size) {
+    bool ch = false;
+    if (igColorButton(id, (ImVec4){ rgb[0], rgb[1], rgb[2], 1.0f }, ImGuiColorEditFlags_NoTooltip, size)) igOpenPopup_Str(id, 0);
+    if (igBeginPopup(id, 0)) {
+        ch = igColorPicker3("##pick", rgb, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_PickerHueWheel);
+        igEndPopup();
+    }
+    return ch;
+}
+static bool node_fields(MatGraph* g, int i, const MatNodeDef* d, const Geo* q, float z) {
+    MatNode* n = &g->nodes[i];
+    float row = 20.0f * z, x0 = q->p0.x + 8.0f * z, x1 = q->p1.x - 8.0f * z, fs = igGetFontSize();
+    float pad = fmaxf((row - 2.0f * z - fs) * 0.5f, 0.0f);
+    bool ch = false, act = false; // (act: a field taken: its node selected, the Details show it)
+    igPushID_Int(i);
+    igPushStyleVar_Vec2(ImGuiStyleVar_FramePadding, (ImVec2){ 4.0f * z, pad });
+    igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 3.0f * z);
+    for (int p = 0; p < d->nprops; p++) { // the settings
+        const MatPropDef* pd = &d->props[p];
+        igPushID_Int(100 + p);
+        igSetCursorScreenPos(V2(x0, q->props_y + (float)p * row + z));
+        if (!pd->items) {
+            bool b = n->prop[p] != 0;
+            if (igCheckbox(L(pd->label, pd->label), &b)) n->prop[p] = b, ch = true;
+        } else {
+            igSetNextItemWidth(x1 - x0);
+            ch |= igCombo_Str_arr("##p", &n->prop[p], (const char* const*)pd->items, pd->count, -1);
+        }
+        act |= igIsItemActivated();
+        igPopID();
+    }
+    if (n->type == NODE_VALUE) { // its number
+        igSetCursorScreenPos(V2(x0, q->value_y + z));
+        igSetNextItemWidth(x1 - x0);
+        ch |= igDragFloat("##v", &n->value[0], 0.01f, 0.0f, 0.0f, "%.3f", 0);
+        act |= igIsItemActivated();
+    } else if (n->type == NODE_RGB) { // its color
+        igSetCursorScreenPos(V2(x0, q->value_y + z));
+        ch |= color_swatch("##rgb", n->value, V2(x1 - x0, row - 2.0f * z));
+        act |= igIsItemActivated();
+    }
+    for (int k = 0; k < d->nin; k++) { // the unlinked inputs' values
+        const MatSockDef* sd = &d->in[k];
+        if (!q->in_shown[k] || mat_graph_input_link(g, i, k) >= 0 || (sd->flags & MSF_HIDE_VALUE)) continue;
+        ImVec2 c = q->in[k];
+        float y = c.y - row * 0.5f + z, xl = c.x + 12.0f * z; // (past the pin's grab area)
+        igPushID_Int(200 + k);
+        const char* name = L(sd->name, sd->label);
+        if (sd->type == MSOCK_FLOAT) {
+            char fmt[96];
+            snprintf(fmt, sizeof fmt, "%s  %%.3f", name); // (the value as the Details show it)
+            igSetCursorScreenPos(V2(xl, y));
+            igSetNextItemWidth(x1 - xl);
+            float mn = sd->min, mx = sd->max > sd->min ? sd->max : 0.0f;
+            float speed = mx - mn > 100.0f || mx <= mn ? 0.01f : 0.005f * fmaxf(mx - mn, 0.01f); // (Blender's pace: 100 px move an open value by 1)
+            bool factor = (sd->flags & MSF_FACTOR) && mx > mn;
+            if (factor) { // a factor: Blender's bar filled up to its value (the slider's own grab hidden)
+                igPushStyleColor_U32(ImGuiCol_SliderGrab, 0), igPushStyleColor_U32(ImGuiCol_SliderGrabActive, 0);
+                ch |= igSliderFloat("##v", &n->in[k][0], mn, mx, fmt, ImGuiSliderFlags_AlwaysClamp);
+                igPopStyleColor(2);
+                ImVec2 a = igGetItemRectMin(), b = igGetItemRectMax();
+                float f = fminf(fmaxf((n->in[k][0] - mn) / (mx - mn), 0.0f), 1.0f);
+                if (f > 0.0f) ImDrawList_AddRectFilled(igGetWindowDrawList(), a, V2(a.x + (b.x - a.x) * f, b.y), THA(TK_ACCENT, 70), 3.0f * z, 0);
+            } else ch |= igDragFloat("##v", &n->in[k][0], speed, mn, mx, fmt, mx > mn ? ImGuiSliderFlags_AlwaysClamp : 0);
+            act |= igIsItemActivated();
+        } else if (sd->type == MSOCK_COLOR) {
+            igSetCursorScreenPos(V2(x1 - 26.0f * z, y + 2.0f * z));
+            ch |= color_swatch("##col", n->in[k], V2(26.0f * z, row - 6.0f * z));
+            act |= igIsItemActivated();
+        } else if (sd->type == MSOCK_VECTOR) {
+            ImVec2 ts = igCalcTextSize(name, NULL, true, -1);
+            float xv = fminf(xl + ts.x + 8.0f * z, x1 - 90.0f * z);
+            igSetCursorScreenPos(V2(xv, y));
+            igSetNextItemWidth(x1 - xv);
+            ch |= igDragFloat3("##v", n->in[k], 0.01f, 0.0f, 0.0f, "%.2f", 0);
+            act |= igIsItemActivated();
+        }
+        igPopID();
+    }
+    igPopStyleVar(2);
+    igPopID();
+    if (act && E.sel != i) memset(E.msel, 0, sizeof E.msel), E.sel = i;
+    return ch;
+}
+
 static void draw_canvas(ImVec2 origin, ImVec2 size) {
     static const Material* shown;
     if (shown != E.m) shown = E.m, memset(E.msel, 0, sizeof E.msel), E.box = false; // (another material: nothing selected)
@@ -431,6 +525,7 @@ static void draw_canvas(ImVec2 origin, ImVec2 size) {
             ImDrawList_AddLine(dl, V2(origin.x, origin.y + y), V2(origin.x + size.x, origin.y + y), TH(TK_N6), 1);
     }
     igSetCursorScreenPos(origin);
+    igSetNextItemAllowOverlap(); // (2026-11-24: the fields on the nodes, drawn after, take the mouse first)
     igInvisibleButton("##canvas", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle); // tips: none (a canvas or a tile drawn with its own name: no description over the work)
     bool hovered = igIsItemHovered(0);
     ImVec2 mouse = io->MousePos;
@@ -527,11 +622,17 @@ static void draw_canvas(ImVec2 origin, ImVec2 size) {
     // the nodes
     int hover_node = -1, hover_out = -1, hover_out_node = -1, hover_in = -1, hover_in_node = -1; // (a pin's node apart: a node drawn after, under the pin, took hover_node and the link left the wrong node)
     float r = 5.5f * z;
+    int top = -1; // (the node on top under the mouse: a node's fields under another one's box are drawn as text)
+    for (int i = 0; i < g->node_count; i++)
+        if (mat_node_def(g->nodes[i].type) && mouse.x >= geo[i].p0.x && mouse.x <= geo[i].p1.x && mouse.y >= geo[i].p0.y && mouse.y <= geo[i].p1.y) top = i;
+    bool fields_on = z >= 0.8f && E.link_from < 0 && E.link_in < 0 && E.drag_node < 0 && !E.box; // (2026-11-24: the fields on the nodes)
     for (int i = 0; i < g->node_count; i++) {
         MatNode* n = &g->nodes[i];
         const MatNodeDef* d = mat_node_def(n->type);
         if (!d) continue;
         Geo* q = &geo[i];
+        bool inside = mouse.x >= q->p0.x && mouse.x <= q->p1.x && mouse.y >= q->p0.y && mouse.y <= q->p1.y;
+        bool fields = z >= 0.8f && (fields_on || igIsAnyItemActive()) && (igIsAnyItemActive() || !inside || top == i);
         bool sel = i == E.sel || (E.msel[i >> 6] >> (i & 63) & 1ull);
         bool orbit = graph_orbit();
         if (orbit) // (Q5) a card: the category's band and the Material family's icon
@@ -565,8 +666,18 @@ static void draw_canvas(ImVec2 origin, ImVec2 size) {
             }
             if (fabsf(mouse.x - c.x) < r * 2 && fabsf(mouse.y - c.y) < r * 2) hover_out = k, hover_out_node = hover_node = i;
         }
-        if ((n->type == NODE_RGB || n->type == NODE_VALUE || n->type == NODE_TEX_IMAGE || n->type == NODE_COLOR_RAMP) && z > 0.45f) {
-            float y = q->p0.y + 30.0f * z + 20.0f * z * (float)d->nout;
+        for (int p = 0; p < d->nprops && z > 0.45f && !fields; p++) { // its settings as text (the fields draw them otherwise)
+            const MatPropDef* pd = &d->props[p];
+            char v[140];
+            if (!pd->items) snprintf(v, sizeof v, "%s %s", n->prop[p] ? "[x]" : "[ ]", L(pd->label, pd->label));
+            else snprintf(v, sizeof v, "%s", n->prop[p] >= 0 && n->prop[p] < pd->count ? pd->items[n->prop[p]] : "?");
+            float y = q->props_y + (float)p * 20.0f * z;
+            ImDrawList_AddRectFilled(dl, V2(q->p0.x + 8 * z, y + z), V2(q->p1.x - 8 * z, y + 19 * z), THA(TK_N5, 200), 3.0f * z, 0);
+            ImDrawList_AddText_Vec2(dl, V2(q->p0.x + 12 * z, y + 3 * z), TH(TK_N14), v, NULL);
+        }
+        if ((n->type == NODE_RGB || n->type == NODE_VALUE || n->type == NODE_TEX_IMAGE || n->type == NODE_COLOR_RAMP) && z > 0.45f &&
+            !(fields && (n->type == NODE_RGB || n->type == NODE_VALUE))) {
+            float y = q->value_y;
             if (n->type == NODE_RGB)
                 ImDrawList_AddRectFilled(dl, V2(q->p0.x + 8 * z, y), V2(q->p1.x - 8 * z, y + 14 * z),
                                          igColorConvertFloat4ToU32((ImVec4){ n->value[0], n->value[1], n->value[2], 1 }), 3, 0);
@@ -595,10 +706,13 @@ static void draw_canvas(ImVec2 origin, ImVec2 size) {
             ImVec2 c = q->in[k];
             bool linked = mat_graph_input_link(g, i, k) >= 0;
             ImDrawList_AddCircleFilled(dl, c, r, mat_socket_color(d->in[k].type), 12);
-            if (z > 0.45f) {
+            bool field = fields && !linked && !(d->in[k].flags & MSF_HIDE_VALUE) &&
+                         (d->in[k].type == MSOCK_FLOAT || d->in[k].type == MSOCK_COLOR || d->in[k].type == MSOCK_VECTOR);
+            if (z > 0.45f && !(field && d->in[k].type == MSOCK_FLOAT)) {
                 char lb[140], val[48];
                 value_text(n, d, k, val, sizeof val);
-                if (d->in[k].type == MSOCK_COLOR && !linked)
+                if (field) val[0] = 0; // (the field shows it)
+                if (d->in[k].type == MSOCK_COLOR && !linked && !field)
                     ImDrawList_AddRectFilled(dl, V2(q->p1.x - 26 * z, c.y - 6 * z), V2(q->p1.x - 8 * z, c.y + 6 * z),
                                              igColorConvertFloat4ToU32((ImVec4){ n->in[k][0], n->in[k][1], n->in[k][2], 1 }), 2, 0);
                 snprintf(lb, sizeof lb, "%s%s%s", L(d->in[k].name, d->in[k].label), !linked && val[0] ? ": " : "", !linked ? val : "");
@@ -615,6 +729,7 @@ static void draw_canvas(ImVec2 origin, ImVec2 size) {
             }
             if (fabsf(mouse.x - c.x) < r * 2 && fabsf(mouse.y - c.y) < r * 2) hover_in = k, hover_in_node = i;
         }
+        if (fields && node_fields(g, i, d, q, z)) touch(); // (2026-11-24) its values edited right on it
     }
     // Unreal's shortcuts: a key held + a click on the canvas makes its node there; pressed while dragging a link, the
     // node is made at the mouse with the link in its first input

@@ -6,7 +6,9 @@
 //   3. a link pulled backwards from the free Base Color and dropped on nothing: "image texture" + Enter: an Image
 //      Texture whose Color feeds the Base Color;
 //   4. (2026-11-23) the BSDF dragged to the canvas's right edge and held there: the view scrolls (Blender's edge pan)
-//      and the node stays under the mouse.
+//      and the node stays under the mouse;
+//   0. (2026-11-24, the fields on the nodes) first: the BSDF's Metallic bar dragged from 1/4 to 3/4 (~0.75), its IOR
+//      dragged 60 px to the right grows; the node is selected, it doesn't move and no link starts.
 // It prints "mat-editor-test: all passed" (or FAIL lines) when it ends.
 typedef struct MtEv { uint64_t frame; int kind; float x, y; int key; bool down; const char* text; } MtEv; // 0 pos, 1 button, 2 key, 3 text
 static struct {
@@ -19,7 +21,8 @@ static struct {
     ImVec2 press, press_p0;
     int synced, drag_frames;
     float start_x, start_y;
-    int bsdf, base_color;
+    int bsdf, base_color, metallic, ior;
+    float ior0;
     float view0;   // (the edge pan's) the view's pan before
     ImVec2 edge;   // where the mouse held the node
 } MT;
@@ -75,7 +78,7 @@ static void mated_test_setup(void) {
     mat_graph_default(m->graph); // (the Principled BSDF into the Material Output, as new)
     m->graph->view[0] = m->graph->view[1] = 0.0f, m->graph->view[2] = 1.0f;
     E.m = m, E.open = true, E.sel = -1, E.unsaved = false, E.status[0] = 0;
-    MT.bsdf = MT.base_color = -1;
+    MT.bsdf = MT.base_color = MT.metallic = MT.ior = -1;
 }
 static void mated_test_window(void) {
     if (!MT.on || MT.done) return;
@@ -115,12 +118,43 @@ static void mated_test_frame(MatGraph* g, const Geo* geo, ImVec2 origin, ImVec2 
         mt_count(g, NODE_BSDF_PRINCIPLED, &MT.bsdf);
         if (MT.bsdf >= 0) {
             const MatNodeDef* d = mat_node_def(g->nodes[MT.bsdf].type);
-            for (int k = 0; d && k < d->nin && MT.base_color < 0; k++)
+            for (int k = 0; d && k < d->nin; k++) {
                 if (!strcmp(d->in[k].name, "Base Color")) MT.base_color = k;
+                if (!strcmp(d->in[k].name, "Metallic")) MT.metallic = k;
+                if (!strcmp(d->in[k].name, "IOR")) MT.ior = k;
+            }
         }
-        if (MT.bsdf < 0 || MT.base_color < 0) mt_fail("no Principled BSDF with a Base Color"), MT.done = true;
+        if (MT.bsdf < 0 || MT.base_color < 0 || MT.metallic < 0 || MT.ior < 0) {
+            mt_fail("no Principled BSDF with a Base Color, a Metallic and an IOR");
+            MT.done = true;
+            break;
+        }
+        { // 0. the fields on the node: Metallic's bar dragged from 1/4 to 3/4 (a click alone types it: Blender's), the IOR dragged 60 px right
+            float z = g->view[2] > 0.1f ? g->view[2] : 1.0f;
+            float x1 = geo[MT.bsdf].p1.x - 8.0f * z, xm = geo[MT.bsdf].in[MT.metallic].x + 12.0f * z;
+            ImVec2 a = { xm + (x1 - xm) * 0.25f, geo[MT.bsdf].in[MT.metallic].y }, b = { (xm + x1) * 0.5f, geo[MT.bsdf].in[MT.ior].y };
+            MT.start_x = g->nodes[MT.bsdf].x, MT.start_y = g->nodes[MT.bsdf].y, MT.ior0 = g->nodes[MT.bsdf].in[MT.ior][0];
+            g->nodes[MT.bsdf].in[MT.metallic][0] = 0.0f;
+            mt_ev(0, a.x, a.y, 0, false, NULL, 14);
+            mt_ev(1, 0, 0, 0, true, NULL, 16);
+            for (int k = 1; k <= 5; k++) mt_ev(0, a.x + (x1 - xm) * 0.1f * (float)k, a.y, 0, false, NULL, 16 + k);
+            mt_ev(1, 0, 0, 0, false, NULL, 23);
+            mt_ev(0, b.x, b.y, 0, false, NULL, 1);
+            mt_ev(1, 0, 0, 0, true, NULL, 3);
+            for (int k = 1; k <= 6; k++) mt_ev(0, b.x + 10.0f * (float)k, b.y, 0, false, NULL, 3 + k);
+            mt_ev(1, 0, 0, 0, false, NULL, 11);
+        }
         break;
-    case 1: { // 1. the drag by the title: down, 6 moves of (20, 10), up
+    case 1: { // its check; 1. the drag by the title: down, 6 moves of (20, 10), up
+        float met = g->nodes[MT.bsdf].in[MT.metallic][0], ior = g->nodes[MT.bsdf].in[MT.ior][0];
+        bool moved = g->nodes[MT.bsdf].x != MT.start_x || g->nodes[MT.bsdf].y != MT.start_y;
+        printf("[RealEngine] mat-editor-test: on the node: Metallic %.3f (dragged to 3/4), IOR %.3f -> %.3f (dragged right), selected %d, moved %d, links %d\n",
+               met, MT.ior0, ior, E.sel == MT.bsdf, moved, g->link_count);
+        if (met < 0.6f || met > 0.9f) mt_fail("the Metallic bar on the node didn't follow the drag");
+        if (!(ior > MT.ior0 + 0.01f)) mt_fail("the IOR on the node didn't follow the drag");
+        if (E.sel != MT.bsdf) mt_fail("a field taken didn't select its node");
+        if (moved) mt_fail("a field dragged moved its node");
+        if (E.link_from >= 0 || E.link_in >= 0 || g->link_count != 1) mt_fail("a field dragged started a link");
         ImVec2 p = { geo[MT.bsdf].p0.x + 40.0f, geo[MT.bsdf].p0.y + 9.0f };
         MT.press = p, MT.press_p0 = geo[MT.bsdf].p0, MT.start_x = g->nodes[MT.bsdf].x, MT.start_y = g->nodes[MT.bsdf].y;
         mt_ev(0, p.x, p.y, 0, false, NULL, 1);

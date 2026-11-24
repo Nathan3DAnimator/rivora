@@ -1248,6 +1248,16 @@ static float mg_half(uint16_t h) {
     return s ? -v : v;
 }
 
+// (2026-11-24, report #180: an actor vanished while its material's values were dragged) a material being edited bakes
+// into RGBA8 and stays there: each edit reuses the same textures instead of new 4096 ones and a BC7 swap (VRAM churn
+// until an allocation failed and the material went invalid); compressed once its editing stops (mat_update)
+static bool comp_live(const Compiled* c) {
+    uint32_t i = (uint32_t)(c - M.comp);
+    if (i >= M.n || !M.mats[i] || re_time_seconds() >= M.mats[i]->live_until) return false;
+    M.mats[i]->bc7_pending = true;
+    return true;
+}
+
 // Bakes a variant: its textures (made when missing) from the material's program with the variant's parameter values;
 // the mips; the mean base color (the smallest mip read back: what the GI sees)
 static bool bake_variant(const Compiled* c, Variant* v) {
@@ -1260,10 +1270,17 @@ static bool bake_variant(const Compiled* c, Variant* v) {
     VkFormat fm[3] = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT };
     for (int k = 0; k < 3; k++) {
         bool want = k < 2 || (c->flags & MATF_EMISSIVE);
-        if (v->tex[k] && (!want || M.tex[v->tex[k]].w != res || M.tex[v->tex[k]].format != fm[k]))
-            st_bury1(v->tex[k]), v->tex[k] = 0; // (a frame in flight may read them; a BC7 one is baked again in RGBA8)
-        if (want && !v->tex[k]) v->tex[k] = tex_create(res, res, fm[k]);
-        if (want && !v->tex[k]) return false;
+        bool fits = v->tex[k] && M.tex[v->tex[k]].w == res && M.tex[v->tex[k]].format == fm[k];
+        if (!want) {
+            if (v->tex[k]) st_bury1(v->tex[k]), v->tex[k] = 0;
+            continue;
+        }
+        if (fits) continue;
+        // (#180) the new one made first: when it can't be (memory), the old one stays drawn and nothing is lost
+        uint32_t nt = tex_create(res, res, fm[k]);
+        if (!nt) return false;
+        if (v->tex[k]) st_bury1(v->tex[k]); // (a frame in flight may read it; a BC7 one is baked again in RGBA8)
+        v->tex[k] = nt;
     }
     v->own = true;
     mip_buf_reserve(res, (c->flags & MATF_EMISSIVE) != 0); // (2026-11-23: the Kaiser mips' buffer, before recording)
@@ -1286,7 +1303,8 @@ static bool bake_variant(const Compiled* c, Variant* v) {
     // histogram between); 400 materials of 4096 took 6.8 s with a submit each, 2.8 s without BC7
     uint32_t bcn[2] = { 0, 0 };
     GpuBuf bcb[2] = { { 0 }, { 0 } };
-    for (int k = 0; k < 2 && bc7_on() && !(c->flags & MATF_MASKED); k++)
+    bool live = comp_live(c); // (#180: edited now: RGBA8 until it stops)
+    for (int k = 0; k < 2 && bc7_on() && !live && !(c->flags & MATF_MASKED); k++)
         if (v->tex[k]) bcn[k] = tex_to_bc7(cmd, v->tex[k], &bcb[k]);
     if (readback) {
         MatTex* t = &M.tex[v->tex[0]];
@@ -1316,7 +1334,7 @@ static bool bake_variant(const Compiled* c, Variant* v) {
     }
     if (swapped) st_share(c, v); // (no slot keeps a buried one)
     if (c->flags & MATF_MASKED) alpha_coverage_mips(v->tex[0], c->flags >> 24); // (the cut's coverage kept in the mips)
-    variant_bc7(c, v); // (a Masked one's, after its coverage: a quarter of the memory)
+    if (!live) variant_bc7(c, v); // (a Masked one's, after its coverage: a quarter of the memory)
     v->dirty = false;
     if (udim) ud_variant_clamp(v); // (Q18) a tile's textures clamped; the source's tile back to its least; an owner's other tiles, its table
     if (src_udim) ud_src_trim(VK_NULL_HANDLE, c, src_udim);
@@ -1735,7 +1753,7 @@ static bool bake(Material* m) {
             else i++;
     } else ok = bake_variant(c, &c->v);
     (void)still_res;
-    c->valid = ok;
+    c->valid = ok || c->v.tex[0] != 0; // (#180: a bake that couldn't get its textures keeps the last result drawn)
     m->slot = c->v.slot;
     memcpy(m->avg_base, c->v.avg, sizeof m->avg_base);
     memcpy(m->avg_emis, c->v.avg_emis, sizeof m->avg_emis);
@@ -1973,6 +1991,12 @@ bool mat_update(VkCtx* vk, VkCommandBuffer cmd) {
     if (M.any_detail) detail_follow();
     // a frame's (the editor with its workers): a few at a time; an explicit call or the game's: all of them now
     bool changed = M.any_dirty && mat_update_dirty(!cmd || !async_ready());
+    for (uint32_t i = 0; i < M.n; i++) // (#180) a material whose editing stopped: its textures compressed now, once
+        if (M.mats[i] && M.mats[i]->bc7_pending && re_time_seconds() >= M.mats[i]->live_until && !M.mats[i]->dirty && M.comp[i].valid) {
+            M.mats[i]->bc7_pending = false;
+            variant_bc7(&M.comp[i], &M.comp[i].v);
+            changed = true;
+        }
     // the texture streaming's step for this frame (the frame's command buffer: a tile of a bake, copies or a swap)
     if (cmd) stream_step(cmd);
     else st_drain(false);

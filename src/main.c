@@ -42,6 +42,7 @@
 #include "plugins.h"
 #include "cvars.h"
 #include "editor.h"
+#include "mcp.h"
 #include "rig_detect.h"
 #include "level_preload.h"
 #include "frame_budget.h"
@@ -273,6 +274,8 @@ int main(int argc, char** argv) {
     const char* show_window = NULL;
     bool char_test = false, constraint_test = false, nav_test = false, morph_test = false, health_test = false, inv_test = false, save_test = false, ia_test = false, dlg_test = false, qst_test = false, rules_test = false;
     bool abil_test = false, hud_test = false, levels_test = false, dock_test = false, picker_test = false, avp_test = false, artist_test = false;
+    bool mcp_flag = false, mcp_test = false; // (2026-11-24) --mcp: the MCP server on (mcp.h); --mcp-test: its test
+    int mcp_port = 0;
     int pause_test = 0; // --pause-test 1, --pause-test-reload 2 (pause_test.c)
     const char* cine_test = NULL;
     const char* trace_path = NULL; // (B14b) --trace FILE
@@ -301,6 +304,7 @@ int main(int argc, char** argv) {
     const char* open_asset = NULL;
     const char* import_tlend = NULL;
     bool import_folder = false; // (2026-11-23) --import-folder: a folder from Explorer, all of it (content_import_folder)
+    bool mat_live_test = false; // (2026-11-24, #180) --mat-live-test
     bool rig_fit_test = false; // (2026-11-23) --rig-fit-test: after --import, the rig found and the physics fitted to the skin
     bool mesh_socket_test = false; // (2026-11-23) --mesh-socket-test: after --import, a Static Mesh's sockets and material
     double import_budget_ms = 0.0; // (Q19) --import-budget: the import's time limit (the test fails past it)
@@ -389,6 +393,9 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--icon-sheet")) icon_sheet = true; // (Q5) every icon in a window over the editor: --shot makes the PNG (test icon_sheet)
         else if (!strcmp(argv[i], "--artist-test")) artist_test = true; // (Q23) the Texture viewer's .hdr, its thumbnail and the viewer following the file, an .exr's reason (artist_test.c)
         else if (!strcmp(argv[i], "--artist-selftest")) return artist_selftest() ? 0 : 1; // (Q23) the .hdr decoder, the textures' kinds, the vertex count
+        else if (!strcmp(argv[i], "--mcp")) mcp_flag = true; // (2026-11-24) the MCP server on (rivora_mcp.exe opens the editor with it)
+        else if (!strcmp(argv[i], "--mcp-port") && i + 1 < argc) mcp_port = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--mcp-test")) mcp_test = mcp_flag = true, mcp_port = mcp_port ? mcp_port : 47871; // (mcp_test.c: a port of its own)
         else if (!strcmp(argv[i], "--asset-viewport-test")) avp_test = true; // (Q7) every asset editor's viewport in every view mode, a socket, the cost (asset_viewport_test.c)
         else if (!strcmp(argv[i], "--dock-test")) dock_test = true; // the modular windows: every docking target, a maximized window closed (dock_test.c)
         else if (!strcmp(argv[i], "--picker-test")) picker_test = true; // (Q6) the asset picker and Create from the selection (picker_test.c)
@@ -426,6 +433,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--import-folder") && i + 1 < argc) import_tlend = argv[++i], import_folder = true;
         else if (!strcmp(argv[i], "--mesh-socket-test")) mesh_socket_test = true;
         else if (!strcmp(argv[i], "--rig-fit-test")) rig_fit_test = true;
+        else if (!strcmp(argv[i], "--mat-live-test")) mat_live_test = true;
         else if ((!strcmp(argv[i], "--import-tlend") || !strcmp(argv[i], "--import")) && i + 1 < argc) import_tlend = argv[++i]; // a Tlender scene (or an OBJ, a glTF) into /Content/Imported
         else if (!strcmp(argv[i], "--import-budget") && i + 1 < argc) import_budget_ms = atof(argv[++i]); // (Q19) ms
         else if (!strcmp(argv[i], "--open-viewport") && i + 1 < argc) open_asset = argv[++i], open_viewport = true; // ... on its Viewport
@@ -576,7 +584,7 @@ int main(int argc, char** argv) {
     if (pie_client && !background) bw = 1280, bh = 720; // (B13: another player's window, beside the editor)
     // (2026-11-23, the user: "the opening like Blender's, a transparent background") the intro plays from here in a
     // window of its own over the desktop (brand.c) while the engine starts; the main window is shown once it ends
-    bool automated = bench.cli || pause_test || bp_test || char_test || constraint_test || nav_test || morph_test || health_test || inv_test || save_test || ia_test || dlg_test || qst_test || rules_test || abil_test || hud_test || levels_test || dock_test || picker_test || avp_test || artist_test || bp_dbg_test || char_test || constraint_test || nav_test || morph_test || health_test || inv_test || save_test || ia_test || dlg_test || umg_test || seq_test || cine_test || pie_client || audio_test || script_test || trace_test || vr_hand_test || async_test || assistant_test || package_dir || import_tlend || crash_kind_env();
+    bool automated = bench.cli || pause_test || bp_test || char_test || constraint_test || nav_test || morph_test || health_test || inv_test || save_test || ia_test || dlg_test || qst_test || rules_test || abil_test || hud_test || levels_test || dock_test || picker_test || avp_test || artist_test || bp_dbg_test || char_test || constraint_test || nav_test || morph_test || health_test || inv_test || save_test || ia_test || dlg_test || umg_test || seq_test || cine_test || pie_client || audio_test || script_test || trace_test || vr_hand_test || async_test || assistant_test || mcp_test || package_dir || import_tlend || crash_kind_env();
     if (automated && !force_intro) g_brand_intro_on = false;
     int imx = 0, imy = 0, imw = 0, imh = 0;
     if (on_monitor) re_test_monitor(&imx, &imy, &imw, &imh);
@@ -695,6 +703,7 @@ int main(int argc, char** argv) {
     g_load_splash = splash_picture;
     brand_splash_frame(&vk, project_path ? 0.55f : 1.0f, TR("Ready."));
     g_editor = &ed;
+    if (mcp_flag || !automated) mcp_apply_prefs(mcp_flag, mcp_port); // (a test never starts it from the user's preferences)
     if (theme_cli && !theme_select_name(theme_cli)) printf("[RealEngine] FAIL: no theme named %s\n", theme_cli);
     if (layout_default) dock_layout_default(&ed); // (Q26: every panel of the default layout, an automated run too)
     services_init(&ed);
@@ -838,6 +847,7 @@ int main(int argc, char** argv) {
     }
     if (mesh_socket_test && !editor_mesh_socket_test(&ed)) exit_code = 1; // (2026-11-23)
     if (rig_fit_test && !editor_rig_fit_test(&ed)) exit_code = 1; // (2026-11-23)
+    if (mat_live_test && !mat_live_selftest()) exit_code = 1; // (2026-11-24, #180)
     if (reimport && !content_reimport(reimport)) exit_code = 1;
     // --save without --bake: the level as it is after --open / --stress / --import (the game's tests write their level so)
     if (save_path && !bake_mode && !editor_save_level(&ed, save_path, re_time_seconds())) exit_code = 1;
@@ -1140,6 +1150,11 @@ int main(int argc, char** argv) {
             if (picker_test_finished(&picker_ok)) ed.quit = true, exit_code = picker_ok ? exit_code : 1;
         }
         if (icon_sheet) ui_icon_sheet_draw(); // (Q5: the icon sheet over everything)
+        mcp_server_frame(&ed, t0); // (2026-11-24) the AI's queued calls (mcp.h)
+        if (mcp_test) {
+            bool mcp_ok;
+            if (mcp_test_frame(&ed, &mcp_ok)) ed.quit = true, exit_code = mcp_ok ? exit_code : 1;
+        }
         if (avp_test) {
             bool avp_ok;
             if (avp_test_frame(&ed, &avp_ok)) ed.quit = true, exit_code = avp_ok ? exit_code : 1;
@@ -1299,6 +1314,16 @@ int main(int argc, char** argv) {
             double dt_mv = mv0 > 0.0 ? (shot_every > 0 ? 1.0 / 60.0 : t0 - mv0) : 0.0;
             mv0 = t0;
             for (int k = 0; k < 3; k++) ed.cam.pos[k] += cam_move[k] * (float)dt_mv;
+        }
+        { // (2026-11-23, the site's screenshots) --open-asset with --shot: the asset's editor brought to the front a second
+          // before the picture (a level opening with the project focuses the viewport: the floating editor went behind it)
+            static bool refocused;
+            const char* rext = open_asset ? strrchr(open_asset, '.') : NULL;
+            if (shot_path && rext && !refocused && bench.active && t1 >= bench.until - 1.0) {
+                refocused = true;
+                if (!strcmp(rext, ".rbp")) bp_editor_open(open_asset);
+                else if (!strcmp(rext, ".rmat") || !strcmp(rext, ".rmi")) mat_editor_open(open_asset);
+            }
         }
         if (shot_path && shot_every > 0 && bench.active && t0 >= bench.warm_until && bench.frames > (uint64_t)shot_skip && bench.frames % (uint64_t)shot_every == 0) {
             static char seq[600];
@@ -1671,6 +1696,7 @@ int main(int argc, char** argv) {
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     igDestroyContext(NULL);
+    mcp_server_stop();
     editor_shutdown(&ed);
     if (quit_test) { // (the test editor_close: no crash on the way here, the layout written while ImGui lived)
         char lp[900] = "";

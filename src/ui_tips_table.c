@@ -1384,5 +1384,9 @@ const UiTip g_ui_tips[] = {
     T("Sleep Distance", "Past this distance from the camera (m) it sleeps (never: always simulated).", "Além dessa distância da câmera (m) ele dorme (nunca: sempre simulado)."),
     T("Reset Soft Body", "Starts it over from its rest shape.", "Recomeça da forma de repouso."),
     T("Make Soft Body from Selected", "The selected Static Mesh becomes a soft body of its own mesh, in place (a part of a Skeletal Mesh: flesh held to its bone).", "A Static Mesh selecionada vira um corpo mole da própria malha, no lugar (uma parte de Skeletal Mesh: carne presa ao osso)."),
+    // (2026-11-24) Tools > AI Connection (MCP)
+    T("AI Connection (MCP)", "Lets an AI assistant (Claude Code, Claude Desktop, Cursor) drive this editor through the Model Context Protocol: the switch, the port and each client's setup to copy.", "Deixa um assistente de IA (Claude Code, Claude Desktop, Cursor) controlar este editor pelo Model Context Protocol: o liga/desliga, a porta e a configuração de cada cliente para copiar."),
+    T("Enable MCP Server", "Turns on the editor's MCP server on 127.0.0.1 (only programs on this computer reach it). Kept on for the next times.", "Liga o servidor MCP do editor em 127.0.0.1 (só programas deste computador chegam nele). Fica ligado nas próximas vezes."),
+    T("Port", "The MCP server's port (Enter applies). Change it only when another program uses it; the clients' setup below follows it.", "A porta do servidor MCP (Enter aplica). Mude só quando outro programa já usa ela; a configuração dos clientes abaixo acompanha."),
 };
 const int g_ui_tip_count = (int)(sizeof g_ui_tips / sizeof g_ui_tips[0]);

@@ -235,6 +235,14 @@ void editor_simulate(Editor* ed, double now);
 #define RE_PAYLOAD_PLACE "RE_PLACE"
 typedef struct PlacePayload { int index; } PlacePayload;
 void editor_place_drop(Editor* ed, int index, const float at[3]);
+// (2026-11-24, the MCP server) the catalog by code: its count, a class's name (and its category or group), a class
+// placed in front of the camera (as the Add menu does: selected, undoable; ENTITY_NONE when nothing new), the
+// Outliner's class name of an actor ("Point Light", "Static Mesh Actor")
+int editor_place_count(void);
+const char* editor_place_name(int i, const char** category);
+bool editor_place_is_preset(int i);
+Entity editor_place_spawn(Editor* ed, int i, double now);
+const char* editor_actor_type(World* w, Entity e);
 void editor_shutdown(Editor* ed);
 // Builds the UI for this frame (between igNewFrame and igRender) and runs the systems of the playing world.
 void editor_frame(Editor* ed, double dt, double now);

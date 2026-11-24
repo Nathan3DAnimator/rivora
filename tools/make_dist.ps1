@@ -17,7 +17,7 @@ $build = Join-Path $root "build-release"
 & $cmake -S $root -B $build -G "Visual Studio 17 2022" -A x64 "-DRE_VERSION_STRING=$verText"
 if ($LASTEXITCODE -ne 0) { throw "cmake configure falhou" }
 $env:CL = "/MP"
-& $cmake --build $build --config Release --target realengine realengine_updater realengine_game realengine_legacy -- /m /v:m
+& $cmake --build $build --config Release --target realengine realengine_updater realengine_game realengine_legacy realengine_mcp -- /m /v:m
 if ($LASTEXITCODE -ne 0) { throw "a build falhou" }
 $rel = Join-Path $build "Release"
 
@@ -34,6 +34,8 @@ Copy-Item (Join-Path $rel "rivora_game.exe") $dir # Build > Package Game copies 
 # (2026-11-23, Real Engine -> Rivora Engine) realengine.exe: the launcher that starts rivora.exe (src/legacy_launcher.c): the
 # older installs' shortcuts and updater open it
 Copy-Item (Join-Path $rel "realengine.exe") $dir
+# (2026-11-24) rivora_mcp.exe: the MCP stdio bridge (notas-dev/mcp.md): Claude Desktop and the clients that start a program
+Copy-Item (Join-Path $rel "rivora_mcp.exe") $dir
 # (2026-11-23, the open source release) the license, the third-party notices (tools/make_notices.py), the privacy note and
 # the readme beside the editor; Package Game copies the first two next to every game
 foreach ($f in "LICENSE", "THIRD_PARTY_NOTICES.md", "PRIVACY.md", "README.md") { Copy-Item (Join-Path $root $f) $dir }

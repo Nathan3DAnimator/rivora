@@ -118,6 +118,7 @@
 #include "assistant_ui.h"
 #include "material.h"
 #include "editor.h"
+#include "mcp.h"
 #include "asset_viewport.h"
 #include "sublevels.h"
 #include "gi_bake.h"
@@ -7073,6 +7074,7 @@ void editor_save_prefs(Editor* ed) {
     fprintf(f, "snap_move=%.3f\nsnap_rotate=%.3f\nsnap_scale=%.3f\n", ed->snap_move_step, ed->snap_rotate_step, ed->snap_scale_step);
     fprintf(f, "gizmo_size=%.0f\ngizmo_orient=%d\ngizmo_pivot=%d\ngizmo_only_loc=%d\n", ed->gizmo_size, ed->gizmo_orient, ed->gizmo_pivot, ed->gizmo_only_loc ? 1 : 0);
     async_ui_write_prefs(f); // where the task cards were moved, thin or not
+    mcp_write_prefs(f);      // (2026-11-24) the MCP server: on, its port
     asset_picker_write_prefs(f); // (Q6) the asset picker's view and preview size
     assistant_ui_write_prefs(f); // the Assistant's recipes: as nodes or as code (which language)
     look_write_prefs(f); // (Q26) the look seen (the new default offered once), the target platform
@@ -7129,7 +7131,7 @@ void editor_load_prefs(Editor* ed) {
         else if (!strcmp(line, "gizmo_only_loc")) ed->gizmo_only_loc = atoi(v) != 0;
         else if (!strcmp(line, "snap_rotate")) ed->snap_rotate_step = fmaxf((float)atof(v), 0.01f);
         else if (!strcmp(line, "snap_scale")) ed->snap_scale_step = fmaxf((float)atof(v), 0.001f);
-        else if (!async_ui_read_pref(line, v) && !asset_picker_read_pref(line, v) && !look_read_pref(line, v)) assistant_ui_read_pref(line, v);
+        else if (!async_ui_read_pref(line, v) && !asset_picker_read_pref(line, v) && !look_read_pref(line, v) && !mcp_read_pref(line, v)) assistant_ui_read_pref(line, v);
     }
     fclose(f);
     look_after_prefs(ed, true, g_editor_prefs_readonly); // (Q26) an editor.ini from before 0.44: the new look, once
@@ -8677,6 +8679,7 @@ static void main_menu_items(Editor* ed, double now) {
     if (igBeginMenu(TR("Tools"), true)) {
         if (ui_menu_item(ICON_TIMER, TR("Measure Frame Time (3 s)"), NULL, false, ed->bench_request <= 0.0)) ed->bench_request = 3.0;
         if (ui_menu_item(ICON_FUNCTION, TR("Editor Utilities"), NULL, false, true)) editor_utilities_open();
+        ui_menu_item_ptr(ICON_BRAIN, TR("AI Connection (MCP)"), NULL, mcp_ui_show_flag(), true); // (2026-11-24: mcp.h)
         if (ui_menu_item(ICON_STATS, TR("Trace (Insights)"), NULL, g_show_trace, true)) g_show_trace = !g_show_trace; // (B14b)
         if (plugin_menu_count() && ui_begin_menu(ICON_COMPONENT, TR("Plugins"), true)) { // (B14c) the plugins' own items
             for (uint32_t i = 0; i < plugin_menu_count(); i++)
@@ -12942,6 +12945,7 @@ void editor_frame(Editor* ed, double dt, double now) {
     script_hot_reload(ed->playing); // a script saved (in the IDE or another editor): compiled again
     script_ide_draw(ed, now, (float)dt); // the Code Editor, the API reference, the Editor Utilities
     assistant_ui_draw(); // Help > Assistant (and its "Show me where" outlines)
+    mcp_ui_draw(ed); // Tools > AI Connection (MCP)
     // the listener: the view (the player's camera while playing); the game's sounds paused with it
     audio_pause_game(ed->playing && (ed->paused || game_paused()));
     TRACE("Audio", audio_world_update(&ed->world, (float)dt, ed->playing, ed->render_view.pos, ed->render_view.fwd, ed->render_view.up));
@@ -12966,3 +12970,27 @@ void editor_frame(Editor* ed, double dt, double now) {
     quit_popup(ed, now);
     update_title(ed);
 }
+
+// (2026-11-24, the MCP server: mcp_tools.c) the Add menus' catalog and the Outliner's class names by code
+int editor_place_count(void) {
+    place_catalog();
+    return g_nplace;
+}
+const char* editor_place_name(int i, const char** category) {
+    place_catalog();
+    if (i < 0 || i >= g_nplace) return "";
+    if (category) *category = g_place[i].group ? g_place[i].group : g_place_cat_names[g_place[i].cat];
+    return g_place[i].name;
+}
+bool editor_place_is_preset(int i) { // (a Sky Preset changes the sky's actors: nothing new to return)
+    place_catalog();
+    return i >= 0 && i < g_nplace && g_place[i].spawn == PX_SKY;
+}
+Entity editor_place_spawn(Editor* ed, int i, double now) {
+    place_catalog();
+    if (i < 0 || i >= g_nplace || ed->playing) return ENTITY_NONE;
+    Entity before = ed->selected;
+    place_item(ed, i, now);
+    return ed->selected != before ? ed->selected : ENTITY_NONE;
+}
+const char* editor_actor_type(World* w, Entity e) { return type_label(w, e); }

@@ -1887,12 +1887,18 @@ void bp_set_level_hooks(const BpLevelHooks* h) { V.hooks = h ? *h : (BpLevelHook
 
 static Inst* insts(void) { return (Inst*)V.insts.base; }
 
+// (2026-11-24, the MCP server's run_script / play: mcp_tools.c) a sink that also gets every message (main thread)
+static void (*g_msg_sink)(const char* text, void* user);
+static void* g_msg_sink_user;
+void bp_set_message_sink(void (*fn)(const char* text, void* user), void* user) { g_msg_sink = fn, g_msg_sink_user = user; }
+
 static void message(const char* fmt, ...) {
     char buf[160];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
+    if (g_msg_sink) g_msg_sink(buf, g_msg_sink_user);
     uint32_t i = V.nmsg++ % 16;
     snprintf(V.msg[i].text, sizeof V.msg[i].text, "%s", buf);
     V.msg[i].t = V.time;

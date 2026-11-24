@@ -390,6 +390,7 @@ bool bp_player_camera(World* w, float pos[3], float* yaw, float* pitch); // the 
 bool bp_player_camera_ex(World* w, float pos[3], float* yaw, float* pitch, float* roll, float* fov);
 // Print String's lines (the viewport shows them a few seconds, like Unreal)
 uint32_t bp_messages(const char** lines, float* ages, uint32_t max);
+void bp_set_message_sink(void (*fn)(const char* text, void* user), void* user); // (the MCP server: every Print / VM message too; NULL: none)
 // An actor of a class at a location (Spawn Actor, the viewport's drop)
 Entity bp_spawn(World* w, BpAsset* cls, const float location[3], const float rotation[3]);
 // Animation Blueprints (anim.c): a variable of an instance (the entity with its CBlueprint) and a custom event by name

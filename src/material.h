@@ -204,6 +204,10 @@ typedef struct Material {
     // compiled / baked (material.c)
     uint32_t slot;        // its GpuMaterial (0: none yet)
     bool dirty;           // edited: compile and bake before the next frame
+    // (2026-11-24, report #180) being edited (the Material Editor's values dragged): until live_until its bakes keep
+    // RGBA8 (the same textures reused each edit, no BC7 swap); bc7_pending: compressed once the editing stops
+    double live_until;
+    bool bc7_pending;
     char error[160];
     float avg_base[3];    // the baked base color's mean (the GI sees the mesh with it)
     // (2026-11-23) the baked emission's mean (x100: nits): the GI's rays see the mesh glow with it, and an actor with
@@ -279,6 +283,7 @@ Material* mat_create(const char* path, bool instance, const char* parent_path); 
 uint32_t mat_vpath_hash(const char* vpath); // a material's id from its "/Content/..." path (before it is loaded)
 bool mat_reload_file(const char* path);     // written by someone else (a background import): read again if loaded
 void mat_mark_dirty(Material* m);               // the graph or a parameter changed
+bool mat_live_selftest(void); // (2026-11-24, #180) --mat-live-test: a 4096 material edited 60 times reuses its textures
 const char* mat_default_path(void);             // the basic textured material (the engine's grid material)
 
 // The materials' GPU work before a frame (compiles and bakes the dirty ones; the renderer's command buffer)

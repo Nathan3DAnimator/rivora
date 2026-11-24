@@ -29,13 +29,14 @@ jogo: package-game, hdr10-output
 landscape: landscape, foliage, landscape-paint
 luz: lights, sky-fog, shadows-pro, many-lights, contact-shadows, cine-camera, light-function, emissive-light
 marca: loading-screen, editor-intro, open-source-license, rivora-rename
-materiais: materials, material-vs-texture, change-color, texture-streaming, glass-translucent, material-pins-no-effect, vertex-color-detail, decals, parallax, digital-humans, wet-surface, transmission, interior-mapping, general-optimization, material-editor-flow, emissive-light, texture-autolink, drop-material-viewport
+materiais: materials, material-vs-texture, change-color, texture-streaming, glass-translucent, material-pins-no-effect, vertex-color-detail, decals, parallax, digital-humans, wet-surface, transmission, interior-mapping, general-optimization, material-editor-flow, emissive-light, texture-autolink, drop-material-viewport, material-node-fields
 multidao: crowds
 online: multiplayer, advanced-sessions, replication-pro, steam-pro, save-load, multiplayer-lag, online-prediction
 projetos: create-project, project-settings, editor-intro
 prototipagem: prototyping
 render: performance, scalability, post-process, color-grading-lut, ssr-reflections, async-compute, tsr-upscaling, glass-translucent, heavy-meshes, render-styles, rt-denoiser, rt-clusters, digital-humans, hair-groom, gaussian-splat, light-function, transmission, toon
 scripts: scripts-basics, real-language, csharp-guide, python-guide, c-guide, code-editor, blueprint-debugger, structs-guide, switch-match, jit-native, editor-utilities
+mcp: mcp-ai-connection, scripts-basics, python-guide, editor-utilities
 sequencer: sequencer, camera-actor, cinematics-render
 servicos: report-bug, updates, gpu-crash
 umg: game-ui, ui-fonts-lists

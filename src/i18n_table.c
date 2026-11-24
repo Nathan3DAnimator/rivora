@@ -5569,5 +5569,19 @@ const I18nEntry g_i18n_entries[] = {
     { "Next Section", { "Próxima Seção" } },
     { "Hit Bone", { "Osso do Golpe" } },
     { "Hit Radius", { "Raio do Golpe" } },
+    // (2026-11-24) Tools > AI Connection (MCP): mcp_ui.c
+    { "AI Connection (MCP)", { "Conexão com IA (MCP)" } },
+    { "Lets an AI assistant (Claude, Cursor, any MCP client) see and change this editor: place and edit actors, run scripts, take pictures of the viewport, play and read the docs. It only accepts programs on this computer.", { "Deixa um assistente de IA (Claude, Cursor, qualquer cliente MCP) ver e mudar este editor: colocar e editar atores, rodar scripts, tirar fotos da viewport, dar Play e ler a documentação. Só aceita programas deste computador." } },
+    { "Enable MCP Server", { "Ligar Servidor MCP" } },
+    { "Port", { "Porta" } },
+    { "Running at", { "Rodando em" } },
+    { "Last client: %s, %u calls answered", { "Último cliente: %s, %u chamadas respondidas" } },
+    { "No client connected yet.", { "Nenhum cliente conectado ainda." } },
+    { "Off.", { "Desligado." } },
+    { "Claude Code (terminal)", { "Claude Code (terminal)" } },
+    { "Claude Desktop (claude_desktop_config.json)", { "Claude Desktop (claude_desktop_config.json)" } },
+    { "rivora_mcp.exe opens the editor when it isn't running and turns the server on.", { "O rivora_mcp.exe abre o editor quando ele não está aberto e liga o servidor." } },
+    { "Cursor, VS Code and other clients (URL)", { "Cursor, VS Code e outros clientes (URL)" } },
+    { "Tip: ask the AI to call get_started first. Every change it makes can be undone with Ctrl+Z; nothing is saved until it (or you) saves the level.", { "Dica: peça à IA para chamar get_started primeiro. Tudo o que ela muda se desfaz com Ctrl+Z; nada é salvo até ela (ou você) salvar o nível." } },
 };
 const int g_i18n_entry_count = (int)(sizeof g_i18n_entries / sizeof g_i18n_entries[0]);

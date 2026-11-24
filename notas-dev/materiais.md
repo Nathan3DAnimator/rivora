@@ -467,3 +467,29 @@ Texturas UDIM (um tile por quadrado da UV) no Image Texture, com bake e streamin
   `.rmat` do projeto e acerta os nós que usam a textura) e mostra a memória lida pelos materiais.
 - Teste: `mat_autolink` confere os padrões pelo nome e o salvar/ler; o painel conferido por print (`--open-asset`).
 
+
+## Report #180: o ator sumia ao mexer no material (2026-11-24)
+- Causa: cada edição (o arrasto de um valor nos Detalhes: um bake a cada 0,12 s) refazia as texturas do material: as BC7
+  enterradas e um conjunto RGBA8 novo do tamanho do bake (4096: ~256 MB por edição) criado e comprimido de novo. A VRAM
+  girava até um `tex_create` falhar: o bake voltava falso, `c->valid = false` e o ator deixava de ser desenhado.
+- Correção (`material_gpu.inc`): o material em edição (`live_until`, posto pelo `touch()` do editor por 2,5 s) assa em
+  RGBA8 e **reusa as mesmas texturas** (sem BC7 enquanto dura); quando a edição para, o `mat_update` comprime uma vez
+  (`bc7_pending`). A textura nova é criada antes de enterrar a velha: sem memória, a velha fica desenhada; um bake que
+  não conseguiu texturas mantém o último resultado (`valid` continua verdadeiro).
+- Teste `mat_live_edit` (`--mat-live-test`): 60 edições seguidas de um material 4096: 23,3 ms por bake, 0 trocas de
+  textura, sempre válido, BC7 depois.
+
+## Valores editados direto no nó (2026-11-24, pedido do usuário: "como no Tlender")
+- O Material Editor desenha campos sobre as linhas do nó quando o zoom é >= 80% (como o `node_socket_value_widget` do
+  Tlender e o Blender): as configurações (`props`: lista ou caixa) numa linha cada logo abaixo das saídas (a altura do
+  nó em `node_geo`/`node_h` conta essas linhas: o Organizar Nós continua certo), o número do nó Value, a cor do nó RGB,
+  e cada entrada livre: número arrastável com o nome dentro (`"Nome  %.3f"`), fator 0..1 como barra preenchida
+  (slider sem o puxador, o preenchimento em `TK_ACCENT`), cor por amostra que abre um seletor, vetor X Y Z.
+- O canvas é um `InvisibleButton` com `igSetNextItemAllowOverlap`: os campos, enviados depois, ficam com o mouse; o
+  clique num campo não arrasta o nó nem começa link. Um campo sob outro nó (o de cima) vira texto. Sem campos durante
+  arrasto de nó/link/caixa. Pegar um campo seleciona o nó (os Detalhes mostram o mesmo). Um clique sem arrastar abre o
+  valor para digitar (o patch do ImGui do Blender, `ConfigDragClickToInputText`).
+- Mudanças passam pelo `touch()` (bake em lote, RGBA8 ao vivo do #180). Os Detalhes continuam com todos os campos.
+- Teste `mated_ui` (passo 0): a barra do Metálico arrastada de 1/4 a 3/4 dá 0,766, o IOR arrastado 60 px sobe
+  (1,5 -> 2,1), o nó selecionado, sem mover, sem link. Custo: os campos são widgets do ImGui só nos nós visíveis com zoom
+  >= 80% (o editor seguiu em ~1,9 ms por quadro na foto).

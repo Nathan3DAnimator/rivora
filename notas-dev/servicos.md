@@ -485,6 +485,18 @@ Agora o relatório diz o passe.
   e a abertura nova (3,9 ms por quadro). Runtime Android recompilado (`RE_VERSION_STRING=0.49`, `.so` de 57,1 MB) e o
   pacote refeito com ele. Base do Assistente publicada (`realengine-assistant` 2ff6862, 273 artigos).
 
+- **0.50 — Rivora Engine** publicada em 2026-11-23 (https://github.com/Nathan3DAnimator/realengine-releases/releases/tag/v0.50),
+  a "Latest", 314,2 MB, com o pacote em dois nomes (`Rivora-0.50-win64.zip` e `RealEngine-0.50-win64.zip`, mesmos bytes e
+  assinatura): o nome novo, código aberto (MIT, avisos, privacidade, doação, sem marcas da Epic), detecção de rig e física
+  pela malha, Preload Level com velocidade. Suíte completa no 2º monitor: 331/347; `update_download` só passa com a 0.50
+  publicada (procura `Rivora-*`); `spec_leak_nort`, `ghost_realistic`, `render_style_video`, `async`, `upscaler_xess` e
+  `crowd_20000` passaram ao repetir sozinhos; as outras 9 são as conhecidas (fps e luz, iguais com a 0.48/0.49).
+  **Ponte conferida antes de publicar**: a 0.49 extraída numa pasta temporária, o `realengine_updater.exe` dela com
+  `--install` sobre a 0.50: copiou `rivora*.exe`, trocou o `realengine.exe` pelo lançador (93 KB) e o lançador abriu o
+  `rivora.exe` da pasta. **Depois de publicar**, pela internet: o `realengine.exe --update-test` da 0.49 achou
+  `RealEngine-0.50-win64.zip`, baixou, assinatura ok, desempacotou (61,6 s); o `rivora.exe --update-test` da 0.50 achou
+  `Rivora-0.50-win64.zip` (37,1 s). Runtime Android recompilado (0.50, 57,3 MB). Código publicado no `rivora` (commit "Rivora Engine
+  0.50", e-mail no-reply), base do Assistente (`realengine-assistant` 0dff5e0, 278 artigos).
 ## Código aberto (2026-11-23)
 Pedido: "deixar a engine pronta para distribuição open source gratuita, no meu site só com um local de doação".
 - **Licença MIT** (`LICENSE`, Nathan Lourenço Peixoto). Os jogos são do usuário, sem royalties.
