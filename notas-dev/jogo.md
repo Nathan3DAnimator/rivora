@@ -123,3 +123,8 @@ Compilar > Empacotar para Android: o mesmo pacote virado APK (arm64, Vulkan 1.3)
 - Teste `game_hdr10` (o pacote rpak com `REALENGINE_HDR=1`: "HDR10 output: on" ou "unavailable", sem erros). Nesta
   máquina a janela do jogo não recebe HDR10 (o HDR do Windows desligado): o caminho PQ não foi visto numa tela HDR.
 - Falta: metadados HDR (VK_EXT_hdr_metadata), HDR no editor, scRGB, calibração no menu de opções.
+
+## Blueprint apagado e o Empacotar Jogo (2026-11-25, bug-fixer)
+- Um Blueprint cujo arquivo foi apagado (Content Browser, lixeira ou fora do editor) continua registrado na memória; o
+  pacote o deixa de fora ("Package: ... left out (its file was deleted)") em vez de falhar com "não foi possível
+  copiar". Teste `blueprints_after_net`.

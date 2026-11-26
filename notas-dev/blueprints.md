@@ -1,5 +1,7 @@
 # Blueprints (programação visual)
 
+> Na tela (desde 25/11/2026, item 13) o Blueprint se chama **Graph** / **Grafo** (`i18n_terms` em i18n.c reescreve o texto exibido; artigos do Assistente reescritos). Identificadores, `.rbp`, `BP_` e estas notas seguem com "Blueprint".
+
 Como os Blueprints da Unreal: assets na pasta Content, editados como grafos de nodes, compilados para um bytecode por
 registradores que uma VM roda sem alocar nada.
 
@@ -373,3 +375,64 @@ Como o da Unreal. `bp_debug.h` (API), o runtime no fim de `bp_vm.c`, a fiber em 
 - **Medidas**: 1 M leituras de uma trilha Vector de 64 chaves em 46 ms (46 ns cada, busca binária).
 - **Testes**: no `blueprints`, `bp_timeline_selftest` (ordem, Auto, Linear, Constant, pontas, velocidade) e
   BP_TestTimeline tocado de verdade: Value 2,000, o Event em 0,5 s uma vez, Finished.
+
+## Variáveis de referência de asset: Level, Level Sequence e as outras (2026-11-24, item 11)
+Pedido: "uma variável do tipo Level igual à da Unreal, usada e alterada no painel de variáveis; o mesmo para Level
+Sequences e as outras referências tipadas (Sound, Material, Texture, Static Mesh, Skeletal Mesh, Animation, Widget
+Class, Data Asset, Particle System, Dialogue, Quest, Curve)".
+- Já existiam (Q-anteriores) como **Name com a classe do asset no `ref`** (`g_asset_refs` no bp_editor.c: Level, Level
+  Sequence, Sound, Material, Texture, Static Mesh, Skeletal Mesh, Animation Sequence, Anim Montage, Data Asset, Particle
+  System, Dialogue, Quest, Behavior Tree, Input Action, Input Mapping Context, Vehicle, Physics Asset, IK Rig): o valor é
+  o nome do asset, o que os pinos de nome (Level Name) e os pinos de asset (`bp_asset_pin`: Sequence, Animation...)
+  recebem; Name -> Name liga com qualquer `ref`. Get/Set, Instance Editable (o Details do ator usa `bp_value_edit`),
+  SaveGame e replicação são os de um Name. Sem id novo de tipo: os Blueprints salvos abrem como antes.
+- Agora: a tabela leva os tipos do Content (`AK(ASSET_...)`) e o valor é escolhido no **seletor de assets** filtrado
+  pelo tipo (`asset_field`: miniatura, busca), no Valor Padrão e no Details da instância; entraram Camera Shake, PCG
+  Graph, Physical Material, Sound Attenuation, Sound Concurrency, Submix e AI Brain. Widget Class: a Class Reference da
+  classe do Widget (já existia). **Curve**: a engine não tem asset de curva (as curvas ficam dentro dos assets).
+- **Scripts** (Real, C#, Python, C): `Level`, `World`, `LevelSequence`, `Sound`, `Material`, `Texture`, `StaticMesh`,
+  `SkeletalMesh`, `AnimSequence`, `AnimMontage`, `DataAsset`, `ParticleSystem`, `NiagaraSystem`, `Dialogue`, `Quest`,
+  `BehaviorTree`, `InputAction`, `Vehicle`, `PhysicsAsset`, `IKRig`, `CameraShake`, `PCGGraph`, `PhysicalMaterial`,
+  `SoundClass`, `SoundMix`, `SoundAttenuation`, `Brain` (`s_asset_ref_named`, script_parse.c): o campo vira a variável
+  Name com o `ref` da classe (antes um nome desconhecido virava referência de ator).
+- **Testes**: `blueprints` (bp_test.c): BP_LevelRef com Target Level (Level, StreamSub) no Level Name do Load Stream
+  Level e Intro (Level Sequence) no pino Sequence do Play Sequence; um ator com o padrão, outro com StreamSub2 no Details:
+  os dois níveis entram, a sequência toca, o arquivo da classe guarda os tipos e valores. `scripts`: o campo `Level` nas
+  quatro linguagens sai Name (Level) = "StreamSub". (O Open Level pela variável usa o mesmo pino Name: no teste o Load
+  Stream Level para o Play não trocar de mundo no meio dos outros testes.)
+
+## Split Struct Pin em dois níveis e o desfazer do grafo (2026-11-24, item 14)
+Pedido: "botão direito num pino com várias propriedades (Transform) com a opção de split igual à da Unreal".
+- O Split / Recombine Struct Pin já existia (um nível: `n->split`, `bp_split_pin`, `split_parts`, as partes montadas e
+  lidas direto nos registradores por `in_op` / `src_op`, sem nós Make/Break). Agora uma **parte pode ser dividida de
+  novo** (Transform -> Location -> X, Y, Z; uma Structure dentro de outra): `BpNode.split2` (bit pino x 4 + parte;
+  salvo como `split2lo` / `split2hi`), `BpPin.part` / `sub2` / `ptype2` / `pref2`. O `sub` continua sendo a ordem dos
+  pinos do grupo (1 o primeiro, os outros > 1), então todo o código que já lia `sub` vale igual e os grafos salvos
+  abrem iguais (sem split2: os mesmos pinos e índices). O compilador monta a parte pelos seus pinos (SETCOMP num vetor,
+  MOVN numa Structure) antes de pô-la no todo, e lê um componente da parte com OP_COMP: nenhum op a mais que o
+  Make/Break manual teria.
+- Recombine numa parte dividida de novo junta só aquela parte; numa parte comum, o pino inteiro (e as divisões das
+  partes dele saem junto). Os fios do pino dividido somem, como na Unreal.
+- **Desfazer do grafo** (não existia no editor de Blueprint, embora o Organize Nodes dissesse "Ctrl+Z desfaz"):
+  `bp_graph_undo_push` / `bp_graph_undo` (bp_editor.c) guardam os nós e fios do grafo antes de Split, Recombine,
+  Delete e Organize Nodes; Ctrl+Z / Ctrl+Y sobre o grafo (32 passos, por asset).
+- Rotator: Pitch, Yaw, Roll (a ordem dos dados da engine; a Unreal mostra Roll/Pitch/Yaw como X/Y/Z); Vector2D: a
+  engine não tem esse tipo. Structures da engine como Hit Result: os traces já dão os campos em pinos separados (não há
+  tipo struct da engine).
+- **Teste** (`blueprints`, bp_test.c): Transform -> Location -> X Y Z (n -> n + 4 pinos), recombinar os dois volta ao
+  nó de antes (nomes e contagem); Ctrl+Z desfaz o split e Ctrl+Y refaz; BP_TestSplit com Location X Y Z = 1234, -567,
+  89 e yaw 30 digitados termina ali no Play; o .rbp relido (`bp_read_copy`) tem os mesmos pinos, split e split2.
+
+## Enums no lugar de nomes digitados (2026-11-25, item 13)
+- Os pinos de nome com opções fixas viraram `int(EName)` (lista no nó, `g_builtin_enums` em blueprint.c): Set Spline Point
+  Type (ESplinePointType), Set Locomotion Style (ELocomotionStyle), Set Light Flicker (ELightFlicker), Build Lighting
+  (Async) (ELightingBuildMode, ELightingQuality), Trigger/Set/Get Horror Filter (EHorrorFilter), Play Scare Rig (EScareRig),
+  Set Rain Preset (ERainPreset), Set Rain Shading Style (ERainShading), Set Muscle Profile (EMuscleProfile), Set First
+  Person Camera Preset (EFirstPersonPreset).
+- Os `.rbp` antigos: o `slit` salvo vira o índice na carga (`bp_builtin_enum_index`, com as grafias antigas em
+  `g_enum_alias`: Custom, Carry, Faulty, BW, Light...). Um script com o texto ("Injured") também vira o índice; um texto
+  fora da lista dá erro com as opções. A VM passa o índice de volta ao nome (`ENUM_NAME` em bp_vm.c): o resto de cada nó
+  não mudou.
+- Ficaram como texto (de propósito): Camera Shake (aceita nome de asset), Game User Setting (o nome escolhe o tipo do
+  valor), Toon/Property by Name (reflexão por rótulo), o slot do Montage (nome livre, como na Unreal). Os campos JSON dos
+  assets (blend_mode, kind...) já são enums na memória; só o arquivo guarda o nome, como a Unreal.

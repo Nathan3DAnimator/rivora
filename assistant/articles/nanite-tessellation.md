@@ -1,6 +1,6 @@
 id: nanite-tessellation
 kind: howto
-title: Geometry Tessellation: deslocamento de verdade | Geometry Tessellation: real displacement
+title: Geometry Tessellation: deslocamento de verdade | Geometry Tessellation: real displacement | Geometry Tessellation: desplazamiento real
 keys: tesselação, tesselacao, tessellation, nanite tessellation, deslocamento, displacement, displacement map, mapa de altura, height map, heightmap, relevo, relevo de verdade, silhueta, subdivisão, subdivisao, subdividir, microdeslocamento, micro displacement, enable tessellation, displacement magnitude, displacement center, parallax, pedras, rochas, chão de pedra, calçamento, cobblestone, teselación, desplazamiento, mapa de alturas, relieve, subdivisión, geometry tessellation, tesselacao de geometria
 --- pt
 ```diagram steps
@@ -27,7 +27,7 @@ Alto (6 px): 6.23
 Épico (4 px): 6.81
 Cinemático (2 px): 8.25
 ```
-(Desde o 0.43, Q22: Épico ~6,5 ms, o microvértice num shader próprio.) Por código ou Blueprint, as variáveis de console: `r.Tessellation` (0/1), `r.Tessellation.DicingRate` (px), `r.Tessellation.MaxFactor`, `r.Tessellation.Budget` (milhões).
+(Desde o 0.43, Q22: Épico ~6,5 ms, o microvértice num shader próprio.) Por código ou Grafo, as variáveis de console: `r.Tessellation` (0/1), `r.Tessellation.DicingRate` (px), `r.Tessellation.MaxFactor`, `r.Tessellation.Budget` (milhões).
 ```blueprint
 Event BeginPlay
   -> Set Console Variable ( Name = "r.Tessellation.DicingRate", Value = 6 )
@@ -57,23 +57,37 @@ High (6 px): 6.23
 Epic (4 px): 6.81
 Cinematic (2 px): 8.25
 ```
-(Since 0.43, Q22: Epic ~6.5 ms, the micro vertex in a shader of its own.) From code or a Blueprint, the console variables: `r.Tessellation` (0/1), `r.Tessellation.DicingRate` (px), `r.Tessellation.MaxFactor`, `r.Tessellation.Budget` (millions).
+(Since 0.43, Q22: Epic ~6.5 ms, the micro vertex in a shader of its own.) From code or a Graph, the console variables: `r.Tessellation` (0/1), `r.Tessellation.DicingRate` (px), `r.Tessellation.MaxFactor`, `r.Tessellation.Budget` (millions).
 ```blueprint
 Event BeginPlay
   -> Set Console Variable ( Name = "r.Tessellation.DicingRate", Value = 6 )
 ```
 --- es
 ```diagram steps
-Una altura en el Displacement de la Material Output | Detalles del material > Nanite > Activar Teselación | Magnitud (cm) y Centro | Una malla con LOD de clusters (16 mil triángulos o más) | La GPU subdivide por el tamaño en pantalla y desplaza
+Una altura al Displacement del Material Output | Detalles del material > Nanite > Enable Tessellation | Magnitude (cm) y Center | Una malla con LOD de clústeres (16 mil triángulos o más) | La GPU subdivide según el tamaño en pantalla y desplaza
 ```
-**Geometry Tessellation** (como la de Unreal 5.4+) mueve la superficie de verdad según la altura del material: la silueta, las sombras y el contacto cambian, no solo el sombreado (el parallax solo finge el relieve dentro de la superficie).
+**Geometry Tessellation** (como la de Unreal 5.4+) mueve la superficie de verdad según la altura del material: cambian la silueta, las sombras y el contacto, no solo el sombreado (el parallax solo simula el relieve dentro de la superficie).
 
-1. En un material **Opaco**, conecta una altura (una textura, un Noise, un Voronoi) a un nodo **Displacement** y este a la entrada **Displacement** de la **Material Output**.
-2. En los **Detalles** del material, sección **Nanite**: marca **Activar Teselación** (Enable Tessellation).
-3. **Displacement Magnitude**: cuántos cm mueve la superficie todo el rango de la altura (0 a 1), en cm de la malla (la escala del actor también la multiplica). **Displacement Center**: la altura que queda en su lugar (el Midlevel de Blender).
-4. Úsalo en una malla con **LOD de clusters** (16 mil triángulos o más, importada). Cerca de la cámara sus triángulos se subdividen en la GPU hasta una arista cada **4 px** (Épico) y se empujan a lo largo de la normal. Lejos, solo se mueven los vértices del LOD.
+1. En un material **Opaque**, conecta una altura (una textura, un Noise, un Voronoi) a un nodo **Displacement** y este a la entrada **Displacement** del **Material Output**.
+2. En los **Detalles** del material, sección **Nanite**: marca **Enable Tessellation**.
+3. **Displacement Magnitude**: cuántos cm mueve la superficie todo el rango de la altura (0 a 1) (cm de la malla: la escala del actor lo escala). **Displacement Center**: la altura que se queda en su sitio (el Midlevel de Blender): por debajo se hunde, por encima sube.
+4. Úsalo en una malla con **LOD de clústeres** (16 mil triángulos o más, importada). Cerca de la cámara sus triángulos se subdividen en la GPU hasta una arista cada **4 px** (Épico) y se empujan a lo largo de la normal. Lejos, solo se mueven los vértices del LOD.
 
-**Sin grietas**: cada punto de una arista se calcula solo con esa arista, así que los dos triángulos que la comparten llegan al mismo número, incluso en las costuras de UV (la prueba `tess_seams` lo comprueba). **Escalabilidad**: Cinemático 2 px, Épico 4, Alto 6, Medio 10; **Bajo** solo desplaza los vértices. Un **presupuesto** de microtriángulos por cuadro ajusta el detalle solo. **Debug Viewer** (F10) > **Teselación** muestra el costo. Las sombras por mapa ven el desplazamiento en los vértices; las de rayos ven la malla base. Variables de consola: `r.Tessellation`, `r.Tessellation.DicingRate`, `r.Tessellation.MaxFactor`, `r.Tessellation.Budget`.
+**Sin grietas**: cada punto de una arista se calcula solo a partir de esa arista (sus dos extremos en un orden fijo), así que los dos triángulos que la comparten obtienen los mismos números, incluso con subdivisiones distintas y a través de costuras UV. La prueba `tess_seams` lo comprueba arista por arista.
+
+**Escalabilidad** (Settings > Scalability): Cinemático 2 px, Épico 4 px, Alto 6 px, Medio 10 px por micro arista; **Bajo** solo desplaza los vértices (nada subdividido). Hay un **presupuesto** de micro triángulos por fotograma: al pasarlo, las micro aristas crecen solas. El **Debug Viewer** (F10) > **Tessellation** muestra el coste y los micro triángulos.
+
+**Sombras y rayos**: los mapas de sombras (sol y luces locales) ven el desplazamiento en los vértices; las sombras y reflejos por ray tracing ven la malla base, con el rayo saliendo lo bastante lejos para no sombrearse a sí mismo.
+
+Coste medido (100 rocas, RTX 3060, 1440p, ms de GPU):
+```diagram bars ms
+Sin desplazamiento: 4.97
+Solo vértices (Bajo): 5.45
+Alto (6 px): 6.23
+Épico (4 px): 6.81
+Cinemático (2 px): 8.25
+```
+(Desde la 0.43, Q22: Épico ~6.5 ms, el micro vértice en un shader propio.) Desde código o un Grafo, las variables de consola: `r.Tessellation` (0/1), `r.Tessellation.DicingRate` (px), `r.Tessellation.MaxFactor`, `r.Tessellation.Budget` (millones).
 ```blueprint
 Event BeginPlay
   -> Set Console Variable ( Name = "r.Tessellation.DicingRate", Value = 6 )

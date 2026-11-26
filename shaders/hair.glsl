@@ -14,11 +14,36 @@ struct GroomInfo {
     vec4 color;            // the fiber's color for one cm of path (rgb: exp(-absorption)), roughness
     vec4 bmin, bmax;       // the density grid's box (actor space, cm); bmin.w: its first float in the buffer
     vec4 prev[3];          // (2026-11-15) last frame's rows (the velocity pass: HAIR_VELOCITY)
-    uint dyn, prev_first, pad0, pad1; // (2026-11-16) simulated: its points already in the world (rows: identity), last step's at prev_first
+    uint dyn, prev_first, bind, pal; // (2026-11-16) simulated: its points already in the world (rows: identity), last step's at prev_first
+                           // (2026-11-25, item 16) on a skin: its strands' bones (2 words each, from word bind; 0: none),
+                           // its bones' palette (3 vec4 a bone, from vec4 pal of this buffer; bmax.w: how many bones)
 };
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer GroomInfoBuf { GroomInfo g[]; };
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer HairVec4 { vec4 v[]; };
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer HairFloat { float v[]; };
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer HairUint { uint v[]; };
+// (2026-11-25, item 16) a strand on a skin: its root's 4 bones blended (linear blend skinning, the mesh's space), the
+// whole strand bent with its root; none: the identity
+mat3x4 groom_skin(GroomInfo g, uvec2 data, uvec2 info, uint strand) {
+    mat3x4 m = mat3x4(vec4(1, 0, 0, 0), vec4(0, 1, 0, 0), vec4(0, 0, 1, 0));
+    if (g.bind == 0u || g.dyn != 0u) return m; // (a simulated one: bind, pal its rest and its leaders, hair.vert)
+    HairUint B = HairUint(data);
+    uint bi = B.v[g.bind + strand * 2u], bw = B.v[g.bind + strand * 2u + 1u];
+    HairVec4 P = HairVec4(info);
+    uint nb = max(uint(g.bmax.w), 1u);
+    mat3x4 acc = mat3x4(vec4(0.0), vec4(0.0), vec4(0.0));
+    float ws = 0.0;
+    for (int k = 0; k < 4; k++) {
+        float w = float((bw >> (8 * k)) & 255u) / 255.0;
+        if (w <= 0.0) continue;
+        uint b = min((bi >> (8 * k)) & 255u, nb - 1u) * 3u;
+        acc[0] += P.v[g.pal + b] * w, acc[1] += P.v[g.pal + b + 1u] * w, acc[2] += P.v[g.pal + b + 2u] * w;
+        ws += w;
+    }
+    return ws > 0.0 ? acc * (1.0 / ws) : m;
+}
+vec3 groom_skin_point(mat3x4 m, vec3 p) { return vec3(dot(m[0], vec4(p, 1.0)), dot(m[1], vec4(p, 1.0)), dot(m[2], vec4(p, 1.0))); }
 
 vec3 groom_world(GroomInfo g, vec3 p) { return vec3(dot(g.rows[0], vec4(p, 1.0)), dot(g.rows[1], vec4(p, 1.0)), dot(g.rows[2], vec4(p, 1.0))); }
 vec3 groom_local(GroomInfo g, vec3 p) { return vec3(dot(g.inv[0], vec4(p, 1.0)), dot(g.inv[1], vec4(p, 1.0)), dot(g.inv[2], vec4(p, 1.0))); }

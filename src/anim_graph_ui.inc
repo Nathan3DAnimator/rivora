@@ -458,7 +458,7 @@ static bool bs_window(BpAsset* a, AnimGraph* g) {
         ch |= igDragFloat(PL(TR("Maximum Axis Value")), &r.axis[k * 2 + 1], 1.0f, -1e5f, 1e5f, "%.1f", 0);
         if (r.axis[k * 2 + 1] <= r.axis[k * 2]) r.axis[k * 2 + 1] = r.axis[k * 2] + 1.0f;
         int div = (int)r.axis[4 + k];
-        if (igDragInt(PL(TR("Grid Divisions")), &div, 0.1f, 1, 32, "%d", ImGuiSliderFlags_AlwaysClamp)) r.axis[4 + k] = (float)div, ch = true;
+        if (ui_num_int(PL(TR("Grid Divisions")), &div, 0.1f, 1, 32, 1, 1024, "%d", 0)) r.axis[4 + k] = (float)div, ch = true;
         igPopID();
     }
     igSeparatorText(TR("Blend Samples"));
@@ -947,7 +947,7 @@ static bool machine_canvas(BpAsset* a, AnimGraph* g, int mi, ImVec2 o) {
         ImDrawList_AddText_Vec2(dl, (ImVec2){ p.x + 10, p.y + 5 + igGetFontSize() }, 0xFF9AD0FFu, line, NULL);
         if (i == g->machine_entry[mi]) {
             ImDrawList_AddLine(dl, (ImVec2){ p.x - 40, p.y + bh * 0.5f }, (ImVec2){ p.x - 4, p.y + bh * 0.5f }, 0xFF60D060u, 2.0f);
-            ImDrawList_AddText_Vec2(dl, (ImVec2){ p.x - 44, p.y - 4 }, 0xFF60D060u, "Entry", NULL);
+            ImDrawList_AddText_Vec2(dl, (ImVec2){ p.x - 44, p.y - 4 }, 0xFF60D060u, TR("Entry"), NULL);
         }
     }
     // a state's edge (Unreal's): pressed there, a new transition follows the mouse to the state it is dropped on
@@ -1317,14 +1317,14 @@ static void tr_draw(void) {
         ImDrawList_AddBezierCubic(dl, a0, (ImVec2){ a0.x + 60, a0.y }, (ImVec2){ a1.x - 60, a1.y }, a1, 0xFFC03030u, 2.5f, 0);
     }
     ImDrawList_AddRectFilled(dl, andp, (ImVec2){ andp.x + fs * 5.0f, andp.y + nh }, 0xF0262626u, 6.0f, 0);
-    ImDrawList_AddText_Vec2(dl, (ImVec2){ andp.x + fs * 1.6f, andp.y + nh * 0.5f - fs * 0.5f }, 0xFFFFFFFFu, "AND", NULL);
+    ImDrawList_AddText_Vec2(dl, (ImVec2){ andp.x + fs * 1.6f, andp.y + nh * 0.5f - fs * 0.5f }, 0xFFFFFFFFu, TR("AND"), NULL);
     ImVec2 b0 = { andp.x + fs * 5.0f, andp.y + nh * 0.5f }, b1 = { res.x, res.y + nh * 0.5f };
     ImDrawList_AddBezierCubic(dl, b0, (ImVec2){ b0.x + 50, b0.y }, (ImVec2){ b1.x - 50, b1.y }, b1, 0xFFC03030u, 2.5f, 0);
     ImDrawList_AddRectFilled(dl, res, (ImVec2){ res.x + fs * 11.0f, res.y + nh }, 0xF0262626u, 6.0f, 0);
     ImDrawList_AddRectFilled(dl, res, (ImVec2){ res.x + fs * 11.0f, res.y + fs * 1.4f }, 0xFF6E3C3Cu, 6.0f, ImDrawFlags_RoundCornersTop);
     ImDrawList_AddText_Vec2(dl, (ImVec2){ res.x + 8, res.y + 2 }, 0xFFFFFFFFu, TR("Result"), NULL);
     ImDrawList_AddText_Vec2(dl, (ImVec2){ res.x + 8, res.y + fs * 1.6f }, 0xFFD8D8D8u, TR("Can Enter Transition"), NULL);
-    ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + sz.x - fs * 9.0f, o.y + sz.y - fs * 2.0f }, 0x40FFFFFFu, "TRANSITION", NULL);
+    ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + sz.x - fs * 9.0f, o.y + sz.y - fs * 2.0f }, 0x40FFFFFFu, TR("TRANSITION"), NULL);
     igEndChild();
     igEnd();
     TW.open = open;
@@ -1505,15 +1505,15 @@ bool anim_graph_tab(BpAsset* a, float width, float height) {
              igIsMouseClicked_Bool(ImGuiMouseButton_Middle + 1, false)))
             up = true;
     }
-    if (igSmallButton("AnimGraph") || up) G.machine = -1, E.state = E.trans = -1, G.any_sel = false;
+    if (igSmallButton("AnimGraph") || up) G.machine = -1, E.state = E.trans = -1, G.any_sel = false; // i18n: none (Unreal's AnimGraph)
     if (G.machine >= 0) {
         igSameLine(0, 6);
         igTextUnformatted(">", NULL);
         igSameLine(0, 6);
         igTextColored((ImVec4){ 0.85f, 0.75f, 0.5f, 1 }, "%s (%s)", g->machines[G.machine], TR("State Machine"));
     }
-    ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + sz.x - igCalcTextSize("ANIMATION", NULL, false, -1).x * 1.6f - 12, o.y + sz.y - igGetFontSize() * 2.0f },
-                            0x40FFFFFFu, "ANIMATION", NULL);
+    ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + sz.x - igCalcTextSize(TR("ANIMATION"), NULL, false, -1).x * 1.6f - 12, o.y + sz.y - igGetFontSize() * 2.0f },
+                            0x40FFFFFFu, TR("ANIMATION"), NULL);
     igEndChild();
     igSameLine(0, 4);
     igBeginChild_Str("ag_details", (ImVec2){ right, height }, ImGuiChildFlags_Borders, 0);

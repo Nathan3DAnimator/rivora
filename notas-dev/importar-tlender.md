@@ -348,7 +348,8 @@ sensor de 36 mm. Empty: igual (sem ator). Curva e volume: Perdido com o motivo.
 
 ### Relatório de conversão (`src/import_report.c`, `src/import_report_ui.c`)
 Cada importador (.tlend, OBJ, glTF, FBX) começa um relatório; os itens iguais se juntam (contagem). No fim:
-`<pasta>/ImportReport.txt` (no idioma do editor) e a linha do import ganha `; report: N same, N converted, N baked, N
+`<projeto>/Saved/ImportReports/<nome do arquivo>.txt` (no idioma do editor; desde 24/11/2026 fora do Content, onde o
+`ImportReport.txt` aparecia no Content Browser: teste `import_report_saved`) e a linha do import ganha `; report: N same, N converted, N baked, N
 lost`; os perdidos também vão para o log. **Janela > Relatório de Importação** (como o Message Log da Unreal): filtros
 por resultado, busca, Mostrar o Arquivo do Relatório; abre sozinha quando algo se perdeu. `--import-budget <ms>` falha o
 import que passar do tempo (os testes).

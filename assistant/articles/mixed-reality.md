@@ -1,6 +1,6 @@
 id: mixed-reality
 kind: howto
-title: Realidade mista no Quest: passthrough, o quarto real, oclusão | Mixed reality on the Quest: passthrough, the real room, occlusion
+title: Realidade mista no Quest: passthrough, o quarto real, oclusão | Mixed reality on the Quest: passthrough, the real room, occlusion | Realidad mixta en el Quest: passthrough, la habitación real, oclusión
 keys: realidade mista, mixed reality, realidad mixta, mr, passthrough, passagem, ver o quarto, see the room, ver la habitacion, camera do quest, cameras do headset, headset cameras, quest 3, quest 3s, quest pro, ar no quest, xr, space setup, configuracao de espaco, configuração de espaço, scene, cena do quarto, room scan, escanear o quarto, escanear la habitacion, planos do quarto, room planes, chao real, chão real, real floor, suelo real, parede real, real wall, mesa real, real table, sofa real, real couch, malha do quarto, room mesh, global mesh, oclusao, oclusão, occlusion, oclusion, profundidade real, real depth, environment depth, profundidad real, depth api, sombra no chao real, sombra no chão real, shadow on the real floor, janela para o mundo real, passthrough window, portal, opacidade do passthrough, passthrough opacity, estilo do passthrough, passthrough style, preto e branco, black and white, visao noturna, visão noturna, night vision, set passthrough enabled, line trace real world, get room planes, event on room loaded, request room setup, developer runtime features, spatial data over meta quest link, use_scene
 --- pt
 ```diagram steps
@@ -16,7 +16,7 @@ Project Settings > VR > Realidade Mista (Passthrough) ligada | Play > Prévia em
 - **Carregar o Quarto**: o Space Setup do headset vira atores **MR Floor**, **MR Ceiling**, **MR Wall 2**, **MR Table**, **MR Couch**... que **colidem e nunca são desenhados**: os Characters andam no chão real, uma bola com física quica na mesa real, o Line Trace by Channel acerta a parede. Sem quarto escaneado, **Pedir o Mapeamento do Quarto** abre o Space Setup.
 - **Alinhar o Nível ao Quarto**: o nível gira para o X correr ao longo da parede mais longa: construa o nível com as paredes nos eixos.
 - **Malha do Quarto**: a malha escaneada (toda coisa real, uma cadeira, uma caixa): o **Line Trace Real World** a alcança.
-- **Get Room Planes** dá os atores; **Get Room Plane Info** diz o rótulo (Floor, Wall, Table, Couch...), o centro, a normal e o tamanho de cada um. **Event On Room Loaded** roda em todo Blueprint quando o quarto chega.
+- **Get Room Planes** dá os atores; **Get Room Plane Info** diz o rótulo (Floor, Wall, Table, Couch...), o centro, a normal e o tamanho de cada um. **Event On Room Loaded** roda em todo Grafo quando o quarto chega.
 
 ## O virtual misturado ao real
 - **Oclusão pelo Mundo Real > Profundidade Real**: uma mão ou uma cadeira real na frente esconde o virtual (Quest 3 / 3S), com uma borda suave (**Suavidade da Oclusão**); **Sem as Mãos** deixa as mãos virtuais por cima. Sem profundidade real (o Link), os **planos e móveis do quarto** escondem o que está atrás deles.
@@ -43,7 +43,7 @@ Project Settings > VR > Mixed Reality (Passthrough) on | Play > VR Preview (Link
 - **Load the Room**: the headset's Space Setup becomes **MR Floor**, **MR Ceiling**, **MR Wall 2**, **MR Table**, **MR Couch**... actors that **collide and are never drawn**: the Characters walk on the real floor, a ball with physics bounces on the real table, Line Trace by Channel hits the wall. No room scanned: **Ask for the Room Setup** opens the Space Setup.
 - **Align the Level to the Room**: the level turns so its X runs along the longest wall: build the level with its walls on the axes.
 - **Room Mesh**: the scanned mesh (every real thing, a chair, a box): **Line Trace Real World** reaches it.
-- **Get Room Planes** gives the actors; **Get Room Plane Info** tells each one's label (Floor, Wall, Table, Couch...), center, normal and size. **Event On Room Loaded** runs in every Blueprint when the room is in.
+- **Get Room Planes** gives the actors; **Get Room Plane Info** tells each one's label (Floor, Wall, Table, Couch...), center, normal and size. **Event On Room Loaded** runs in every Graph when the room is in.
 
 ## The virtual mixed with the real
 - **Real World Occlusion > Real Depth**: a real hand or chair in front hides the virtual (Quest 3 / 3S), with a soft edge (**Occlusion Softness**); **Hand Removal** keeps the virtual hands over the real ones. Without a real depth (Link), the **room's planes and furniture** hide what is behind them.
@@ -58,25 +58,28 @@ Event BeginPlay -> Set Passthrough Opacity ( 0.6 ) -> Set Passthrough Blend ( 1 
 ```
 --- es
 ```diagram steps
-Project Settings > VR > Realidad Mixta (Passthrough) activa | Play > Vista previa en VR (Link: Developer Runtime Features activas) o el visor simulado | La habitación del Space Setup se vuelve actores MR Floor, MR Wall, MR Table que colisionan | Lo virtual sobre la habitación real: oclusión, sombras, ventanas, estilos
+Project Settings > VR > Mixed Reality (Passthrough) activado | Jugar > VR Preview (Link: Developer Runtime Features activado) o el visor simulado | La habitación del Space Setup se convierte en actores MR Floor, MR Wall, MR Table que colisionan | Lo virtual sobre la habitación real: oclusión, sombras, ventanas, estilos
 ```
-## Activar
-- **Project Settings > VR > Realidad Mixta (Passthrough)**: el juego pide al visor el passthrough (la habitación por sus cámaras), la habitación de su **Space Setup** y la **profundidad real**. Quest 3, 3S y Pro. Desactivado: VR puro.
-- **Fondo del Passthrough > La Habitación**: el cielo del nivel desaparece; todo lo que no se dibuja es el mundo real. **El Cielo del Nivel**: la habitación solo por las **Passthrough Windows**.
-- **En el PC por Link**: en la app Meta Horizon Link, **Configuración > Beta > Developer Runtime Features**, luego **Passthrough over Meta Quest Link** y **Spatial Data over Meta Quest Link**. **En el Quest solo**: Compilar > Empaquetar para Meta Quest añade el permiso de la habitación (USE_SCENE).
-- **Sin visor**: el visor simulado (`--vr-sim`) dibuja una habitación de prueba de 5 x 4 m con mesa, sofá, ventana y puerta.
+## Activarlo
+- **Project Settings > VR > Mixed Reality (Passthrough)**: el juego le pide al visor el passthrough (la habitación a través de sus cámaras), la habitación de su **Space Setup** y la **profundidad real**. Quest 3, 3S y Pro (el Quest 2 también, en blanco y negro). Desactivado: VR pura.
+- **Passthrough Background > The Room**: el cielo del nivel desaparece; todo lo que no se dibuja es el mundo real. **The Level's Sky**: la habitación solo a través de **Passthrough Windows**.
+- **En un PC por Link**: en la app Meta Horizon Link, **Settings > Beta > Developer Runtime Features**, luego **Passthrough over Meta Quest Link** y **Spatial Data over Meta Quest Link**. **En el Quest solo**: Compilar > Empaquetar para Meta Quest añade el permiso de la habitación (USE_SCENE: el visor lo pide una vez).
+- **Sin visor**: el visor simulado (Jugar > VR Preview sin ninguno, `--vr-sim`) dibuja una habitación de reemplazo de 5 x 4 m con una mesa, un sofá, una ventana y una puerta, al estilo del passthrough: todo se puede probar.
 
-## La habitación real
-- **Cargar la Habitación**: el Space Setup se vuelve actores **MR Floor**, **MR Wall 2**, **MR Table**, **MR Couch**... que **colisionan y nunca se dibujan**: los Characters caminan en el suelo real, una pelota con física rebota en la mesa real. Sin habitación escaneada, **Request Room Setup** abre el Space Setup.
-- **Alinear el Nivel a la Habitación**: el nivel gira para que su X siga la pared más larga.
-- **Get Room Planes**, **Get Room Plane Info** (etiqueta, centro, normal, tamaño), **Line Trace Real World** (también la malla escaneada), **Event On Room Loaded**.
+## La habitación real (la reconstrucción del entorno)
+- **Load the Room**: el Space Setup del visor se convierte en actores **MR Floor**, **MR Ceiling**, **MR Wall 2**, **MR Table**, **MR Couch**... que **colisionan y nunca se dibujan**: los Characters caminan sobre el suelo real, una pelota con física rebota en la mesa real, Line Trace by Channel golpea la pared. Sin habitación escaneada: **Ask for the Room Setup** abre el Space Setup.
+- **Align the Level to the Room**: el nivel gira para que su X corra a lo largo de la pared más larga: construye el nivel con sus paredes sobre los ejes.
+- **Room Mesh**: la malla escaneada (todo lo real, una silla, una caja): **Line Trace Real World** llega hasta ella.
+- **Get Room Planes** da los actores; **Get Room Plane Info** dice la etiqueta de cada uno (Floor, Wall, Table, Couch...), centro, normal y tamaño. **Event On Room Loaded** se ejecuta en todo Grafo cuando la habitación está cargada.
 
 ## Lo virtual mezclado con lo real
-- **Oclusión por el Mundo Real > Profundidad Real**: una mano o una silla real delante esconde lo virtual (Quest 3 / 3S), con borde suave; sin profundidad real, los **planos y muebles de la habitación** esconden lo que hay detrás.
-- **Sombras en la Habitación**: la sombra de los objetos virtuales cae en el suelo, la mesa y las paredes reales. **Passthrough Window**: un actor se vuelve una ventana al mundo real.
-- **Estilo**: Color, Blanco y Negro, Un Color, Ajustado; **Opacidad**, **Color de Bordes**, **Opacidad de lo Virtual**. También como console variables: `vr.Passthrough`, `vr.MROcclusion`...
+- **Real World Occlusion > Real Depth**: una mano o una silla reales delante ocultan lo virtual (Quest 3 / 3S), con un borde suave (**Occlusion Softness**); **Hand Removal** mantiene las manos virtuales sobre las reales. Sin profundidad real (Link), los **planos y muebles de la habitación** ocultan lo que hay detrás.
+- **Shadows on the Room**: la sombra del sol de las cosas virtuales cae sobre el suelo, la mesa y las paredes reales. **Lighting > A Room's Light**: el sol se convierte en una luz cálida desde arriba; **Exposure**: Automatic mide solo lo virtual; un número lo fija (cerca de EV 7 con A Room's Light).
+- **Passthrough Window**: los límites de un actor se convierten en una ventana al mundo real (un portal en una pared virtual); **Real Windows and Doors** abre las de la propia habitación.
+- **Style**: Color, Black & White, One Color (visión nocturna, un holograma), Adjusted (brillo, contraste, saturación); **Opacity**, **Edge Color**, **Virtual Opacity** (un fundido entre la VR y la habitación). Todo también como variables de consola: `vr.Passthrough`, `vr.PassthroughStyle`, `vr.MROcclusion`, `vr.MRShadows`...
 
 ```blueprint
 Event BeginPlay -> Set Passthrough Enabled ( true ) -> Set Passthrough Background ( true ) -> Set Real World Occlusion ( 2 )
-Event On Room Loaded ( Count ) -> Print String ( "Habitación cargada" )
+Event On Room Loaded ( Count ) -> Print String ( "Room loaded" )
+Event BeginPlay -> Set Passthrough Opacity ( 0.6 ) -> Set Passthrough Blend ( 1 )
 ```

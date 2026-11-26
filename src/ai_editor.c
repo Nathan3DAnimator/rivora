@@ -1,6 +1,7 @@
 // The AI editors (ai_editor.h): Unreal's Behavior Tree Editor (the Blackboard on the left, the tree top-down on a
 // canvas, Details on the right) and the Real Brain's (its Behaviors, their Considerations with the curves drawn, the
 // scores live while playing). Also the AI component's Details.
+#include "editor_docs.h"
 #include "ai_editor.h"
 #include "theme.h"
 #include "content.h"
@@ -519,7 +520,7 @@ static bool tree_canvas(BehaviorTree* t, float w, float h) {
     char zl[32];
     snprintf(zl, sizeof zl, "Zoom %.0f%%", z * 100.0f);
     ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + sz.x - igCalcTextSize(zl, NULL, false, -1).x - 12, o.y + 8 }, TH(TK_N12), zl, NULL);
-    ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + 12, o.y + 8 }, TH(TK_N13), "BEHAVIOR TREE", NULL);
+    ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + 12, o.y + 8 }, TH(TK_N13), TR("BEHAVIOR TREE"), NULL);
     igEndChild();
     return ch;
 }
@@ -560,7 +561,7 @@ static bool tree_details(BehaviorTree* t) {
         if (s->kind == BTS_SPEED) ch |= igSliderFloat(PL(TR("Speed (walk-run)")), &s->value, 0.1f, 1.0f, "%.2f", 0);
         return ch;
     }
-    igSeparatorText(n->kind == BT_ROOT ? "ROOT" : TR(g_bt_kind_names[n->kind]));
+    igSeparatorText(n->kind == BT_ROOT ? TR("ROOT") : TR(g_bt_kind_names[n->kind]));
     if (n->kind == BT_ROOT) {
         igTextDisabled("%s", TR("The root runs its one child again and again."));
         return false;
@@ -651,6 +652,13 @@ static void curve_plot(const Consideration* k, float w, float h) {
 }
 
 // --- Making the Brain easy: ready behaviors, considerations said in words, the score tried before playing ---
+
+// (2026-11-25, item 21) a combo's options in the editor's language (a frame's copy of the pointers, used at once)
+static const char* const* tr_items(const char* const* items, int count) {
+    static const char* out[32];
+    for (int i = 0; i < count && i < 32; i++) out[i] = TR(items[i]);
+    return out;
+}
 
 // The considerations' presets (Unreal-free words: what the curve means)
 typedef struct ConsPreset { const char* name; uint8_t curve; bool invert; float lo, hi, param; } ConsPreset;
@@ -812,7 +820,7 @@ static bool brain_editor(Brain* b, float w, float h) {
         igPushItemWidth(igGetFontSize() * 14.0f);
         ch |= igInputText(PL(TR("Name")), x->name, AI_NAME, 0, NULL, NULL);
         int act = x->action;
-        if (igCombo_Str_arr(PL(TR("Action")), &act, g_brain_action_names, BRAIN_ACT_COUNT, -1)) x->action = (uint8_t)act, ch = true;
+        if (igCombo_Str_arr(PL(TR("Action")), &act, tr_items(g_brain_action_names, BRAIN_ACT_COUNT), BRAIN_ACT_COUNT, -1)) x->action = (uint8_t)act, ch = true;
         ch |= igSliderFloat(PL(TR("Weight (priority)")), &x->weight, 0.0f, 3.0f, "%.2f", 0);
         ch |= igSliderFloat(PL(TR("Speed (walk-run)")), &x->speed, 0.1f, 1.0f, "%.2f", 0);
         switch (x->action) {
@@ -851,7 +859,7 @@ static bool brain_editor(Brain* b, float w, float h) {
             char words[200];
             cons_words(k, words, sizeof words);
             igTextColored(THV(TK_WARN), "%s", words);
-            if (igCombo_Str_arr(PL(TR("Input")), &in, g_brain_input_names, BRAIN_IN_COUNT, -1)) k->input = (uint8_t)in, ch = true;
+            if (igCombo_Str_arr(PL(TR("Input")), &in, tr_items(g_brain_input_names, BRAIN_IN_COUNT), BRAIN_IN_COUNT, -1)) k->input = (uint8_t)in, ch = true;
             if (igBeginCombo(PL(TR("Quick setup")), TR("choose what it means..."), 0)) {
                 for (uint32_t p = 0; p < NPRESETS; p++)
                     if (igSelectable_Bool(TR(g_cons_presets[p].name), false, 0, (ImVec2){ 0, 0 })) {
@@ -867,7 +875,7 @@ static bool brain_editor(Brain* b, float w, float h) {
             if (k->input == BRAIN_IN_KEY_FLOAT) ch |= key_combo(PL(TR("Key")), k->key, b->keys, b->nkeys);
             if (k->input == BRAIN_IN_BP_VAR) ch |= igInputText(PL(TR("Variable")), k->key, AI_NAME, 0, NULL, NULL);
             ch |= igDragFloat2(PL(TR("Range")), &k->lo, 0.1f, -1e6f, 1e6f, "%.1f", 0);
-            if (igCombo_Str_arr(PL(TR("Curve")), &cv, g_curve_names, CURVE_COUNT, -1)) k->curve = (uint8_t)cv, ch = true;
+            if (igCombo_Str_arr(PL(TR("Curve")), &cv, tr_items(g_curve_names, CURVE_COUNT), CURVE_COUNT, -1)) k->curve = (uint8_t)cv, ch = true;
             if (k->curve == CURVE_STEP || k->curve == CURVE_BELL) ch |= igSliderFloat(PL(TR("Threshold / Width")), &k->param, 0.0f, 1.0f, "%.2f", 0);
             ch |= igCheckbox(PL(TR("Invert")), &k->invert);
             igDragFloat(PL(TR("Test value")), &test[E.behavior & 15][c], (k->hi - k->lo) * 0.005f + 0.001f, 0, 0, "%.2f", 0);
@@ -1070,3 +1078,17 @@ bool ai_component_details(CAIAgent* a) {
 }
 
 void ai_editor_blackboard_mode(bool on) { E.bb_mode = on; }
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int ai_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    if (!E.tree && !E.brain) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) return E.tree = NULL, E.brain = NULL, E.unsaved = false, 1;
+    if (!E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, E.tree ? E.tree->name : E.brain->name), 1;
+    bool ok = E.tree ? ai_tree_save(E.tree) : ai_brain_save(E.brain);
+    if (ok) E.unsaved = false;
+    return !ok;
+}

@@ -1,6 +1,6 @@
 id: platform-support
 kind: howto
-title: Suporte a Plataformas e plataforma alvo | Platform Support and the target platform
+title: Suporte a Plataformas e plataforma alvo | Platform Support and the target platform | Soporte de plataformas y plataforma de destino
 keys: suporte a plataformas, platform support, plataformas, platforms, plataforma alvo, target platform, alvo, target, pc, android, vr, quest, meta quest, android sdk, sdk, jdk, java_home, android_home, ndk, adb, aparelhos, devices, device manager, gerenciador de aparelhos, celular conectado, phone connected, openxr, runtime, steamvr, quest link, pronto, ready, falta, missing, empacotar para, package for, fps, quadro, frame, compilação de shaders, shader compile, dados derivados, derived data, cache, barra de status, status bar, soporte de plataformas, plataforma objetivo, dispositivos, administrador de dispositivos, datos derivados, compilación de shaders
 --- pt
 ```diagram steps
@@ -54,13 +54,26 @@ On the left: **Content Drawer**, **Output Log**, **Statistics** (the viewport's)
 - the engine's **version**: click for About.
 --- es
 ```diagram steps
-Haz clic en PC, Android o VR en la barra de menú | El punto indica si el objetivo está listo | Soporte de Plataformas: qué falta y dónde arreglarlo | Empaquetar para el objetivo
+Haz clic en PC, Android o VR en la barra de menú | El punto indica si el destino está listo | Platform Support: lo que falta y dónde arreglarlo | Empaqueta para el destino
 ```
-## La plataforma objetivo
-En el extremo derecho de la barra de menú están **PC**, **Android** y **VR**. Haz clic en uno para elegir el **objetivo**: el menú **Plataformas** muestra sus paquetes primero y, con el objetivo **VR**, **Jugar** abre la **VR Preview**. El punto de cada uno indica si está listo (verde), listo con avisos (amarillo) o si falta algo (rojo). Al lado, **FPS** y **Fotograma (ms)**; un clic abre el Debug Viewer (F10).
+## La plataforma de destino
+En el extremo derecho de la barra de menú están **PC**, **Android** y **VR**. Haz clic en uno para elegir el **destino**: el menú **Platforms** de la barra de herramientas muestra primero sus paquetes, y con el destino **VR** el botón **Jugar** abre el **VR Preview** (el nivel en el visor). El punto junto a cada uno indica si está listo: verde (listo), amarillo (listo, con notas), rojo (falta algo). Pasa el cursor por encima para ver la lista.
 
-## El panel Soporte de Plataformas
-[Ventana > Soporte de Plataformas](open:platforms) comprueba de verdad: en **PC** la GPU, el ray tracing por hardware y la carpeta del paquete; en **Android** el empaquetador, el **Android SDK**, un **JDK**, la parte Android del motor y la clave de subida de Google Play; en **VR** el runtime **OpenXR** y las plataformas VR del proyecto. Cada línea con ✓, aviso o ✗ y, cuando se puede resolver en el editor, un botón. **Dispositivos** > **Actualizar** pregunta a `adb` qué teléfonos y visores están conectados.
+Junto a ellos está el indicador del fotograma: **FPS** y **Frame (ms)**, promediados durante medio segundo; las barras cambian de color (verde desde 120 fps). Haz clic para abrir el Debug Viewer (F10).
+
+## El panel Platform Support
+[Ventana > Platform Support](open:platforms) (por defecto abajo a la derecha, junto al Explorador de contenidos; puede estar cerrado). Para el destino elegido comprueba de verdad:
+- **PC**: la GPU y Vulkan 1.3, el ray tracing por hardware (sin él la GI y las sombras usan sus rutas por software), la carpeta del paquete;
+- **Android**: el empaquetador del motor, el **Android SDK** (`ANDROID_HOME` o `%LOCALAPPDATA%\Android\Sdk`, con build-tools y una plataforma), un **JDK** (`JAVA_HOME`), la parte Android del motor (precompilada, o el NDK para compilarla), la carpeta del paquete y la clave de subida de Google Play;
+- **VR**: el **runtime OpenXR** de Windows (la app Meta Quest con Link, o SteamVR), las plataformas VR del proyecto y, para el Quest independiente, Android.
+
+Cada línea tiene un ✓, una advertencia o una ✗; cuando se puede arreglar en el editor, un botón lleva allí (**Settings** abre el Empaquetado o los Project Settings, **Open** muestra la carpeta). **Package for ...** ejecuta el empaquetador del destino en segundo plano.
+
+En **Devices**, **Refresh** le pregunta a `adb` (el del Android SDK) qué teléfonos y visores están conectados por USB (con la depuración USB activada); con el destino VR, aparece el runtime OpenXR.
 
 ## La barra de estado
-A la izquierda: Cajón de Contenido, Registro de Salida, Estadísticas, Profiler y Administrador de Dispositivos. A la derecha: **Listo**, **Compilación de Shaders: N** (pipelines y materiales que aún compilan; el editor nunca espera), **Datos Derivados** (el tamaño de la caché; un clic abre la carpeta) y la **versión**.
+A la izquierda: **Cajón de contenidos**, **Output Log**, **Statistics** (las de la ventana gráfica), **Profiler** (el Debug Viewer) y **Device Manager** (este panel). A la derecha:
+- **Ready** (o Playing, o Compiling con un indicador giratorio);
+- **Shader Compile: N**: los pipelines que aún se crean en sus hilos más los materiales que se compilan. El editor nunca espera: la escena se dibuja con lo que está listo;
+- **Derived Data**: el tamaño de la caché en este PC (pipelines compilados, mallas y texturas procesadas), medido cada minuto; haz clic para abrir su carpeta;
+- la **versión** del motor: haz clic para ver Acerca de.

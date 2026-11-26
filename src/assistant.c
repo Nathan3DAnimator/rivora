@@ -45,6 +45,9 @@ typedef struct Base {
     char version[32];
     uint32_t bytes;
     double build_ms;
+    char* raw;   // (2026-11-25) the index.json it was built from (built again when the editor's language changes)
+    size_t raw_len;
+    int lang;    // the editor's language it was built in (Spanish: the Spanish sections indexed too)
 } Base;
 
 static struct {
@@ -311,6 +314,8 @@ static Base* build(const char* json, size_t len, char* err, size_t err_cap) {
             d.id = keep(b, json_get_str(a, "id", ""));
             d.title[0] = keep(b, json_get_str(t, "en", "")), d.title[1] = keep(b, json_get_str(t, "pt", ""));
             d.body[0] = keep(b, json_get_str(bd, "en", "")), d.body[1] = keep(b, json_get_str(bd, "pt", ""));
+            d.title[2] = keep(b, json_get_str(t, "es", json_get_str(t, "en", ""))); // (an older base without "es": the English)
+            d.body[2] = keep(b, json_get_str(bd, "es", json_get_str(bd, "en", "")));
             char keys[1024] = "", match[512] = "";
             const JsonValue* ks = json_get(a, "keys");
             for (size_t k = 0; k < json_len(ks); k++) {
@@ -323,21 +328,24 @@ static Base* build(const char* json, size_t len, char* err, size_t err_cap) {
                 snprintf(match + n, sizeof match - n, "%s%s", n ? "|" : "", json_str(json_at(ms, k), ""));
             }
             d.extra = keep(b, match);
-            const char* f[6] = { d.title[0], d.title[1], keys, d.id, d.body[0], d.body[1] };
-            static const float wt[6] = { 3.0f, 3.0f, 3.0f, 2.0f, 1.0f, 1.0f };
-            add_doc(b, d, f, wt, 6);
+            // (its Spanish: indexed in a Spanish editor only, so the Portuguese and English answers rank as before)
+            const char* f[8] = { d.title[0], d.title[1], keys, d.id, d.body[0], d.body[1], d.title[2], d.body[2] };
+            static const float wt[8] = { 3.0f, 3.0f, 3.0f, 2.0f, 1.0f, 1.0f, 3.0f, 1.0f };
+            add_doc(b, d, f, wt, i18n_language() == LANG_ES ? 8 : 6);
             b->narticles++;
         }
         synonyms(b, json_get(&doc.root, "synonyms"));
         b->bytes = (uint32_t)len;
+        b->raw = malloc(len + 1); // (a copy: built again in another language)
+        if (b->raw) memcpy(b->raw, json, len), b->raw[len] = 0, b->raw_len = len;
     }
     // the engine's functions: the name's words, the category, the description
     for (uint32_t i = 0; i < script_api_count(); i++) {
         const ScriptApi* api = script_api_at(i);
         AsDoc d = { AS_SRC_API, AS_KIND_CONCEPT };
         d.id = keep(b, api->name);
-        d.title[0] = d.title[1] = d.id;
-        d.body[0] = d.body[1] = keep(b, api->doc);
+        d.title[0] = d.title[1] = d.title[2] = d.id;
+        d.body[0] = d.body[1] = d.body[2] = keep(b, api->doc);
         d.extra = keep(b, api->sig);
         const char* f[3] = { api->name, api->category, api->doc };
         static const float wt[3] = { 3.0f, 1.5f, 1.0f };
@@ -351,9 +359,13 @@ static Base* build(const char* json, size_t len, char* err, size_t err_cap) {
         d.id = keep(b, tips[i].label);
         d.title[0] = d.id, d.title[1] = keep(b, TR(tips[i].label));
         d.body[0] = keep(b, tips[i].text[0]), d.body[1] = keep(b, tips[i].text[1] ? tips[i].text[1] : tips[i].text[0]);
-        const char* f[4] = { d.title[0], d.title[1], d.body[0], d.body[1] };
-        static const float wt[4] = { 3.0f, 3.0f, 1.0f, 1.0f };
-        add_doc(b, d, f, wt, 4);
+        const char* es = ui_tip_es(tips[i].label); // (2026-11-25: the Spanish label and description)
+        d.title[2] = keep(b, tr_lang(tips[i].label, LANG_ES)), d.body[2] = keep(b, es && es[0] ? es : tips[i].text[0]);
+        // (their Spanish indexed only in a Spanish editor: 2400 descriptions' Spanish words moved the Portuguese answers'
+        // weights - "mapa" in hundreds of them)
+        const char* f[6] = { d.title[0], d.title[1], d.body[0], d.body[1], d.title[2], d.body[2] };
+        static const float wt[6] = { 3.0f, 3.0f, 1.0f, 1.0f, 3.0f, 1.0f };
+        add_doc(b, d, f, wt, i18n_language() == LANG_ES ? 6 : 4);
     }
     // the document frequencies, the mean length
     b->df_cap = 1;
@@ -381,11 +393,13 @@ static void base_free(Base* b) {
     if (!b) return;
     for (uint32_t i = 0; i < b->nstrings; i++) free(b->strings[i]);
     free(b->strings), free(b->docs), free(b->terms), free(b->df_h), free(b->df_n), free(b->vocab), free(b->syn), free(b->syn_g);
+    free(b->raw);
     free(b);
 }
 
 static void install(Base* b) {
     base_free(S.base);
+    b->lang = i18n_language();
     S.base = b;
     S.stats.docs = (uint32_t)b->ndocs, S.stats.terms = b->nterms, S.stats.vocab = b->nvocab, S.stats.build_ms = b->build_ms;
 }
@@ -426,7 +440,50 @@ bool assistant_offline_present(void) {
     return offline_path(p, sizeof p) && re_file_stat(p, NULL, NULL, NULL);
 }
 
+// (2026-11-25, bug-fixer) The offline base built on a worker when the editor starts (assistant_init_async): opening the
+// Assistant built it in that frame, 0.4 s in the UI sweep. One who asks before it is in (the tests) waits for the worker
+// and puts it in place (the same Base, never built twice)
+static struct {
+    uint32_t id;
+    volatile int32_t ready;
+    Base* b;
+    char err[200];
+} L;
+static void local_work(AsyncTask* t, void* arg) {
+    (void)t, (void)arg;
+    char p[600];
+    size_t len = 0;
+    char* text = offline_path(p, sizeof p) ? read_all(p, &len) : NULL;
+    L.b = build(text, len, L.err, sizeof L.err);
+    free(text);
+    re_atomic_store(&L.ready, 1);
+}
+static void local_install(void) { // (the main thread: the worker's base in, once)
+    if (!re_atomic_load(&L.ready)) return;
+    if (L.b) {
+        if (!S.base) install(L.b), S.state = S.base && S.base->narticles ? AS_OFFLINE : AS_NONE;
+        else base_free(L.b);
+        L.b = NULL;
+    }
+    if (L.err[0]) snprintf(S.error, sizeof S.error, "%s", L.err), L.err[0] = 0;
+    L.id = 0;
+}
+static void local_done(AsyncTask* t, void* arg, bool ok) {
+    (void)t, (void)arg, (void)ok;
+    local_install();
+}
+void assistant_init_async(void) {
+    if (S.init || L.id || !async_ready()) return;
+    S.init = true;
+    re_atomic_store(&L.ready, 0);
+    L.id = async_run(TR("Assistant: reading its base"), local_work, local_done, NULL, ASYNC_QUIET | ASYNC_HIDDEN);
+}
+
 void assistant_init(void) {
+    if (L.id || re_atomic_load(&L.ready)) { // (the start's worker: waited for, its base put in place here)
+        while (!re_atomic_load(&L.ready)) re_sleep_seconds(0.002);
+        local_install();
+    }
     if (S.init) return;
     S.init = true;
     char p[600], err[200] = "";
@@ -437,6 +494,18 @@ void assistant_init(void) {
     if (b) install(b);
     S.state = S.base && S.base->narticles ? AS_OFFLINE : AS_NONE;
     if (err[0]) snprintf(S.error, sizeof S.error, "%s", err);
+}
+
+// (2026-11-25) the editor's language changed: the base built again (its Spanish sections in or out of the index)
+void assistant_relang(void) {
+    if (!S.base || S.base->lang == i18n_language()) return;
+    char err[200] = "";
+    Base* b = build(S.base->raw, S.base->raw_len, err, sizeof err);
+    if (b) {
+        int narts = S.base->narticles;
+        install(b);
+        if (!b->narticles && narts) S.state = AS_NONE;
+    }
 }
 
 void assistant_shutdown(void) {

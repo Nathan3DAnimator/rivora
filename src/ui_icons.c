@@ -1631,7 +1631,7 @@ void ui_icon_sheet_draw(void) {
     igSetNextWindowPos(vp->WorkPos, ImGuiCond_Always, (ImVec2){ 0, 0 });
     igSetNextWindowSize(vp->WorkSize, ImGuiCond_Always);
     igSetNextWindowFocus();
-    if (igBegin("Icon Sheet###re_icon_sheet", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+    if (igBegin("Icon Sheet###re_icon_sheet", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) { // i18n: none (a tests' sheet, --icon-sheet)
         ImDrawList* dl = igGetWindowDrawList();
         ImVec2 o = igGetCursorScreenPos();
         float fs = igGetFontSize(), cw = 32.0f + 24.0f + 16.0f + 24.0f + fs * 9.0f, ch = 40.0f;

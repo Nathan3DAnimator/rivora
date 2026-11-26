@@ -20,9 +20,12 @@ typedef struct MeshDagCluster {
 
 // pos: 3 floats per vertex (stride bytes); attr: nattr floats per vertex weighted by weights (normal, uv), protect: the
 // attributes whose seams stay (bits). *out and *idx malloc'd (indices into the same vertices). Returns the clusters
+// flags: MESH_CLOD_STUCK_FALLBACK (2026-11-25): a group regular simplification can't reduce tries the permissive one, then
+// the sloppy one (a mesh of many shells: the Unamed capsule's 115; a skin)
+#define MESH_CLOD_STUCK_FALLBACK 1u
 uint32_t mesh_clod_build(const float* pos, uint32_t stride, uint32_t nv, const float* attr, uint32_t nattr, const float* weights,
                          uint32_t protect, const uint32_t* idx, uint32_t ni, MeshDagCluster** out, uint32_t** didx, uint32_t* dni,
-                         uint32_t* levels);
+                         uint32_t* levels, uint32_t flags);
 
 #ifdef __cplusplus
 }

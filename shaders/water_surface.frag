@@ -195,6 +195,7 @@ void main() {
                     float foot = (dist + h.t) * 2.0 * f.camera_fwd.w * f.viewport.z / max(abs(dot(rd, h.normal)), 0.2);
                     float lod = log2(max(foot * dens * float(textureSize(u_mat_tex[nonuniformEXT(gm.tex_base)], 0).x), 1.0));
                     alb = srgb_to_linear(textureLod(u_mat_tex[nonuniformEXT(gm.tex_base)], muv, lod).rgb);
+                    if ((gm.flags & MATF_AFFINE) != 0u) alb = mat_affine_base(f.materials, floatBitsToUint(hi.emissive_rough.x), alb); // (2026-11-24)
                     if ((gm.flags & MATF_WORLD_GRID) != 0u) { // the grid material's lines (as mesh.frag's, the cone for fwidth)
                         vec3 an = abs(h.normal);
                         vec2 wp = an.z >= an.x && an.z >= an.y ? h.pos.xy : an.x >= an.y ? h.pos.yz : h.pos.xz;

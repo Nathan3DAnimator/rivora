@@ -1,6 +1,6 @@
 id: vr-ar
 kind: howto
-title: VR e AR: headset, controles e luz que combina com a câmera | VR and AR: headset, controllers and light matching the camera
+title: VR e AR: headset, controles e luz que combina com a câmera | VR and AR: headset, controllers and light matching the camera | VR y AR: visor, controles y luz que combina con la cámara
 keys: vr, realidade virtual, virtual reality, ar, realidade aumentada, augmented reality, headset, oculus, quest, meta, steamvr, openxr, controle de vr, motion controller, hmd, oculos, giroscopio, gyroscope, light estimation, estimar luz, color matching, balanco de branco, white balance, haptico, haptic, vibrar controle, arcore, rastreamento, tracking, 6dof, planos, planes, chao real, real floor, shadow catcher, oclusao, occlusion, profundidade, depth, depth api, objeto real na frente, esconder atras do sofa, sombra no chao real, camera do celular, phone camera, ar line trace, tocar na tela para colocar, tap to place, event touch, toque na tela, touch screen, get mouse position, template de ar, ar template
 --- pt
 ```diagram steps
@@ -59,6 +59,36 @@ Project Settings > Android > Augmented Reality (ARCore) | Build > Package for An
 - The touch: **Event Touch** (Pressed / Released, Location in pixels, Finger Index; on a PC the left mouse button is a finger) and **Get Mouse Position**. The fingers a touch widget took (joystick, button) don't fire it.
 - Nodes: **Is AR Tracking**, **AR Line Trace** (a point of the screen onto the real world: place something where the player taps) and **Get AR Plane Count**.
 - AR is **optional**: phones without Google Play Services for AR run the game as usual. On a PC: `Game.exe --ar-image photo.png --ar-sim` simulates it (the photo behind, a floor at the origin).
+```blueprint
+Event Touch (Pressed) -> Break Vector ( Location ) -> AR Line Trace ( X, Y ) -> Branch ( Hit ) -> Spawn Actor from Class ( BP_Chair, Location )
+```
+--- es
+```diagram steps
+Empaquetar el juego | Conectar el visor (Quest Link, SteamVR...) | Game.exe --vr (sin visor: --vr-sim muestra los dos ojos) | Blueprint: Get HMD Pose, Get Motion Controller Pose/Input, Play Haptic Effect
+```
+## VR
+- La engine habla **OpenXR** directamente con el runtime instalado (Meta, SteamVR, WMR): no hace falta ningún SDK.
+- Los dos ojos salen de un solo fotograma de la engine con **MSAA 4x** (lo que guarda un historial de pantalla está desactivado en VR para que los ojos no se mezclen); el primer ojo paga las simulaciones, la GI y las sombras, el segundo solo su vista. Meta: **por encima de 100 fps**. Teletransporte, manos, agarrar y el Quest independiente: el artículo **Juegos de VR** (`vr-quest`).
+- Controles: **Get Motion Controller Pose** (lugar y dirección), **Get Motion Controller Input** (gatillo, grip, joystick, botones), **Play Haptic Effect** (vibración), **Get HMD Pose**, **Is VR Active**.
+```blueprint
+Event Tick -> Get Motion Controller Input ( 1 ) -> Branch ( Trigger > 0.5 ) -> Play Haptic Effect ( 1, 0.6, 0.1 )
+```
+## AR
+- **Luz y color como los de la cámara**: la engine mide la exposición de la imagen, el balance de blancos (temperatura de color), la luz principal (de dónde viene y cuán fuerte) y la luz ambiente, y los aplica al sol, al cielo y a la exposición; los objetos virtuales reciben la luz real.
+- En un teléfono el **giroscopio** gira la cámara (`--ar`). En un PC pruébalo con una foto: `Game.exe --ar-image photo.png`.
+
+## AR con ARCore (Android)
+```diagram steps
+Project Settings > Android > Augmented Reality (ARCore) | Build > Package for Android | En el teléfono: permite la cámara, muévelo despacio sobre una superficie | El juego está en el mundo real: rastreado, en el suelo real, proyectando su sombra en él
+```
+- El teléfono se **rastrea con 6 grados de libertad**: la cámara del juego es la del teléfono, al caminar por la habitación.
+- La **imagen de la cámara** está detrás del nivel; las cosas virtuales están delante con la luz del lugar (dirección, color e intensidad estimados por ARCore).
+- Los **planos** que ARCore encuentra (suelos, mesas, paredes) se convierten en actores **AR Plane** con bloqueo: los Characters caminan sobre el suelo real. El suelo real **recibe las sombras** de las cosas virtuales (y el oscurecimiento de contacto bajo ellas).
+- **Oclusión**: una cosa real más cercana que una virtual la oculta (el sofá delante del perro virtual), a partir de la profundidad de ARCore en los teléfonos que la tienen. Project Settings > Android > **Occlusion by Real Objects** (activada por defecto). En un PC, `REALENGINE_AR_SIM_FLOOR=60` sube 60 cm el suelo simulado: las bases de las cosas se esconden detrás.
+- Listo para empezar: **New Project > Augmented Reality** (`BP_ARPlacer` coloca una caja donde tocas el suelo real; AR ya activada).
+- El toque: **Event Touch** (Pressed / Released, Location en píxeles, Finger Index; en un PC el botón izquierdo del mouse es un dedo) y **Get Mouse Position**. Los dedos que tomó un widget táctil (joystick, botón) no lo disparan.
+- Nodos: **Is AR Tracking**, **AR Line Trace** (un punto de la pantalla hacia el mundo real: coloca algo donde toca el jugador) y **Get AR Plane Count**.
+- La AR es **opcional**: los teléfonos sin Google Play Services for AR ejecutan el juego como siempre. En un PC: `Game.exe --ar-image photo.png --ar-sim` la simula (la foto detrás, un suelo en el origen).
 ```blueprint
 Event Touch (Pressed) -> Break Vector ( Location ) -> AR Line Trace ( X, Y ) -> Branch ( Hit ) -> Spawn Actor from Class ( BP_Chair, Location )
 ```

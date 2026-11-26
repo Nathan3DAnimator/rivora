@@ -1,6 +1,6 @@
 id: rivora-rename
 kind: concept
-title: A Real Engine agora é Rivora Engine | Real Engine is now Rivora Engine
+title: A Real Engine agora é Rivora Engine | Real Engine is now Rivora Engine | Real Engine ahora es Rivora Engine
 keys: real engine, realengine, rivora, rivora engine, nome novo, new name, mudou de nome, renamed, cade a real engine, where is real engine, realengine.exe, rivora.exe, atalho, shortcut, minhas configuracoes, my settings, appdata
 --- pt
 ```diagram steps
@@ -20,3 +20,12 @@ Real Engine 0.49 | Update | Rivora Engine 0.50 | Same projects and settings
 - **Projects open the same:** `.rproject`, `.rlevel`, `.rasset` and the other formats did not change.
 - **Your settings come along:** the first time, the preferences, layouts, themes and the Assistant's offline base are copied from `%APPDATA%\RealEngine` to `%APPDATA%\Rivora`.
 - Scripts keep `using RealEngine;` (C#), `from realengine import *` (Python) and `#include "realengine.h"` (C): nothing to change in your code.
+--- es
+```diagram steps
+Real Engine 0.49 | Actualizar | Rivora Engine 0.50 | Mismos proyectos y ajustes
+```
+- **Real Engine** se llama **Rivora Engine** a partir de la versión **0.50**. Es el mismo programa, gratuito y de código abierto.
+- **La actualización es automática:** la 0.49 encuentra la 0.50 y la instala como siempre. El programa ahora es `rivora.exe`; `realengine.exe` queda en la carpeta solo para abrir `rivora.exe`, así que los accesos directos antiguos siguen funcionando.
+- **Los proyectos se abren igual:** `.rproject`, `.rlevel`, `.rasset` y los demás formatos no cambiaron.
+- **Tus ajustes vienen contigo:** la primera vez, las preferencias, los diseños, los temas y la base sin conexión del Asistente se copian de `%APPDATA%\RealEngine` a `%APPDATA%\Rivora`.
+- Los scripts mantienen `using RealEngine;` (C#), `from realengine import *` (Python) y `#include "realengine.h"` (C): nada que cambiar en tu código.

@@ -1,6 +1,6 @@
 id: general-optimization
 kind: concept
-title: Otimização geral: o que ficou mais leve | General optimization: what got lighter
+title: Otimização geral: o que ficou mais leve | General optimization: what got lighter | Optimización general: lo que quedó más ligero
 keys: travada, travando, engasgo, engasga, hitch, stutter, travada no inicio do play, materiais compilando, compiling materials, menu de pausa trava, pause menu hitch, pause menu hitches, opcoes travam na primeira vez, options hitch first time, tesselacao pesada, tessellation cost, otimizacao geral, otimização geral, general optimization, optimizacion general, tiron, geometry tessellation, tesselacao de geometria
 --- pt
 ```diagram steps
@@ -26,12 +26,12 @@ What 0.43's general optimization (Q22) changed, with no loss of quality:
 To measure your project: [GPU per pass](article:gpu-passes); `--shader-stats` now shows the vertex shader's registers too.
 --- es
 ```diagram steps
-Medir (F10 > GPU Passes, --gpu-passes) | Encontrar el pase que pesa | Cambiarlo | Medir otra vez, alternando antes y después
+Mide (F10 > GPU Passes, --gpu-passes) | Encuentra el pase que cuesta | Cámbialo | Mide de nuevo, alternando antes y después
 ```
-Lo que cambió la optimización general de la 0.43 (Q22), sin perder calidad:
+Lo que cambió la optimización general de la 0.43 (Q22), sin pérdida de calidad:
 
-- **Inicio del Play en el editor**: los materiales del proyecto que aún compilan en segundo plano ya no hacen reenviar la escena entera (y esperar a la GPU) en cada cuadro en que no se horneó nada; solo cuando un material está listo.
-- **Geometry Tessellation** más ligera: cada microvértice lee las esquinas ya hechas de su triángulo (128 bytes que la subdivisión escribe una vez) en un vertex shader propio; el `mesh.vert` común volvió a su tamaño y las escenas sin teselación ya no pagan por ella. Ver [Geometry Tessellation](article:nanite-tessellation).
-- **Menú de pausa y Opciones**: se pregunta al DLSS, FSR y XeSS si funcionan en esta placa al empezar el Play, no en el cuadro en que aparecen las Opciones (un tirón de ~1,4 s la primera vez).
+- **El inicio de Play en el editor**: los materiales del proyecto que aún se compilan en segundo plano ya no envían toda la escena de nuevo (ni esperan a la GPU) en cada fotograma en que no se horneó nada; solo cuando un material termina.
+- Un **Geometry Tessellation** más ligero: cada micro vértice lee las esquinas de su triángulo ya hechas (128 bytes que el dicing escribe una vez) en un vertex shader propio; el `mesh.vert` común vuelve a su tamaño, y las escenas sin teselación ya no pagan por ello. Mira [Geometry Tessellation](article:nanite-tessellation).
+- **Menú de pausa y Opciones**: a DLSS, FSR y XeSS se les pregunta si funcionan en esta GPU al iniciar Play, no en el fotograma en que aparecen las Opciones (un tirón de ~1.4 s la primera vez).
 
 Para medir tu proyecto: [GPU por pase](article:gpu-passes); `--shader-stats` ahora muestra también los registros del vertex shader.

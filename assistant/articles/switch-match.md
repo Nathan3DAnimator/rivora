@@ -1,6 +1,6 @@
 id: switch-match
 kind: howto
-title: switch e match | switch and match
+title: switch e match | switch and match | switch / match
 keys: switch, match, case, escolher entre opcoes, varios ifs, select case, default, elif em cadeia
 --- pt
 ```real
@@ -48,3 +48,26 @@ match state:
         other()
 ```
 Each case runs only its own lines (the final `break` is optional, and a case without one warns).
+--- es
+```real
+match state
+    case 0
+        print("idle")
+    case 1, 2
+        print("walking")
+    else
+        print("other")
+```
+```cs
+switch (state) { case 0: Idle(); break; case 1: case 2: Walk(); break; default: Other(); break; }
+```
+```py
+match state:
+    case 0:
+        idle()
+    case 1 | 2:
+        walk()
+    case _:
+        other()
+```
+Cada caso ejecuta solo sus propias líneas (el `break` final es opcional, y un caso sin él da una advertencia).

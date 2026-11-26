@@ -52,6 +52,39 @@ typedef struct AssetViewerState {
 } AssetViewerState;
 AssetViewerState asset_viewer_state(void);
 int asset_thumb_state(const char* vpath); // (the test: 4 shown, 5 couldn't be made, else on its way; -1 none)
+// (2026-11-24, item 8) The viewers' Details as Unreal's (asset_viewer_details.inc): a search on top (its buffer the
+// caller's) and sections that fold, hidden when the search doesn't match their title or keys; end after the panel
+#include <stddef.h>
+void av_details_search(char* buf, size_t cap);
+bool av_section(const char* title, const char* keys);
+void av_details_end(void);
+// (2026-11-25) the tests' hooks: a search typed into the next Details panel drawn; the last whole panel's sections (their
+// titles untranslated: shown by the search, open)
+#define AV_SEEN_MAX 24
+typedef struct AvSectionSeen { char title[48]; bool shown, open; } AvSectionSeen;
+void av_test_find(const char* text);
+int av_test_sections(AvSectionSeen* out, int cap);
+void av_row(const char* label, const char* fmt, ...); // a read-only row: the label dim, the value beside it
+// The Static Mesh's (and a skin's) LOD Settings and Build: lods (1..4; 0: the automatic rule), each LOD's share of LOD
+// 0's triangles (percent), from min_tris; normals made again by the smoothing angle, a scale applied (both one-shot)
+typedef struct AssetMeshBuild {
+    int lods;
+    float percent[4];
+    unsigned min_tris;
+    float smoothing_deg, scale;
+    // (2026-11-24, item 4) the mesh's own settings (.rlod, read by the renderer and the physics at the load): Nanite (its
+    // clusters: -1 automatic, 0 off, 1 on), its rays' Fallback share of LOD 0 (%), its Collision Complexity (0 the actor's
+    // Use Complex Collision, 1 simple, 2 complex); a lightmap UV made at the next rebuild (lightmap: one-shot)
+    int nanite;
+    float fallback_pct;
+    int collision;
+    bool lightmap;
+} AssetMeshBuild;
+bool asset_mesh_rebuild(const char* vpath, const AssetMeshBuild* b, bool normals, bool scale, char* msg, size_t cap);
+int asset_mesh_lod_info(const char* vpath, unsigned tris[4]); // its LODs (0: unreadable) and their triangles
+// A texture's compression (TEXZ_*; -1 keep) and LOD Bias (the mips dropped at the top: its Max Size; -1 keep); saved
+bool asset_tex_set(const char* vpath, int compression, int lod_bias);
+
 // (Q23) artist_test.c: --artist-selftest (no window) and --artist-test (in the editor)
 struct Editor;
 int artist_selftest(void);

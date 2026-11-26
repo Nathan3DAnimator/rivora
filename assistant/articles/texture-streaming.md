@@ -1,6 +1,6 @@
 id: texture-streaming
 kind: concept
-title: Streaming de texturas e memória de vídeo | Texture streaming and video memory
+title: Streaming de texturas e memória de vídeo | Texture streaming and video memory | Streaming de texturas y memoria de video
 keys: streaming, textura borrada, memoria de video, vram, textura baixa resolucao, orcamento de textura, texture pool, blurry texture, out of memory
 --- pt
 ```diagram bars MB
@@ -24,3 +24,14 @@ Out of view (at the minimum): 120
 - In a normal project nothing changes: everything fits at full size. In huge scenes a texture blurry for a moment is it going up.
 - To test with less memory: `REALENGINE_TEX_BUDGET_MB=1024`. To turn it off: `REALENGINE_TEX_STREAMING=0`.
 - See also: [Scalability](article:scalability), [Heavy meshes](article:heavy-meshes).
+--- es
+```diagram bars MB
+Presupuesto (35% de la VRAM, p. ej. 12 GB): 4300
+Texturas en pantalla (tamaño completo): 1800
+Fuera de vista (al mínimo): 120
+```
+- Cada material mantiene sus texturas al tamaño que pide la pantalla, dentro de un presupuesto del 35% de la memoria de video.
+- Cerca de la cámara suben al tamaño completo; lejos o fuera de vista bajan. Solo bajan cuando la memoria está justa (85%).
+- En un proyecto normal nada cambia: todo cabe a tamaño completo. En escenas enormes, una textura borrosa por un momento es que está subiendo.
+- Para probar con menos memoria: `REALENGINE_TEX_BUDGET_MB=1024`. Para desactivarlo: `REALENGINE_TEX_STREAMING=0`.
+- Mira también: [Escalabilidad](article:scalability), [Mallas pesadas](article:heavy-meshes).

@@ -144,7 +144,7 @@ static void make_soft_from_selected(Editor* ed) {
 static bool soft_details(CCloth* c) {
     bool ch = false, custom = false;
     label_cell("Cloth Kind");
-    if (igBeginCombo("##sbkind", TR(c->kind == CLOTH_KIND_SOFT ? "Soft Body" : "Sheet"), 0)) {
+    if (igBeginCombo("##sbkind", (c->kind == CLOTH_KIND_SOFT ? TR("Soft Body") : TR("Sheet")), 0)) {
         if (igSelectable_Bool(TR("Sheet"), c->kind == CLOTH_KIND_SHEET, 0, (ImVec2){ 0, 0 })) c->kind = CLOTH_KIND_SHEET, c->reset = 1, ch = true;
         if (igSelectable_Bool(TR("Soft Body"), c->kind == CLOTH_KIND_SOFT, 0, (ImVec2){ 0, 0 })) c->kind = CLOTH_KIND_SOFT, c->reset = 1, ch = true;
         igEndCombo();

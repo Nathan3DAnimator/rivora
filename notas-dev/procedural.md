@@ -38,6 +38,11 @@ procedural com spawn de criaturas e estruturas, com suporte a longas distâncias
   `loop_chance`, a entrada para -y. Cada sala: piso e teto (Box de prototipagem), paredes (Wall com abertura nas
   portas; **as paredes sólidas zeram a abertura** - o padrão do componente tem porta), luz pontual (mais quente mais
   fundo), itens, criaturas pela profundidade.
+- (2026-11-25, item 19) As paredes entram T/2 no piso e no teto (antes encostavam face a face: costura para a GI); a porta
+  ganha T/2 e segue com 2,40 m livres. A lâmpada de cada sala pelo piso: I = 100 lux x área / (0,5 x 4 pi) (sala de 12 m
+  ~2300 cd; eram 260 cd fixas, ~7 lux: escura sob um Min EV100 alto, e o "bake bugado" era o contraste com a GI que
+  vazava antes dele); `procgen_selftest` confere. Cena `--scene facility_leak` (a sala mais funda; `REALENGINE_FACILITY_LIGHTS`,
+  `_BAKE`, `_ENTRANCE`), teste `facility_leak`.
 
 ## Medidas (RTX 3060, 1440p)
 | Cena | Resultado |

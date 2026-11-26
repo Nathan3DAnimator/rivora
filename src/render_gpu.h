@@ -238,6 +238,9 @@ typedef struct GpuInstance {
 #define MESH_INFO_SKINNED 0x1000u // ... a skin (RMESH_SKINNED): its instances read their own vertices (INST_SKINNED)
 #define MESH_INFO_RT_LOD_SHIFT 16u // ... a skin's: the LOD its BLAS holds (2 bits; render.c skin_rt_lod): its rays start that LOD's error off
 #define MESH_INFO_OMM 0x800u // ... its BLAS has an opacity micromap (gi_blas_omm): its instances not forced non-opaque
+// (2026-11-24) ... drawn by a material with the RE_EXT features (mat_ext: the Principled's extra lobes, Toon, Wet, detail,
+// parallax...): its own run of draws, the RE_EXT pipelines only there (cull.comp's runs; render.c draw_runs)
+#define MESH_INFO_EXT 0x2000u
 typedef struct GpuMeshInfo {
     float sphere[4];
     uint32_t lod_count;

@@ -1,6 +1,6 @@
 id: procedural-worlds
 kind: recipe
-title: Mundos procedurais: terreno infinito, biomas, criaturas | Procedural worlds: endless terrain, biomes, creatures
+title: Mundos procedurais: terreno infinito, biomas, criaturas | Procedural worlds: endless terrain, biomes, creatures | Mundos procedurales: terreno infinito, biomas, criaturas
 keys: procedural, procedural world, mundo procedural, geracao procedural, procedural generation, mapa procedural, procedural map, minecraft, peak, mundo infinito, endless world, infinite world, terreno, terrain, bioma, biome, semente, seed, chunk, streaming, longas distancias, long distances, 100 km, origin rebasing, rebase, spawn de criaturas, creature spawn, estruturas, structures, ruinas, ruins, arvores, trees, open world, mundo aberto
 --- pt
 ```diagram steps
@@ -60,3 +60,32 @@ class Explorer extends Actor
         SetActorLocation(Vector(0, 0, 3000))
 ```
 See also [Procedural facilities](article:procedural-facility).
+--- es
+```diagram steps
+Quick Add > Procedural > Procedural World > Terrain | Detalles: semilla, bloques, altura, agua, biomas, árboles, estructuras, criaturas | Jugar: el mundo crece alrededor del jugador | Creature Class y Structure Class: tus Blueprints
+```
+## Cómo funciona
+El **Procedural World** hace el terreno alrededor del jugador a partir de una **semilla**. La misma semilla siempre da el mismo mundo, como en Minecraft.
+
+**El terreno**
+- Columnas de bloques en **chunks** que se cargan según se mueve el jugador: finos cerca y gruesos lejos (anillos de detalle hasta la View Distance).
+- *Height Step* define el estilo: 100 cm da bloques tipo Minecraft; 25 cm da terrazas suaves.
+- **Biomas**: llanuras, bosque, desierto, nieve, montañas con cumbres nevadas, playas, lagos y mar (un Water Body sobre el que flotan los barcos).
+- **Árboles**, **ruinas** y **torres** repartidos por la tierra.
+- Las **criaturas** se generan cerca del jugador según su densidad. La predeterminada es el Mannequin con BT_Chase; pon tu propia clase en *Creature Class* (y tu estructura en *Structure Class*).
+- Characters, IA, vehículos y ragdolls se apoyan en el mismo suelo.
+
+**Largas distancias**
+- Los chunks tienen coordenadas enteras y el ruido es de doble precisión, así que el mundo es el mismo a 100 km o a 10.000 km.
+- Pasada la *Rebase Distance*, todo el mundo vuelve cerca de 0 (el World Origin Rebasing de Unreal), así que las posiciones conservan precisión de centímetro.
+- En el juego, esto cuesta cerca de 1,5 ms por fotograma viajando a 250 m/s.
+
+```blueprint
+Event BeginPlay -> Set Actor Location ( Target, Location )
+```
+```real
+class Explorer extends Actor
+    event BeginPlay()
+        SetActorLocation(Vector(0, 0, 3000))
+```
+Mira también [Instalaciones procedurales](article:procedural-facility).

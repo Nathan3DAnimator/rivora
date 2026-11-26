@@ -12,10 +12,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "content.h"
 #include "editor.h"
 #include "io_json.h"
 #include "mcp.h"
 #include "platform.h"
+#include "project.h"
 
 static struct {
     HANDLE thread;
@@ -145,6 +147,249 @@ static void test_bridge(void) {
     if (!ok) bad("the bridge's answers", buf);
 }
 
+// (2026-11-24) The guide: the checks, recipe, batch, inspect_level, tool_help, search, "next"; and the measure of a task
+// done before (the 22 tools) and now (one call)
+static int actors_now(void) {
+    bool e;
+    char* t = call("get_editor_state", "{}", &e, NULL);
+    const char* p = t ? strstr(t, "\"actors\":") : NULL;
+    int n = p ? atoi(p + 9) : -1;
+    free(t);
+    return n;
+}
+static size_t g_bytes; // (the answers' size in a measure)
+static char* callm(const char* tool, const char* args, bool* e) {
+    char* t = call(tool, args, e, NULL);
+    g_bytes += t ? strlen(t) : 0;
+    return t;
+}
+static bool write_bmp(const char* path, uint8_t r, uint8_t g, uint8_t b) { // a 4 x 4 picture
+    FILE* f = fopen(path, "wb");
+    if (!f) return false;
+    uint8_t h[54] = { 'B', 'M' };
+    uint32_t size = 54 + 4 * 4 * 3;
+    memcpy(h + 2, &size, 4), h[10] = 54, h[14] = 40, h[18] = 4, h[22] = 4, h[26] = 1, h[28] = 24;
+    fwrite(h, 1, 54, f);
+    for (int i = 0; i < 16; i++) fputc(b, f), fputc(g, f), fputc(r, f);
+    fclose(f);
+    return true;
+}
+
+static int jnum(const char* t, const char* key) {
+    char k[64];
+    snprintf(k, sizeof k, "\"%s\":", key);
+    const char* p = t ? strstr(t, k) : NULL;
+    return p ? atoi(p + strlen(k)) : -1;
+}
+// (2026-11-24, the tester's block of item 6) a recipe's dry run: its plan whole (no step left empty: playable_character's
+// spawn had no actor while its class wasn't made, an error), no error, nothing kept (the actors, no_file not written);
+// the actors it says the call would leave (actors_would_be), checked against the real call by recipe_real
+static int recipe_dry(const char* label, const char* args, const char* no_file) {
+    bool e;
+    char dry[600];
+    snprintf(dry, sizeof dry, "%.*s,\"dry_run\":true}", (int)strlen(args) - 1, args);
+    int base = actors_now();
+    char p[1300] = "";
+    if (no_file) snprintf(p, sizeof p, "%s%s", content_root(), no_file + 8);
+    bool had = no_file && GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES; // (made by an earlier step: not this dry run's)
+    char* t = call("recipe", dry, &e, NULL);
+    printf("[RealEngine] mcp: recipe %s dry_run -> %.300s\n", label, t);
+    if (e || !has(t, "\"plan\"") || has(t, "\"actors\":[]") || has(t, "\"failed\":true") || jnum(t, "actors_would_be") < 0 || actors_now() != base ||
+        (no_file && !had && GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES)) {
+        char what[160];
+        snprintf(what, sizeof what, "recipe %s dry_run (the whole plan, no error, nothing kept)", label);
+        bad(what, t);
+    }
+    int would = jnum(t, "actors_would_be");
+    free(t);
+    return would;
+}
+// the real call's answer t: its actors_after what the level has after (the Mannequin's parts counted), and what the
+// dry run said it would be
+static void recipe_real(const char* label, const char* t, int would) {
+    int after = jnum(t, "actors_after"), now = actors_now();
+    printf("[RealEngine] mcp: recipe %s: actors_after %d, the level %d, the dry run said %d\n", label, after, now, would);
+    if (after != now || would != now) {
+        char what[160];
+        snprintf(what, sizeof what, "recipe %s: actors_after %d, the level then %d, its dry run %d (all three the same)", label, after, now, would);
+        bad(what, NULL);
+    }
+}
+
+static void test_guide(void) {
+    bool e;
+    char* t;
+    // the checks: a wrong key answers the right one, nothing runs
+    int n0 = actors_now();
+    t = call("spawn_actors", "{\"actors\":[{\"type\":\"Cube\",\"position\":[0,0,0]}]}", &e, NULL);
+    printf("[RealEngine] mcp: a wrong key -> %.240s\n", t);
+    if (!e || !has(t, "did you mean 'location'") || actors_now() != n0) bad("the check of spawn_actors' keys", t);
+    free(t);
+    t = call("play", "{\"action\":\"jump\"}", &e, NULL);
+    if (!e || !has(t, "one of: start, stop, simulate, status")) bad("the check of an enum", t);
+    free(t);
+    t = call("tool_help", "{\"tool\":\"spawn_actors\"}", &e, NULL);
+    if (e || !has(t, "\"examples\"") || !has(t, "\"schema\"")) bad("tool_help spawn_actors", t);
+    free(t);
+    t = call("tool_help", "{}", &e, NULL);
+    if (e || !has(t, "\"recipe\"") || !has(t, "\"batch\"")) bad("tool_help (every tool)", t);
+    free(t);
+
+    // the measure: a test level with the 22 tools (what an AI did: the guide, the types, one spawn of everything, the
+    // camera) and with recipe (one call)
+    int base = actors_now();
+    g_bytes = 0;
+    double t0 = re_time_seconds();
+    free(callm("get_started", "{}", &e));
+    free(callm("list_actor_types", "{}", &e));
+    t = callm("spawn_actors", "{\"actors\":[{\"type\":\"Plane\",\"name\":\"OldGround\",\"scale\":[40,40,1]},{\"type\":\"Player Start\",\"location\":[0,0,100]},"
+                              "{\"type\":\"Clear Day\"},{\"type\":\"Cube\",\"location\":[1200,0,50]},{\"type\":\"Cube\",\"location\":[-1200,0,50]},"
+                              "{\"type\":\"Cube\",\"location\":[0,1200,50]},{\"type\":\"Cube\",\"location\":[0,-1200,50]}]}", &e);
+    if (e) bad("the test level with the old tools", t);
+    free(t);
+    free(callm("set_camera", "{\"location\":[-2200,-2200,1400],\"look_at\":[0,0,0]}", &e));
+    double before_ms = (re_time_seconds() - t0) * 1000.0;
+    size_t before_bytes = g_bytes;
+    if (actors_now() <= base) bad("the old way placed nothing", NULL);
+    base = actors_now(); // (the old way's actors stay: a spawn of types takes an undo step per actor)
+    int would = recipe_dry("test_level", "{\"recipe\":\"test_level\",\"params\":{\"size_m\":40,\"obstacles\":6,\"lighting\":\"day\"}}", NULL);
+    g_bytes = 0;
+    t0 = re_time_seconds();
+    t = callm("recipe", "{\"recipe\":\"test_level\",\"params\":{\"size_m\":40,\"obstacles\":6,\"lighting\":\"day\"}}", &e);
+    double after_ms = (re_time_seconds() - t0) * 1000.0;
+    printf("[RealEngine] mcp: recipe test_level -> %.300s\n", t);
+    int made = actors_now() - base;
+    if (e || !has(t, "\"results\"") || !has(t, "\"next\"") || made < 8) bad("recipe test_level (ground, start, sky, 6 obstacles)", t);
+    recipe_real("test_level", t, would);
+    free(t);
+    printf("[RealEngine] mcp: measure: a test level: before 4 calls %.1f ms (%zu bytes read), after 1 call %.1f ms (%zu bytes), %d actors\n",
+           before_ms, before_bytes, after_ms, g_bytes, made);
+    free(call("undo", "{}", &e, NULL)); // (one undo step for the whole recipe)
+    if (actors_now() != base) bad("one undo takes the whole recipe back", NULL);
+
+    // dry run: the plan, nothing kept
+    t = call("recipe", "{\"recipe\":\"lighting\",\"params\":{\"style\":\"night\"},\"dry_run\":true}", &e, NULL);
+    if (e || !has(t, "dry_run") || !has(t, "\"plan\"") || actors_now() != base) bad("recipe lighting dry_run", t);
+    free(t);
+    t = call("recipe", "{\"recipe\":\"lighting\",\"params\":{\"style\":\"noon\"}}", &e, NULL);
+    if (!e || !has(t, "day, morning, sunset")) bad("recipe lighting with a wrong style", t);
+    free(t);
+
+    // batch: atomic rolls back, a good one is one undo step
+    t = call("batch", "{\"steps\":[{\"tool\":\"spawn_actors\",\"args\":{\"actors\":[{\"type\":\"Cube\",\"name\":\"BatchA\"}]}},"
+                      "{\"tool\":\"modify_actors\",\"args\":{\"actors\":[{\"actor\":\"Ghost\",\"offset\":[0,0,1]}]}}]}", &e, NULL);
+    printf("[RealEngine] mcp: batch with a failing step -> %.240s\n", t);
+    if (!e || !has(t, "rolled_back") || actors_now() != base) bad("an atomic batch rolled back", t);
+    free(t);
+    t = call("batch", "{\"steps\":[{\"tool\":\"level\",\"args\":{\"action\":\"save\"}}]}", &e, NULL);
+    if (!e || !has(t, "can't be in a batch")) bad("a batch refuses level", t);
+    free(t);
+    t = call("batch", "{\"steps\":[{\"tool\":\"spawn_actors\",\"args\":{\"actors\":[{\"type\":\"Cube\",\"name\":\"BatchB\"},{\"type\":\"Sphere\",\"name\":\"BatchC\"}]}},"
+                      "{\"tool\":\"modify_actors\",\"args\":{\"actors\":[{\"actor\":\"BatchB\",\"offset\":[0,0,300],\"components\":[\"Rotating Movement\"]}]}},"
+                      "{\"tool\":\"get_actor\",\"args\":{\"actor\":\"BatchB\",\"properties\":false}}]}", &e, NULL);
+    if (e || actors_now() != base + 2 || !has(t, "Rotating Movement") || !has(t, "one undo step")) bad("a batch of three steps", t);
+    free(t);
+    free(call("undo", "{}", &e, NULL));
+    if (actors_now() != base) bad("one undo takes the batch back", NULL);
+
+
+    // a material from texture maps found by their names
+    char dir[1200], p[1300];
+    snprintf(dir, sizeof dir, "%s/MCPTex", content_root());
+    CreateDirectoryA(dir, NULL);
+    snprintf(p, sizeof p, "%s/T_Brick_BaseColor.bmp", dir), write_bmp(p, 160, 70, 50);
+    snprintf(p, sizeof p, "%s/T_Brick_Normal.bmp", dir), write_bmp(p, 128, 128, 255);
+    snprintf(p, sizeof p, "%s/T_Brick_Roughness.bmp", dir), write_bmp(p, 200, 200, 200);
+    free(call("spawn_actors", "{\"actors\":[{\"type\":\"Cube\",\"name\":\"Wall\"}]}", &e, NULL));
+    would = recipe_dry("pbr_material", "{\"recipe\":\"pbr_material\",\"params\":{\"name\":\"Brick\",\"folder\":\"/Content/MCPTex\",\"apply_to\":[\"Wall\"]}}",
+                       "/Content/MCPTex/M_Brick.rmat");
+    t = call("recipe", "{\"recipe\":\"pbr_material\",\"params\":{\"name\":\"Brick\",\"folder\":\"/Content/MCPTex\",\"apply_to\":[\"Wall\"]}}", &e, NULL);
+    printf("[RealEngine] mcp: recipe pbr_material -> %.300s\n", t);
+    snprintf(p, sizeof p, "%s/MCPTex/M_Brick.rmat", content_root());
+    if (e || !has(t, "M_Brick.rmat") || !has(t, "normal:") || !has(t, "roughness:") || GetFileAttributesA(p) == INVALID_FILE_ATTRIBUTES) bad("recipe pbr_material", t);
+    recipe_real("pbr_material", t, would);
+    free(t);
+    t = call("get_actor", "{\"actor\":\"Wall\",\"properties\":false}", &e, NULL);
+    if (!has(t, "M_Brick")) bad("the material applied to Wall", t);
+    free(t);
+
+    // a playable character and the HUD
+    // (its class not made yet: the dry run's case the tester found; the Default Pawn an undo leaves, said in "next")
+    would = recipe_dry("playable_character", "{\"recipe\":\"playable_character\",\"params\":{\"name\":\"BP_McpHero\",\"view\":\"first\"}}",
+                       "/Content/FirstPerson/BP_McpHero.rbp");
+    if (!strcmp(project()->default_pawn, "BP_McpHero")) bad("recipe playable_character dry_run set the Default Pawn", NULL);
+    t = call("recipe", "{\"recipe\":\"playable_character\",\"params\":{\"name\":\"BP_McpHero\",\"view\":\"first\"}}", &e, NULL);
+    printf("[RealEngine] mcp: recipe playable_character -> %.240s\n", t);
+    if (e || !has(t, "BP_McpHero.rbp")) bad("recipe playable_character", t);
+    if (!has(t, "undo takes back the actors, not the Default Pawn")) bad("recipe playable_character: next says an undo leaves the Default Pawn", t);
+    recipe_real("playable_character", t, would);
+    free(t);
+    would = recipe_dry("hud", "{\"recipe\":\"hud\"}", "/Content/UI/WBP_GameHUD.rbp");
+    t = call("recipe", "{\"recipe\":\"hud\"}", &e, NULL);
+    if (e || !has(t, "GameHUD")) bad("recipe hud", t);
+    recipe_real("hud", t, would);
+    free(t);
+
+    // inspect_level against the old diagnosis (the state, the actors, the log)
+    g_bytes = 0;
+    t0 = re_time_seconds();
+    free(callm("get_editor_state", "{}", &e));
+    { // (2026-11-25) the open project by its name (MCPTEST: --new-project), and said open
+        char* st = call("get_editor_state", "{}", &e, NULL);
+        if (e || !has(st, "\"project\":\"MCPTEST\"") || !has(st, "\"project_open\":true")) bad("get_editor_state names the open project", st);
+        free(st);
+    }
+    free(callm("find_actors", "{\"limit\":200}", &e));
+    free(callm("get_log", "{}", &e));
+    double diag_before = (re_time_seconds() - t0) * 1000.0;
+    size_t diag_bytes = g_bytes;
+    g_bytes = 0;
+    t0 = re_time_seconds();
+    t = callm("inspect_level", "{}", &e);
+    double diag_after = (re_time_seconds() - t0) * 1000.0;
+    printf("[RealEngine] mcp: inspect_level -> %.300s\n", t);
+    if (e || !has(t, "\"issues\"") || !has(t, "\"next_steps\"") || !has(t, "BP_McpHero")) bad("inspect_level", t);
+    free(t);
+    printf("[RealEngine] mcp: measure: what is wrong: before 3 calls %.1f ms (%zu bytes, the AI works it out), after 1 call %.1f ms (%zu bytes, each issue with its fix)\n",
+           diag_before, diag_bytes, diag_after, g_bytes);
+
+    // search over everything
+    t = call("search", "{\"query\":\"light\"}", &e, NULL);
+    if (e || !has(t, "Point Light") || !has(t, "\"functions\"") || !has(t, "\"docs\"")) bad("search light", t);
+    free(t);
+    t = call("search", "{\"query\":\"component\"}", &e, NULL);
+    if (e || !has(t, "HUD Layout")) bad("search component (the components)", t);
+    free(t);
+    // (2026-11-25, the tester's gap) the Procedural World: found by search, placed by its group's name (Terrain) and as a
+    // Facility with its properties, edited, its kind in get_actor. Last, and checked by the actors' names: a Procedural
+    // World grows actors of its own (thousands in the tester's run), the counts above would count them
+    t = call("search", "{\"query\":\"Procedural World\"}", &e, NULL);
+    if (e || !has(t, "Procedural World: Facility")) bad("search finds the Procedural World's kinds", t);
+    free(t);
+    t = call("spawn_actors", "{\"actors\":[{\"type\":\"Procedural World\",\"name\":\"PW_Terrain\"},"
+                             "{\"type\":\"Procedural World: Facility\",\"name\":\"PW_Facility\",\"properties\":{\"Rooms\":12,\"Seed\":7}}]}", &e, NULL);
+    printf("[RealEngine] mcp: spawn_actors Procedural World -> %.200s\n", t);
+    if (e || !has(t, "PW_Terrain") || !has(t, "PW_Facility")) bad("spawn_actors places the Procedural World (Terrain and Facility)", t);
+    free(t);
+    free(call("modify_actors", "{\"actors\":[{\"actor\":\"PW_Facility\",\"properties\":{\"Room Size\":900}}]}", &e, NULL));
+    if (e) bad("modify_actors edits the Procedural World", NULL);
+    t = call("get_actor", "{\"actor\":\"PW_Facility\"}", &e, NULL);
+    if (e || !has(t, "\"procedural_mode\":\"Facility\"") || !has(t, "Rooms\":12") || !has(t, "Room Size\":900") || !has(t, "Seed\":7"))
+        bad("get_actor shows the Facility's kind and the properties set", t);
+    free(t);
+    t = call("get_actor", "{\"actor\":\"PW_Terrain\",\"properties\":false}", &e, NULL);
+    if (e || !has(t, "\"procedural_mode\":\"Terrain\"")) bad("the group's name places its first kind (Terrain)", t);
+    free(t);
+    free(call("undo", "{}", &e, NULL)), free(call("undo", "{}", &e, NULL)); // (the edit, then the placing)
+    t = call("get_actor", "{\"actor\":\"PW_Facility\",\"properties\":false}", &e, NULL);
+    if (!e) bad("two undos take the Procedural Worlds back", t);
+    free(t);
+    // (2026-11-25, the tester) select_actors checks its entries: {"id": n} objects taken, a wrong one named in errors
+    t = call("select_actors", "{\"actors\":[{\"id\":999999},\"NoSuchActor\"]}", &e, NULL);
+    if (!e || !has(t, "no actor '999999'") || !has(t, "no actor 'NoSuchActor'")) bad("select_actors names the actors it can't find", t);
+    free(t);
+}
+
 static DWORD WINAPI client(LPVOID arg) {
     (void)arg;
     int st;
@@ -160,13 +405,19 @@ static DWORD WINAPI client(LPVOID arg) {
     int ntools = 0;
     for (const char* p = r; p && (p = strstr(p, "\"inputSchema\"")); p++) ntools++;
     printf("[RealEngine] mcp: initialize ok, %d tools listed\n", ntools);
-    if (ntools < 20) bad("tools/list", r);
+    if (ntools < 27) bad("tools/list (27 tools: the 22 and recipe, batch, inspect_level, tool_help, search)", r);
     free(r);
     r = http("POST", "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"prompts/list\"}", NULL, &st);
-    if (!has(r, "build_scene")) bad("prompts/list", r);
+    if (!has(r, "build_scene") || !has(r, "make_playable")) bad("prompts/list", r);
     free(r);
     r = http("POST", "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"resources/read\",\"params\":{\"uri\":\"rivora://guide\"}}", NULL, &st);
-    if (!has(r, "Conventions")) bad("resources/read rivora://guide", r);
+    if (!has(r, "Conventions") || !has(r, "recipe")) bad("resources/read rivora://guide", r);
+    free(r);
+    r = http("POST", "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"resources/read\",\"params\":{\"uri\":\"rivora://recipes\"}}", NULL, &st);
+    if (!has(r, "test_level") || !has(r, "pbr_material")) bad("resources/read rivora://recipes", r);
+    free(r);
+    r = http("POST", "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"resources/read\",\"params\":{\"uri\":\"rivora://state\"}}", NULL, &st);
+    if (!has(r, "Issues")) bad("resources/read rivora://state", r);
     free(r);
     // a web page's request (DNS rebinding) refused
     r = http("POST", "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"ping\"}", "Origin: http://evil.example\r\n", &st);
@@ -232,6 +483,7 @@ static DWORD WINAPI client(LPVOID arg) {
     printf("[RealEngine] mcp: play 1 s -> %.200s\n", t);
     if (e || !has(t, "stopped")) bad("play for a second", t);
     free(t);
+    test_guide();
     t = call("no_such_tool", "{}", &e, NULL);
     if (!e) bad("an unknown tool isn't an error", t);
     free(t);

@@ -1,6 +1,6 @@
 ﻿# Publishes the Rivora Engine's source to its public repository (the open source release, notas-dev/servicos.md "Código
-# aberto"): the files of this repository's HEAD (git archive) in a clone of the public one beside this folder
-# (..\rivora-public), without what is only the author's (CLAUDE.md: the AI's instructions) and with the home folder
+# aberto"): the files of this repository's HEAD (git archive) in a clone of the public one inside this folder
+# (rivora-public\, ignored by this repository; it was beside it until the move to E:\Projetos), without what is only the author's (CLAUDE.md: the AI's instructions) and with the home folder
 # in paths made anonymous ("Users\Player" -> "Users\Player": the same length, so binary test files stay valid); one
 # commit per release ("Rivora Engine <VERSION>"), pushed. The development history stays in the private repository.
 #   powershell -ExecutionPolicy Bypass -File tools/publish_source.ps1 [-Message "..."] [-NoPush]
@@ -10,7 +10,7 @@ param([string]$Message,
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$pub = Join-Path (Split-Path -Parent $root) "rivora-public"
+$pub = Join-Path $root "rivora-public"
 $ver = (Get-Content (Join-Path $root "VERSION") -TotalCount 1).Trim()
 if (-not $Message) { $Message = "Rivora Engine $ver" }
 
@@ -33,8 +33,12 @@ git -C $root archive --format=tar -o $tar HEAD
 if ($LASTEXITCODE -ne 0) { throw "git archive failed" }
 tar -xf $tar -C $pub
 Remove-Item $tar -Force
-# 3. what is only the author's
-foreach ($f in "CLAUDE.md") { $p = Join-Path $pub $f; if (Test-Path $p) { Remove-Item $p -Force } }
+# 3. what is only the author's (the AI's instructions, sub-agents and project memory)
+foreach ($f in "CLAUDE.md", "AGENTS.md", "docs\memory", ".claude") {
+    $p = Join-Path $pub $f; if (Test-Path $p) { Remove-Item $p -Recurse -Force -Confirm:$false }
+}
+$docs = Join-Path $pub "docs"
+if ((Test-Path $docs) -and -not (Get-ChildItem $docs -Force)) { Remove-Item $docs -Force }
 # 4. the home folder in paths (bytes, same length: text and binary files alike)
 $from1 = [Text.Encoding]::ASCII.GetBytes("Users\Player"); $to1 = [Text.Encoding]::ASCII.GetBytes("Users\Player")
 $from2 = [Text.Encoding]::ASCII.GetBytes("Users/Player"); $to2 = [Text.Encoding]::ASCII.GetBytes("Users/Player")

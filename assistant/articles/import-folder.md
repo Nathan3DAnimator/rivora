@@ -1,6 +1,6 @@
 id: import-folder
 kind: howto
-title: Importar uma pasta inteira e achar as texturas sozinho | Import a whole folder and find the textures by itself
+title: Importar uma pasta inteira e achar as texturas sozinho | Import a whole folder and find the textures by itself | Importar una carpeta entera
 keys: importar pasta, import folder, arrastar pasta, drag folder, pasta do explorer, explorer folder, subpastas, subfolders, importar tudo, import everything, texturas faltando, missing textures, textura nao encontrada, texture not found, fbx sem textura, fbx without textures, textura rosa, achar texturas, find textures, mapas pbr, pbr maps, basecolor, normal, roughness, orm, substance, quixel, nomenclatura, naming
 --- pt
 ```diagram steps
@@ -32,3 +32,18 @@ Drag the folder from Explorer | Subfolders mirrored with their names | Models im
 - If the file names a texture that **isn't there** (another drive, another folder, a `.tga` instead of a `.png`), the engine looks for it by name **in the folders around**: the file's folder and its subfolders, the one above and its siblings. The nearest wins.
 - A material **without textures** (or with only its color): the engine links the maps named after the **material** or its color texture. For example, `M_Chair` or `Chair_BaseColor.png` pull in `Chair_Normal`, `Chair_Roughness`, `Chair_Metallic`, `Chair_ORM`, `Chair_Emissive`, `Chair_Opacity`.
 - It also knows `Albedo`/`Diffuse`, `NormalGL`/`NormalDX` (DirectX's green flipped), `Gloss` (inverted into roughness) and `ORM`/`ARM` (green into roughness, blue into metallic). The Import Report says what was found.
+--- es
+```diagram steps
+Arrastra la carpeta desde el Explorador de archivos | Subcarpetas reflejadas con sus nombres | Modelos importados, imágenes y sonidos copiados | Texturas encontradas y enlazadas por el nombre
+```
+## Una carpeta entera
+- Arrastra una **carpeta** del Explorador de archivos al **Explorador de contenidos**: aparece en la carpeta abierta con todas sus **subcarpetas, en el mismo orden y con los mismos nombres**.
+- Los modelos (**FBX, OBJ, glTF/GLB, .tlend, .rasset**) van a la ventana **Import Options** (usa **Import All**); las imágenes y los sonidos se copian a su lugar.
+- Las texturas que un modelo usa desde dentro de la carpeta se quedan **donde estaban** (no se copian de nuevo a la carpeta Textures del modelo).
+- Los archivos de escena de otros programas (**.blend**, .max, .ma) se omiten con un aviso: expórtalos como FBX, glTF o .tlend.
+- Una carpeta solo con los mosaicos de un conjunto **UDIM** sigue convirtiéndose en un solo `.rudim`.
+
+## Texturas encontradas por sí solas (todos los importadores)
+- Si el archivo nombra una textura que **no está** (otro disco, otra carpeta, un `.tga` en lugar de un `.png`), el motor la busca por el nombre **en las carpetas de alrededor**: la carpeta del archivo y sus subcarpetas, la de arriba y sus hermanas. Gana la más cercana.
+- Un material **sin texturas** (o solo con su color): el motor enlaza los mapas con el nombre del **material** o de su textura de color. Por ejemplo, `M_Chair` o `Chair_BaseColor.png` traen `Chair_Normal`, `Chair_Roughness`, `Chair_Metallic`, `Chair_ORM`, `Chair_Emissive`, `Chair_Opacity`.
+- También conoce `Albedo`/`Diffuse`, `NormalGL`/`NormalDX` (el verde de DirectX invertido), `Gloss` (invertido a roughness) y `ORM`/`ARM` (verde a roughness, azul a metallic). El Informe de importación dice lo que se encontró.

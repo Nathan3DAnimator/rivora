@@ -33,7 +33,7 @@
 ## Falta
 - Importar de verdade (converter para `.rasset`). (As miniaturas reais já existem, abaixo; desde o Q23 seguem o arquivo
   quando ele muda no disco.)
-- Coleções/favoritos, filtros por tipo, renomear pela árvore, desfazer operações de arquivo.
+- Coleções, renomear pela árvore, desfazer operações de arquivo. (Favoritos e filtros por tipo: abaixo, 24/11/2026.)
 
 ## Miniaturas e visualizadores (2026-10-31, `src/asset_viewer.c`)
 - **Miniaturas no Content Drawer/Browser** (`asset_thumb`, chamada no bloco quando não é Blueprint):
@@ -119,3 +119,25 @@ uma janela para escolher o modelo, a textura, o material, a blueprint, com prior
   Blueprint). Sound Wave → Sound Cue.
 - Os outros combos de asset fora do Details do nível (editores de partícula, áudio, IA, Sequencer: ~80) seguem como
   listas com miniatura (`asset_selectable`); trocar aos poucos por `asset_field`.
+
+## Filtros como os da Unreal (2026-11-24)
+- Botão **Filtros** à esquerda da busca (`filters_button` em `src/content.c`): **Outros Filtros** (Favoritos, Abertos
+  Recentemente, Modificados, Em Uso no Nível), **Tipos de Asset** (os 13 comuns) e **Mais Tipos** (os outros 14: todo
+  `AssetKind` cai em algum), Limpar Filtros. Tabela `g_cbf` (`CbFilterId` em `content.h`): rótulo, ícone, família da
+  cor, máscara de `AssetKind`. Widget Blueprint = classe cuja raiz é `BPN_USER_WIDGET` (lida pelo `item_bp` só com o
+  filtro ligado).
+- **Chips** embaixo da busca (`filter_chips`), na cor da família (`ui_asset_family_token`): clique liga/desliga, clique
+  direito remove; quebram linha. Tooltip padrão (`ui_tip_item`; descrições `cb_filters`, `cbf_<chave>`).
+- **Combinação**: tipos ligados em OU; Outros Filtros e a busca em E. Com filtro ligado a leitura é recursiva (pasta
+  atual e as de dentro) e sem pastas, como a busca. Tudo na leitura da pasta (`filter_pass` em `walk_one`), nunca por
+  quadro; `filters_prepare` junta uma vez por leitura o que os especiais pedem.
+- **Favoritos** (até 256, clique direito > Adicionar aos Favoritos, estrela no bloco), **Recentes** (os últimos 32
+  abertos pelo Content Browser), **Modificados** (Blueprint `dirty`, nível com mudanças pelo gancho `unsaved`, Git
+  novo/alterado), **Em Uso no Nível** (gancho `used_assets` do editor: hashes de malha, material, classe, animação, IK
+  Rig, Physics Asset, som, IA, partículas, veículo, decal, material físico, diálogo, item; busca binária).
+- Salvos no `editor.ini` do usuário: `cb_filters=<adicionados>,<ligados>` (hex), `cb_fav=`, `cb_recent=`.
+- **Medido** (`--picker-test`, RTX 3060, pasta com 1009 assets): ler sem filtro **1,04 ms**, com o filtro Textura
+  **0,86 ms** (menos itens guardados); desenhar os chips: só texto e retângulos. Teste: estágio 6 do `asset_picker`
+  (Textura 1003 de 1009, Textura + Material 1006, + busca 100, Favoritos 2, Favoritos + Textura 1, sem pastas com filtro,
+  relidos do editor.ini).
+- Falta: coleções da Unreal, filtros salvos com nome, favoritos por projeto (hoje por usuário, pelo vpath).

@@ -48,6 +48,8 @@ typedef struct GiCacheStats {
     float texel_cm;
     uint32_t candidates;      // the meshes within reach that may have a chart (charts: those that got one)
     float falloff_cm, coarse; // the density the allocation reached (gi_cache.c allocate)
+    uint32_t quiet;           // (2026-11-25) frames with nothing changed (settled: a quarter of the share a frame)
+    bool light_short;         // (2026-11-25) a local light changed lately: the short running mean (6 updates, not 512)
 } GiCacheStats;
 const GiCacheStats* gi_cache_stats(void);
 // The frames one pass over all the texels takes (a share of them each frame): an event (render.c) lasts two of them

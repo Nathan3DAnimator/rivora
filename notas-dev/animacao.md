@@ -564,3 +564,26 @@ Return Value, Action, Height).
 - Teste `cover`: H a 149,0 cm do plano da parede (o esperado) virado para 180°; L agachado (pelve 40 cm abaixo); H para
   na ponta direita; espiando inclina 16,6 cm para fora; Exit Cover solta. Print conferido (joelhos para a frente).
 
+
+## Peles em massa: rígidas, LODs, URO (item 4 parte 2, 2026-11-24/25)
+- **LODs de pele com bordas livres e sloppy** (`mesh_build.c` `t_free_borders`): a cápsula da Unamed (bordas de UV e de
+  normal travavam a simplificação: parava em 20757 de 27852 índices) ganha LODs pelo `meshopt_simplifyWithAttributes` sem
+  travar bordas e, se ainda passar de 70%, pelo `meshopt_simplifySloppy`: 9284 -> 2241 (7,63 cm) -> 381 (20,72) -> 255
+  (245,19). Cada LOD só entra com o erro abaixo de ~1 px. Conferir: `rivora --skin-lods-test <arquivo.rmesh>`; uma pele de
+  4096 triângulos ou mais que fica sem LODs avisa no log.
+- **URO por distância** (`anim.c`, `REALENGINE_NO_URO`): a pose atualiza todo quadro até 15 m, depois a cada 2, 4 e 8
+  quadros (40 e 80 m), pela câmera do último quadro (`render_last_camera`).
+- **Pele rígida** e **dormente**: notas-dev/escala.md "Milhares de Skeletal Meshes".
+- Testes: `skin_5000` (5000 animadas, 87 fps, 0 sem área), `skin_5000_still` (5000 paradas e dormentes, 143 fps),
+  `skin_still`, `skin_noroom`, `skin_gpu`, `skin_dag` (abaixo).
+
+## Nanite na pele viva (item 4 passo 3, 2026-11-25)
+- Uma Skeletal Mesh densa (Auto: 16 384 triângulos; On no `.rlod`: 512) ganha o DAG de clusters como as estáticas, e ele
+  serve também as instâncias animadas: `mesh.vert` já lê os vértices dobrados pelo índice local do LOD 0, igual para os
+  clusters. Em `cull.comp` (passe 6) as esferas dos clusters de uma pele viva crescem 35% do raio da pose de ligação (a
+  mesma folga da esfera da instância, `upload_mesh_info`), dos dois lados de cada grupo: o corte continua único.
+- Fora: Masked (fica inteira), soft body (vértices próprios), Nanite Tessellation (dobraria a pose de ligação).
+- Teste `skin_dag`: o rig subdividido na importação (`REALENGINE_IMPORT_SUBDIV=4`: 236 -> 60 416 triângulos), 9 cópias
+  dobradas, validado, `REALENGINE_DAG_STATS` mostra as instâncias pelo DAG.- Rodada 3 (25/11): `skin_dag` passa (9 instâncias pelo DAG, 291 924 vértices dobrados, validado, 321 fps); o rig denso a
+  1,8 m da câmera com o DAG (6 instâncias, 17 617 triângulos) e sem ele: a mesma imagem, sem buracos nem rachaduras, 349
+  e 358 fps (o custo igual: o rig é pequeno na tela).

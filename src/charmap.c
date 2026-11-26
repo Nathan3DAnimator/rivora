@@ -19,9 +19,9 @@ bool posemotion_enabled(void) { return s_posemotion_on; }
 
 static const char* const CENTER_CODE[CR_SIDE_FIRST] = { "",      "root",  "hips",  "spine1", "spine2", "spine3", "spine4",
                                                         "chest", "neck1", "neck2", "head",   "jaw",    "eye.L",  "eye.R" };
-static const char* const CENTER_LABEL[CR_SIDE_FIRST] = { "",          N_("Raiz"),      N_("Quadril"),   N_("Coluna 1"), N_("Coluna 2"),
-                                                         N_("Coluna 3"), N_("Coluna 4"),  N_("Peito"),     N_("Pescoço 1"), N_("Pescoço 2"),
-                                                         N_("Cabeça"),   N_("Mandíbula"), N_("Olho"),      N_("Olho") };
+static const char* const CENTER_LABEL[CR_SIDE_FIRST] = { "",          N_("Root"),      N_("Hips"),   N_("Spine 1"), N_("Spine 2"),
+                                                         N_("Spine 3"), N_("Spine 4"),  N_("Chest"),     N_("Neck 1"), N_("Neck 2"),
+                                                         N_("Head"),   N_("Jaw"), N_("Eye"),      N_("Eye") };
 static const int CENTER_PARENT[CR_SIDE_FIRST] = { CR_NONE,   CR_NONE,  CR_ROOT,  CR_HIPS,  CR_SPINE1, CR_SPINE2, CR_SPINE3,
                                                   CR_SPINE4, CR_CHEST, CR_NECK1, CR_NECK2, CR_HEAD,   CR_HEAD,   CR_HEAD };
 
@@ -95,7 +95,7 @@ const char* charrole_label_base(int role) {
 void charrole_label(int role, char* out, size_t cap) {
     int side = charrole_side(role);
     const char* base = TR(charrole_label_base(role));
-    if (side) snprintf(out, cap, "%s %s", base, side == 1 ? TR("(E)") : TR("(D)"));
+    if (side) snprintf(out, cap, "%s %s", base, side == 1 ? TR("(L)") : TR("(R)"));
     else snprintf(out, cap, "%s", base);
 }
 
@@ -118,8 +118,8 @@ bool charrole_is_twist(int role) {
 }
 
 static const char* const CLASS_CODE[CRC_COUNT] = { "unknown", "humanoid", "near_human", "quadruped", "non_human", "mechanical" };
-static const char* const CLASS_NAME[CRC_COUNT] = { N_("Desconhecido"), N_("Humanoide"),  N_("Quase humano"),
-                                                   N_("Quadrúpede"),   N_("Não humano"), N_("Mecânico") };
+static const char* const CLASS_NAME[CRC_COUNT] = { N_("Unknown"), N_("Humanoid"),  N_("Near Human"),
+                                                   N_("Quadruped"),   N_("Non-human"), N_("Mechanical") };
 const char* charmap_class_name(int c) { return c >= 0 && c < CRC_COUNT ? CLASS_NAME[c] : CLASS_NAME[0]; }
 const char* charmap_class_code(int c) { return c >= 0 && c < CRC_COUNT ? CLASS_CODE[c] : CLASS_CODE[0]; }
 int charmap_class_from_code(const char* code) {
@@ -129,8 +129,8 @@ int charmap_class_from_code(const char* code) {
 }
 
 static const char* const SOURCE_CODE[CSRC_COUNT] = { "none", "manual", "autorig", "names", "vrm", "topology" };
-static const char* const SOURCE_NAME[CSRC_COUNT] = { N_("Nenhuma"),         N_("Escolhido à mão"),   N_("Auto-rig do Tlender"),
-                                                     N_("Nomes dos ossos"), N_("Mapa humanoid do VRM"), N_("Forma do esqueleto") };
+static const char* const SOURCE_NAME[CSRC_COUNT] = { N_("None (rig)"),         N_("Picked by Hand"),   N_("Tlender Auto-Rig"),
+                                                     N_("Bone Names (rig)"), N_("VRM Humanoid Map"), N_("Skeleton Shape") };
 const char* charmap_source_name(int s) { return s >= 0 && s < CSRC_COUNT ? SOURCE_NAME[s] : SOURCE_NAME[0]; }
 static int source_from_code(const char* code) {
     for (int i = 0; code && i < CSRC_COUNT; i++)
@@ -139,7 +139,7 @@ static int source_from_code(const char* code) {
 }
 
 static const char* const CHAIN_CODE[CCK_COUNT] = { "generic", "tail", "leg", "wing", "tentacle", "ear", "arm" };
-static const char* const CHAIN_NAME[CCK_COUNT] = { N_("Cadeia"), N_("Cauda"), N_("Perna"), N_("Asa"), N_("Tentáculo"), N_("Orelha"), N_("Braço") };
+static const char* const CHAIN_NAME[CCK_COUNT] = { N_("Chain"), N_("Tail"), N_("Leg"), N_("Wing"), N_("Tentacle"), N_("Ear"), N_("Arm") };
 const char* charmap_chain_kind_name(int k) { return k >= 0 && k < CCK_COUNT ? CHAIN_NAME[k] : CHAIN_NAME[0]; }
 const char* charmap_chain_kind_code(int k) { return k >= 0 && k < CCK_COUNT ? CHAIN_CODE[k] : CHAIN_CODE[0]; }
 int charmap_chain_kind_from_code(const char* code) {
@@ -430,12 +430,12 @@ bool charmap_from_json(CharMap* m, const char* text, size_t len, char* err, size
     JsonDoc doc;
     char jerr[160] = "";
     if (!json_parse(text, len, &doc, jerr, sizeof jerr)) {
-        if (err) snprintf(err, err_cap, TR("Mapa de personagem ilegível: %s"), jerr);
+        if (err) snprintf(err, err_cap, TR("Unreadable character map: %s"), jerr);
         return false;
     }
     const JsonValue* root = &doc.root;
     if (json_get_int(root, "tlmap", 0) < 1 || !json_get(root, "papeis")) {
-        if (err) snprintf(err, err_cap, "%s", TR("O arquivo não é um mapa de personagem (.tlmap)."));
+        if (err) snprintf(err, err_cap, "%s", TR("The file isn't a character map (.tlmap)."));
         json_free(&doc);
         return false;
     }
@@ -482,14 +482,14 @@ bool charmap_save_file(const CharMap* m, const char* path, char* err, size_t err
     bool ok = f && fwrite(text, 1, len, f) == len;
     if (f) ok = fclose(f) == 0 && ok;
     free(text);
-    if (!ok && err) snprintf(err, err_cap, TR("Não foi possível gravar %s"), path);
+    if (!ok && err) snprintf(err, err_cap, TR("Couldn't write %s"), path);
     return ok;
 }
 
 bool charmap_load_file(CharMap* m, const char* path, char* err, size_t err_cap) {
     FILE* f = tl_fopen(path, "rb");
     if (!f) {
-        if (err) snprintf(err, err_cap, TR("Não foi possível abrir %s"), path);
+        if (err) snprintf(err, err_cap, TR("Couldn't open %s"), path);
         return false;
     }
     fseek(f, 0, SEEK_END);
@@ -499,7 +499,7 @@ bool charmap_load_file(CharMap* m, const char* path, char* err, size_t err_cap) 
     bool ok = text && fread(text, 1, (size_t)size, f) == (size_t)size;
     fclose(f);
     if (!ok) {
-        if (err) snprintf(err, err_cap, TR("Não foi possível abrir %s"), path);
+        if (err) snprintf(err, err_cap, TR("Couldn't open %s"), path);
         free(text);
         return false;
     }

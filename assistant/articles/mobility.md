@@ -1,6 +1,6 @@
 id: mobility
 kind: concept
-title: Mobilidade: Static, Stationary, Movable | Mobility: Static, Stationary, Movable
+title: Mobilidade: Static, Stationary, Movable | Mobility: Static, Stationary, Movable | Movilidad: Static, Stationary o Movable
 keys: mobilidade, static, stationary, movable, estatico, movel, luz assada, objeto parado, mobility
 --- pt
 ```diagram compare
@@ -28,3 +28,16 @@ In each actor's Details:
 - **Stationary**: doesn't move, but can change (a light that changes color).
 - **Movable**: moves in the game; its lighting is all dynamic.
 Pick Static for the scenery and Movable for what moves.
+--- es
+```diagram compare
+ | Static | Stationary | Movable
+Se mueve en el juego | no | no | sí
+Luz indirecta precalculada | sí | sí | no
+Cambia color / intensidad | no | sí | sí
+Costo | el menor | medio | el mayor
+```
+En los Detalles de cada actor:
+- **Static**: nunca se mueve; puede tener su luz indirecta precalculada (lo más bonito y barato).
+- **Stationary**: no se mueve, pero puede cambiar (una luz que cambia de color).
+- **Movable**: se mueve en el juego; su iluminación es toda dinámica.
+Elige Static para el escenario y Movable para lo que se mueve.

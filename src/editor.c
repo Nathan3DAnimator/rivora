@@ -13,6 +13,8 @@
 #include <cimgui.h>
 #include <GLFW/glfw3.h>
 
+#include "editor_docs.h"
+#include "editor_host.h" // (item 9)
 #include "blueprint.h"
 #include "crashlog.h"
 #include "updater.h"
@@ -103,6 +105,7 @@
 #include "import_report.h" // (Q19) Window > Import Report
 #include "source_control.h"
 #include "trace.h"
+#include "plugin_kit.h"
 #include "plugins.h"
 #include "graph_style.h"
 #include "script.h"
@@ -118,6 +121,8 @@
 #include "assistant_ui.h"
 #include "material.h"
 #include "editor.h"
+#include "loc.h" // (2026-11-24) the game's localization
+#include "loc_ui.h"
 #include "mcp.h"
 #include "asset_viewport.h"
 #include "sublevels.h"
@@ -471,6 +476,23 @@ static void delight_selected(Editor* ed, double now) {
                   mesh[0] ? TR("with") : TR("without"), st.ms);
 }
 
+// (2026-11-25, bug-fixer) The Heterogeneous Volume's example (24 .vdb files) written on a worker the first time one is
+// placed: the actor gets its file when they are there (its clip is then read on a worker too: fire.c)
+typedef struct VolExJob { Editor* ed; Entity e; bool made; } VolExJob;
+static void volex_work(AsyncTask* t, void* arg) {
+    (void)t;
+    VolExJob* j = arg;
+    j->made = volume_examples();
+}
+static void volex_done(AsyncTask* t, void* arg, bool ok) {
+    (void)t;
+    VolExJob* j = arg;
+    if (j->made) content_mark_dirty();
+    CVolume* vo = ok && ecs_alive(&j->ed->world, j->e) ? ecs_get(&j->ed->world, j->e, COMP_VOLUME) : NULL;
+    if (vo && !vo->path[0]) snprintf(vo->path, sizeof vo->path, "Volumes/Example_Puff_0001.vdb"), vo->frames = 24;
+    free(j);
+}
+
 static Entity spawn_actor(Editor* ed, SpawnKind kind, int sub, const float at[3], double now) {
     uint64_t mask = COMP_BIT(COMP_NAME) | COMP_BIT(COMP_TRANSFORM);
     const char* base = "Actor";
@@ -558,10 +580,15 @@ static Entity spawn_actor(Editor* ed, SpawnKind kind, int sub, const float at[3]
     } else if (kind == SPAWN_WORLD_PARTITION) { // (B1) at the origin: only its settings matter
         memset(t->location, 0, sizeof t->location), t->flags = MOBILITY_STATIC;
     } else if (kind == SPAWN_VOLUME) { // (A9.5a) the example puff until a file is chosen
-        if (volume_examples()) content_mark_dirty();
         CVolume* vo = ecs_get(&ed->world, e, COMP_VOLUME);
-        snprintf(vo->path, sizeof vo->path, "Volumes/Example_Puff_0001.vdb");
-        vo->frames = 24;
+        VolExJob* j = volume_examples_present() ? NULL : calloc(1, sizeof *j);
+        if (j) { // (first written on a worker: volex_done gives it its file)
+            j->ed = ed, j->e = e;
+            async_run(TR("Writing the volume's example"), volex_work, volex_done, j, ASYNC_QUIET);
+        } else {
+            snprintf(vo->path, sizeof vo->path, "Volumes/Example_Puff_0001.vdb");
+            vo->frames = 24;
+        }
     } else if (kind == SPAWN_SPLAT) { // (A9.5d) the example bush until a file is chosen
         if (splat_examples()) content_mark_dirty();
         CSplat* sp = ecs_get(&ed->world, e, COMP_SPLAT);
@@ -2226,6 +2253,60 @@ static void content_meshes_cb(void) {
 }
 
 static bool level_open_cb(const char* path) { return g_import_ed && editor_open_level(g_import_ed, path, re_time_seconds()); }
+// (2026-11-24) The Content Browser's Modified and In Use in Level filters
+static bool same_path(const char* a, const char* b) {
+    for (; *a && *b; a++, b++) {
+        char x = *a == '\\' ? '/' : (char)tolower((unsigned char)*a), y = *b == '\\' ? '/' : (char)tolower((unsigned char)*b);
+        if (x != y) return false;
+    }
+    return *a == *b;
+}
+static bool level_unsaved_cb(const char* path) { return g_import_ed && g_import_ed->dirty && same_path(path, g_import_ed->level_path); }
+static int level_used_cb(uint32_t* out, int cap) {
+    Editor* ed = g_import_ed;
+    if (!ed) return 0;
+    World* w = &ed->world;
+    int n = 0;
+#define USE(h) do { if ((h) && n < cap) out[n++] = (h); } while (0)
+    for (uint32_t i = 1; i < w->slot_count && n < cap; i++) {
+        Entity e = ecs_entity_at(w, i);
+        if (e == ENTITY_NONE) continue;
+        const CStaticMesh* sm = ecs_get(w, e, COMP_STATIC_MESH);
+        if (sm) {
+            const char* mv = sm->mesh >= SHAPE_COUNT ? render_mesh_vpath(sm->mesh) : NULL;
+            if (mv && mv[0]) USE(bp_vpath_hash(mv));
+            USE(sm->material);
+        }
+        const CBlueprint* bp = ecs_get(w, e, COMP_BLUEPRINT);
+        if (bp) USE(bp->asset_hash);
+        const CSkeletalMesh* sk = ecs_get(w, e, COMP_SKELETAL_MESH);
+        if (sk) {
+            USE(sk->mesh);
+            USE(sk->anim_class);
+            USE(sk->anim);
+            USE(sk->ik_rig);
+            USE(sk->physics_asset);
+        }
+        const CAudio* au = ecs_get(w, e, COMP_AUDIO);
+        if (au) USE(au->sound);
+        const CAIAgent* ai = ecs_get(w, e, COMP_AI_AGENT);
+        if (ai) USE(ai->asset);
+        const CParticleSystem* ps = ecs_get(w, e, COMP_PARTICLE_SYSTEM);
+        if (ps) USE(ps->asset);
+        const CVehicle* ve = ecs_get(w, e, COMP_VEHICLE);
+        if (ve) USE(ve->asset);
+        const CDecal* dc = ecs_get(w, e, COMP_DECAL);
+        if (dc) USE(dc->material);
+        const CRigidBody* rb = ecs_get(w, e, COMP_RIGID_BODY);
+        if (rb) USE(rb->phys_material);
+        const CDialogueSpeaker* ds = ecs_get(w, e, COMP_DIALOGUE_SPEAKER);
+        if (ds) USE(ds->dialogue);
+        const CPickup* pk = ecs_get(w, e, COMP_PICKUP);
+        if (pk) USE(pk->item);
+    }
+#undef USE
+    return n;
+}
 static void save_all_cb(void) {
     if (g_import_ed) editor_save_all(g_import_ed, re_time_seconds());
 }
@@ -2860,12 +2941,19 @@ static void bake_step(int done, int total, const char* name) {
 }
 
 void editor_open_project_later(Editor* ed, const char* rproject, int tpl) {
+    if (editor_docs_switch_ask(ed, rproject, tpl)) return; // (2026-11-25) unsaved changes: the save prompt first (editor_docs.c)
     snprintf(ed->pending_project, sizeof ed->pending_project, "%s", rproject);
     ed->pending_tpl = tpl;
 }
 
 bool editor_open_project(Editor* ed, const char* rproject, int tpl) {
     if (ed->playing) editor_stop(ed, re_time_seconds());
+    // (2026-11-25, bug-fixer) every asset editor closed before the systems below let go of what they show: bp_shutdown
+    // freed the Blueprints with their windows open on them (a use after free the next frame), the others stayed open on
+    // the old project's assets. Saved first unless the prompt's Don't Save said otherwise (editor_docs.h)
+    if (project_file()[0]) dock_layout_autosave(ed); // (item 9) the project left: its layout with its open editors, before they close
+    editor_docs_finish(ed);
+    edhost_reset(); // (item 9) the Editors window placed again by the next project's first document
     if (!project_load(rproject)) return false;
     online_apply_project(); // Project Settings > Online (Steam starts when set)
     online_init();
@@ -2923,6 +3011,7 @@ bool editor_open_project(Editor* ed, const char* rproject, int tpl) {
     script_init(content_root()); // the scripts (C#, Python, C, Real): compiled into their classes before the level's actors need them
     load_step(0.6f, TR("Loading the meshes..."));
     render_set_content_root(content_root());
+    loc_set_content_root(content_root()); // (2026-11-24) the project's localization (loc.h): its table read again
     render_meshes_reload(ed->vk);
     undo_clear(ed);
     ProjectSettings* ps = project();
@@ -3715,6 +3804,44 @@ static void procgen_scene(Editor* ed, bool facility) {
     ed->dirty = true;
 }
 
+// (2026-11-25, item 19) --scene facility_leak once the facility is built: the camera in its deepest room (far from the
+// entrance's open door) looking at a corner, the rooms' lamps off (REALENGINE_FACILITY_LIGHTS=1 keeps them): inside, only
+// a leak can light anything (the sun's, the sky's through the walls and ceilings)
+static bool g_fl_placed;
+void editor_facility_leak_tick(Editor* ed) {
+    float c[3], s;
+    if (g_fl_placed || !procgen_facility_deepest(c, &s)) return;
+    World* w = &ed->world;
+    int off = 0;
+    bool entrance = getenv("REALENGINE_FACILITY_ENTRANCE") != NULL; // (the entrance's room, its lamps on: the GI's blotches)
+    if (entrance) {
+        c[0] = c[1] = 0.0f, c[2] = 0.0f;
+        for (uint32_t i = 1; i < w->slot_count; i++) { // (its room's middle: the facility's actor)
+            Entity e = ecs_entity_at(w, i);
+            const CTransform* t = e && ecs_get(w, e, COMP_PROC_WORLD) ? ecs_get(w, e, COMP_TRANSFORM) : NULL;
+            if (t) memcpy(c, t->location, sizeof c);
+        }
+    }
+    if (!getenv("REALENGINE_FACILITY_LIGHTS") && !entrance)
+        for (uint32_t i = 1; i < w->slot_count; i++) {
+            Entity e = ecs_entity_at(w, i);
+            CLight* l = e ? ecs_get(w, e, COMP_LIGHT) : NULL;
+            const CAttach* at = l ? ecs_get(w, e, COMP_ATTACH) : NULL;
+            if (!at || at->kind != ATTACH_PROCGEN) continue;
+            l->intensity = 0.0f, off++;
+            ecs_touch(w, e);
+        }
+    ed->cam.pos[0] = c[0] - s * 0.38f, ed->cam.pos[1] = c[1] - s * 0.38f, ed->cam.pos[2] = c[2] + 180.0f;
+    ed->cam.yaw = 45.0f, ed->cam.pitch = 14.0f;
+    g_fl_placed = true;
+    printf("[RealEngine] facility_leak: the camera in the deepest room (%.0f, %.0f), %d room lamps off\n", c[0], c[1], off);
+    if (getenv("REALENGINE_FACILITY_BAKE")) { // (the user's Build Lighting over the generated facility)
+        char why[200] = "";
+        bool ok = gi_bake_start(ed->vk, w, BAKE_PRODUCTION, why, sizeof why);
+        printf("[RealEngine] facility_leak: Build Lighting %s%s\n", ok ? "started" : "refused: ", ok ? "" : why);
+    }
+}
+
 void editor_procgen_tick(Editor* ed, double dt) {
     if (!ed->playing || !ecs_alive(&ed->world, g_pg_player)) return;
     g_pg_t += dt;
@@ -3889,7 +4016,16 @@ bool editor_wp_check(Editor* ed) {
     if (s->records < 6000 || s->cells < 800 || s->records_in > s->records / 10 || s->loads < (fast ? 30u : 200u) || s->unloads < (fast ? 30u : 200u))
         printf("[RealEngine] FAIL: World Partition: the grid didn't stream\n"), ok = false;
     if (s->missing_frames) printf("[RealEngine] FAIL: World Partition: cells in sight still loading in %u frames\n", s->missing_frames), ok = false;
-    if (fast && over * 500 > g_wp_ndt) printf("[RealEngine] FAIL: World Partition: at 250 km/h over 0.2 %% of the frames hitched\n"), ok = false;
+    // (2026-11-25, bug-fixer: unstable here and in the base, 1 of 2) at 250 km/h: the streaming's own worst frame within
+    // 2 ms, and the hitches a player sees (over twice the median AND over a 60 Hz frame) at most 0.2 %. Twice the median
+    // alone counted any frame over ~6.5 ms at ~300 fps: the GPU's other users (0.37-0.70 % with the streaming's worst
+    // at 0.5 ms; 0.11-0.25 % with and without the prediction when it was made: noise)
+    uint32_t seen = 0;
+    for (uint32_t i = 0; i < g_wp_ndt; i++) seen += g_wp_dt[i] > 2.0f * med && g_wp_dt[i] > 1.0f / 60.0f;
+    if (fast) printf("[RealEngine] World Partition: at 250 km/h %u frames over twice the median and a 60 Hz frame (%.2f %%), streaming's worst %.2f ms\n",
+                     seen, g_wp_ndt ? 100.0f * (float)seen / (float)g_wp_ndt : 0.0f, s->ms_peak);
+    if (fast && (seen * 500 > g_wp_ndt || s->ms_peak > 2.0))
+        printf("[RealEngine] FAIL: World Partition: at 250 km/h over 0.2 %% of the frames hitched (or the streaming over 2 ms)\n"), ok = false;
     if (!s->proxies_shown || !s->regions_shown || s->regions < 16) printf("[RealEngine] FAIL: World Partition: no HLOD shown\n"), ok = false;
     if (town || (!event && !fast)) printf("[RealEngine] FAIL: World Partition: the Data Layers\n"), ok = false;
     if (!pt || pt->location[0] < (fast ? -140000.0f : 180000.0f)) printf("[RealEngine] FAIL: World Partition: the player didn't cross\n"), ok = false;
@@ -6150,6 +6286,22 @@ void editor_test_scene(Editor* ed, const char* name) {
         procgen_scene(ed, name[0] == 'f');
         return;
     }
+    if (!strcmp(name, "facility_leak")) { // (2026-11-25, item 19: the user's video) the facility, his Post Process, inside
+        procgen_scene(ed, true);
+        g_fl_placed = false;
+        ed->game_view = true; // (no grid or icons over the measure: the editor's grid lines were its brightest points)
+        Entity pp = spawn_actor(ed, SPAWN_POST, 0, (float[]){ 0, 0, 0 }, 0);
+        CPostProcess* p = pp ? ecs_get(&ed->world, pp, COMP_POST_PROCESS) : NULL;
+        if (p) { // (Infinite Extent, his EV100 range: the interior can't be brightened past EV 8.975)
+            p->flags |= PPV_UNBOUND;
+            p->s.v[PP_EXPOSURE_MIN_EV] = 8.975f, p->s.v[PP_EXPOSURE_MAX_EV] = 13.575f;
+            p->overrides |= 1u << PP_EXPOSURE_MIN_EV | 1u << PP_EXPOSURE_MAX_EV;
+        }
+        ed->selected = ENTITY_NONE;
+        ed->cam.pos[0] = -450.0f, ed->cam.pos[1] = -450.0f, ed->cam.pos[2] = 200.0f; // (the entrance room, toward its far corner)
+        ed->cam.yaw = 45.0f, ed->cam.pitch = 8.0f;
+        return;
+    }
     if (!strncmp(name, "particles", 9)) { // the particles' scene (notas-dev/particulas.md): the galaxy's 5 M and the effects
         particles_scene(ed, name);
         return;
@@ -6809,7 +6961,7 @@ static void clear_redo(Editor* ed) {
 
 void editor_undo_push(Editor* ed) {
     editor_construct_restore(ed); // (the Construction Scripts' work is shown, never kept: sugestÃ£o #64)
-    if (ed->playing) return; // the play world is thrown away at Stop
+    if (ed->playing || ed->undo_hold) return; // the play world is thrown away at Stop; (an MCP batch: its own step)
     struct UndoStep s = { 0 };
     if (!step_take(ed, &s)) return;
     push_step(ed->undo, &ed->undo_count, &s);
@@ -6820,6 +6972,17 @@ void editor_undo_push(Editor* ed) {
 // (2026-11-23) The last step taken off without applying it: a gizmo drag cancelled (its actors already back)
 void editor_undo_drop(Editor* ed) {
     if (ed->undo_count > 0) step_free(&ed->undo[--ed->undo_count]);
+}
+
+// (2026-11-24) An MCP batch that failed or was a dry run: the world back as its step (taken before it) had it, the step
+// gone and nothing to redo (it never happened for the user)
+void editor_undo_revert(Editor* ed) {
+    editor_construct_forget();
+    if (ed->playing || !ed->undo_count) return;
+    struct UndoStep* s = &ed->undo[--ed->undo_count];
+    step_apply(ed, s);
+    step_free(s);
+    editor_sync_selection(ed);
 }
 
 void editor_undo_clear(Editor* ed) { undo_clear(ed); }
@@ -7037,7 +7200,7 @@ bool editor_init(Editor* ed, GLFWwindow* window, VkCtx* vk) {
         static const char* const snd[] = { "wav", "mp3", "ogg", "flac", "m4a", "aac", "wma", "opus" };
         for (size_t i = 0; i < sizeof snd / sizeof snd[0]; i++) content_set_importer(snd[i], audio_import_cb);
     }
-    content_set_level_hooks(&(ContentLevelHooks){ level_open_cb, level_create_cb, save_all_cb });
+    content_set_level_hooks(&(ContentLevelHooks){ level_open_cb, level_create_cb, save_all_cb, level_unsaved_cb, level_used_cb });
     content_set_editor_hooks(&(ContentEditorHooks){ content_actor_cb, content_meshes_cb }); // (Q6: Create > Cloth, Vehicle, LODs)
     editor_load_prefs(ed);
     ed->cam.fov_deg = ed->cam_fov; // (Editor Preferences > Viewport)
@@ -7076,6 +7239,8 @@ void editor_save_prefs(Editor* ed) {
     async_ui_write_prefs(f); // where the task cards were moved, thin or not
     mcp_write_prefs(f);      // (2026-11-24) the MCP server: on, its port
     asset_picker_write_prefs(f); // (Q6) the asset picker's view and preview size
+    content_write_prefs(f); // (2026-11-24) the Content Browser's filters, favorites and recent assets
+    loc_write_prefs(f);     // (2026-11-24) the localization's translation provider (the user's key: here, never in the project)
     assistant_ui_write_prefs(f); // the Assistant's recipes: as nodes or as code (which language)
     look_write_prefs(f); // (Q26) the look seen (the new default offered once), the target platform
     fclose(f);
@@ -7083,8 +7248,8 @@ void editor_save_prefs(Editor* ed) {
 
 // Before the window's first frame: the language (the system's when there is no file), VSync and the scalability
 void editor_load_prefs(Editor* ed) {
-    i18n_set_language(re_system_language_portuguese() ? LANG_PT_BR : LANG_EN);
-    char path[600], line[256];
+    i18n_set_language(i18n_system_language()); // (2026-11-25, item 12: Spanish too)
+    char path[600], line[768]; // (a favorite's path: up to 512)
     FILE* f = prefs_path(path, sizeof path) ? re_fopen(path, "r") : NULL;
     if (!f) return;
     while (fgets(line, sizeof line, f)) {
@@ -7131,7 +7296,7 @@ void editor_load_prefs(Editor* ed) {
         else if (!strcmp(line, "gizmo_only_loc")) ed->gizmo_only_loc = atoi(v) != 0;
         else if (!strcmp(line, "snap_rotate")) ed->snap_rotate_step = fmaxf((float)atof(v), 0.01f);
         else if (!strcmp(line, "snap_scale")) ed->snap_scale_step = fmaxf((float)atof(v), 0.001f);
-        else if (!async_ui_read_pref(line, v) && !asset_picker_read_pref(line, v) && !look_read_pref(line, v) && !mcp_read_pref(line, v)) assistant_ui_read_pref(line, v);
+        else if (!async_ui_read_pref(line, v) && !asset_picker_read_pref(line, v) && !content_read_pref(line, v) && !look_read_pref(line, v) && !mcp_read_pref(line, v) && !loc_read_pref(line, v)) assistant_ui_read_pref(line, v);
     }
     fclose(f);
     look_after_prefs(ed, true, g_editor_prefs_readonly); // (Q26) an editor.ini from before 0.44: the new look, once
@@ -7174,10 +7339,17 @@ static Editor* g_gus_ed;
 static int g_pie_scalability = -1; // the editor's before the Play's options changed it (-1: unchanged)
 static bool g_pie_saved_set;        // (the editor.ini keeps the editor's own while the Play's options change it)
 double g_pie_tick_ms;              // the Play's game step, ms (the pause's measure: notas-dev/pausa-opcoes.md)
+// (2026-11-25, bug-fixer) the preset the Play's settings last applied (its saved one when Play starts, never put on the
+// view then): Apply Settings with the preset untouched left the view as it is. Before, the saved Epic against the view's
+// Cinematic made every Apply switch it (its MSAA pipelines made again: a frame of 403 ms in the UI sweep)
+static int g_pie_gus_scalability = -1;
 static void pie_apply_video(const GameUserSettings* s, bool display) {
     (void)display;
     Editor* ed = g_gus_ed;
-    if (!ed || !ed->playing || s->scalability == ed->scalability) return;
+    if (!ed || !ed->playing) return;
+    bool changed = s->scalability != g_pie_gus_scalability;
+    g_pie_gus_scalability = s->scalability;
+    if (!changed || s->scalability == ed->scalability) return;
     if (g_pie_scalability < 0) {
         g_pie_scalability = ed->scalability;
         if (ed->saved_scalability < 0) ed->saved_scalability = ed->scalability, g_pie_saved_set = true; // (never written to editor.ini)
@@ -7196,6 +7368,7 @@ static void pie_settings_begin(Editor* ed) {
     gus_load();
     gus_apply(false);
     g_gus_ed = ed;
+    g_pie_gus_scalability = gus_applied()->scalability; // (the saved one: not the view's until the options change it)
     gus_set_host(&(GusHost){ pie_apply_video, false });
     if (project()->pause_menu) pause_menu_assets(); // (WBP_PauseMenu / WBP_Options in Content/UI when missing)
     if (project()->pause_menu) gus_warm(); // (Q22: the Options' Upscaler choices asked now, not in the frame that draws them)
@@ -7222,7 +7395,7 @@ void editor_play(Editor* ed, double now) {
     editor_construct_restore(ed); // (the Construction Scripts' work is shown, never kept: sugestÃ£o #64)
     seq_editor_restore(ed); // (the Sequencer's preview is put back: play starts from the level as saved)
     if (ed->playing) return;
-    bp_editor_save_all(ed); // Unreal compiles what changed before playing
+    TRACE("PIE: save and compile Blueprints", bp_editor_save_all(ed)); // Unreal compiles what changed before playing
     double t0 = re_time_seconds();
     if (!ecs_snapshot_save(&ed->world, &ed->snapshot)) {
         editor_status(ed, now, TR("Play failed: no memory for the world's snapshot."));
@@ -7237,7 +7410,7 @@ void editor_play(Editor* ed, double now) {
     ed->playing = true;
     ed->paused = false;
     ed->play_time = 0.0;
-    audio_world_begin_play(&ed->world); // the auto-activated Audio Components start
+    TRACE("PIE: audio", audio_world_begin_play(&ed->world)); // the auto-activated Audio Components start
     ed->renaming = ENTITY_NONE;
     ed->flying = false;
     ed->gizmo_active = 0;
@@ -7254,22 +7427,22 @@ void editor_play(Editor* ed, double now) {
         if (dot) *dot = 0;
         level_stream_init(content_root(), lname);
         bp_set_level_hooks(&(BpLevelHooks){ level_stream_request, level_stream_done, level_open_request, level_stream_persistent });
-        level_bp_spawn(&ed->world, ed->level_path);
-        levels_play_begin(ed); // the sublevels not Initially Loaded out, the names known to Load Stream Level
+        TRACE("PIE: Level Blueprint", level_bp_spawn(&ed->world, ed->level_path));
+        TRACE("PIE: sublevels", levels_play_begin(ed)); // the sublevels not Initially Loaded out, the names known to Load Stream Level
     }
-    wp_begin(&ed->world, ed->level_path, content_root(), ed->pie_cam.pos); // (B1: what is out of range leaves before its BeginPlay)
-    pie_settings_begin(ed);
-    bp_begin_play(&ed->world); // the actors' Blueprints: instances, then BeginPlay
-    physics_begin_play(&ed->world); // the rigid bodies
-    spline_begin_play(&ed->world); // (Q14) the cables from their rest
-    vehicle_begin_play(&ed->world); // the vehicles, their rails and waters
-    procgen_begin_play(&ed->world); // the procedural world made again as the play's
-    pcg_begin_play(&ed->world); // (Q15) the PCG components: kept as the editor made them, On Demand ones cleared
-    anim_begin_play(&ed->world); // the skeletal meshes' instances
-    ai_begin_play(&ed->world); // the AI agents and the navigation grid
-    crowd_begin_play(&ed->world); // the crowds (on that grid)
-    traffic_begin_play(&ed->world); // (Q27.2) the roads' cars
-    project_begin_play(&ed->world); // the Game Mode's classes and the Default Pawn (Project Settings)
+    TRACE("PIE: World Partition", wp_begin(&ed->world, ed->level_path, content_root(), ed->pie_cam.pos)); // (B1: what is out of range leaves before its BeginPlay)
+    TRACE("PIE: game settings, pause menu", pie_settings_begin(ed));
+    TRACE("PIE: BeginPlay", bp_begin_play(&ed->world)); // the actors' Blueprints: instances, then BeginPlay
+    TRACE("PIE: physics", physics_begin_play(&ed->world)); // the rigid bodies
+    TRACE("PIE: splines", spline_begin_play(&ed->world)); // (Q14) the cables from their rest
+    TRACE("PIE: vehicles", vehicle_begin_play(&ed->world)); // the vehicles, their rails and waters
+    TRACE("PIE: procedural world", procgen_begin_play(&ed->world)); // the procedural world made again as the play's
+    TRACE("PIE: PCG", pcg_begin_play(&ed->world)); // (Q15) the PCG components: kept as the editor made them, On Demand ones cleared
+    TRACE("PIE: animation", anim_begin_play(&ed->world)); // the skeletal meshes' instances
+    TRACE("PIE: AI and navigation", ai_begin_play(&ed->world)); // the AI agents and the navigation grid
+    TRACE("PIE: crowds", crowd_begin_play(&ed->world)); // the crowds (on that grid)
+    TRACE("PIE: traffic", traffic_begin_play(&ed->world)); // (Q27.2) the roads' cars
+    TRACE("PIE: Game Mode and pawn", project_begin_play(&ed->world)); // the Game Mode's classes and the Default Pawn (Project Settings)
     if (bp_stats()->instances)
         editor_status(ed, now, TR("Play In Editor: %u Blueprint actors (BeginPlay %.3f ms), snapshot %.3f ms."), bp_stats()->instances,
                       bp_stats()->ms_last_frame, ed->snapshot_ms);
@@ -7437,6 +7610,7 @@ void editor_stop(Editor* ed, double now) {
     editor_construct_forget(); // (another world: the Construction Scripts run on it anew)
     ed->simulating = false;
     if (!ed->playing) return;
+    if (loc_active()) loc_switch(""); // (2026-11-24) the game's culture set in Play: back to the native (the classes' Text too)
     pie_multi_stop(); // (B13: the other players' windows close with the play)
     wp_end(&ed->world); // (B1: the kept actors dropped; the snapshot brings the level back whole)
     online_end_play(&ed->world); // (the session closes with Play)
@@ -7595,6 +7769,18 @@ static void duplicate_selected(Editor* ed, double now, float offset) {
     }
     free(src);
     editor_status(ed, now, n > 1 ? TR("Duplicated %u actors.") : TR("Duplicated."), n);
+}
+
+// (2026-11-25, item 18) One copy of src (the editor's plugins: Scatter, Array): its name made unique, its own save key and
+// Blueprint components, as Ctrl+D's; no undo step, the selection untouched (the caller does both)
+Entity editor_duplicate_actor(Editor* ed, Entity src) {
+    Entity c = ecs_clone(&ed->world, src);
+    if (c == ENTITY_NONE) return c;
+    fresh_name(ed, c);
+    CSaveable* sv = ecs_get(&ed->world, c, COMP_SAVEABLE);
+    if (sv && sv->id) sv->id = progress_new_id();
+    if (ecs_get(&ed->world, c, COMP_BLUEPRINT)) bp_components_build(&ed->world, c, NULL);
+    return c;
 }
 
 // Ctrl+C: the selected actors' components into the clipboard (their mask, then each component's bytes)
@@ -7871,7 +8057,7 @@ static void pack_entry(void* user, const ReDirEntry* e) {
                                         // the sounds (audio.h): Sound Waves and the audio assets
                                         ".rsound", ".rscue", ".rsatt", ".rsclass", ".rsmix", ".rsconc", ".rsubmix",
                                         // the scripts (script.h): compiled when the game starts
-                                        ".real", ".cs", ".py", ".c", ".rdlg", ".rquest", ".rphysmat", ".rshake", ".rpcg" }; // (.rdlg: Dialogues; .rquest: Quests; .rland: the sculpted heights; .rfol: the painted foliage; .rseq: Level Sequences)
+                                        ".rvs", ".real", ".cs", ".py", ".c", ".cpp", ".rcpp", ".rdlg", ".rquest", ".rphysmat", ".rshake", ".rpcg", ".rloc", ".rlocres" }; // (.rdlg: Dialogues; .rquest: Quests; .rland: the sculpted heights; .rfol: the painted foliage; .rseq: Level Sequences)
     const char* dot = strrchr(e->name, '.');
     bool want = false;
     for (size_t i = 0; dot && i < sizeof exts / sizeof exts[0]; i++) want |= !_stricmp(dot, exts[i]);
@@ -8005,6 +8191,13 @@ static PackJob* package_prepare(Editor* ed, const char* out, bool show, double n
     for (uint32_t i = 0; i < bp_asset_count(); i++) {
         const BpAsset* a = bp_asset_at(i);
         if (strncmp(a->path, croot, crl)) continue;
+        // (2026-11-25, bug-fixer) one whose file is gone (deleted in the Content Browser, to the trash, or outside the
+        // editor) is no longer the project's: left out. It stays known in memory and failed the whole package ("could not
+        // copy ..."), also the blueprints test after the network tests left a class its setup deleted
+        if (!file_size(a->path)) {
+            printf("[RealEngine] Package: %s left out (its file was deleted)\n", a->path + crl);
+            continue;
+        }
         snprintf(dst, sizeof dst, "%s%s", content, a->path + crl);
         pk_add(j, a->path, dst, PK_REQUIRED);
     }
@@ -8439,12 +8632,51 @@ void editor_save_all(Editor* ed, double now) {
 }
 
 // Unreal's Open Asset (Ctrl+P): type part of a name, the assets of the project that match, Enter or a click opens one
+// (2026-11-25, bug-fixer) Open Asset's list: the Content walked once on a worker when the window opens (a walk of the
+// disk in the frame, again at each key typed: a frame of 1.0 s in the UI sweep), then filtered in memory as one types
+#define OA_MAX 4096
+static struct {
+    char (*all)[512];
+    int n;
+    volatile int32_t ready, running;
+} OA;
+static void oa_work(AsyncTask* t, void* arg) {
+    (void)t, (void)arg;
+    OA.n = content_search("", OA.all, OA_MAX);
+}
+static void oa_done(AsyncTask* t, void* arg, bool ok) {
+    (void)t, (void)arg;
+    if (!ok) OA.n = 0;
+    re_atomic_store(&OA.ready, 1), re_atomic_store(&OA.running, 0);
+}
+static int oa_filter(const char* find, char (*out)[512], int cap) { // (the name holds the text, any case: as content_search)
+    char b[64];
+    snprintf(b, sizeof b, "%s", find);
+    for (char* p = b; *p; p++) *p = (char)tolower((unsigned char)*p);
+    int n = 0;
+    for (int i = 0; i < OA.n && n < cap; i++) {
+        const char* nm = strrchr(OA.all[i], '/');
+        char a[256];
+        snprintf(a, sizeof a, "%s", nm ? nm + 1 : OA.all[i]);
+        for (char* p = a; *p; p++) *p = (char)tolower((unsigned char)*p);
+        if (!b[0] || strstr(a, b)) snprintf(out[n++], 512, "%s", OA.all[i]);
+    }
+    return n;
+}
+
 static void open_asset_dialog(Editor* ed) {
     if (!ed->show_open_asset) return;
     static char find[64];
     static char found[200][512];
     static int n = -1;
-    if (!igIsPopupOpen_Str("###open_asset", 0)) igOpenPopup_Str("###open_asset", 0), find[0] = 0, n = -1;
+    if (!igIsPopupOpen_Str("###open_asset", 0)) {
+        igOpenPopup_Str("###open_asset", 0), find[0] = 0, n = -1;
+        if (!OA.all) OA.all = calloc(OA_MAX, sizeof *OA.all);
+        if (OA.all && !re_atomic_load(&OA.running)) { // (walked again each time it opens: new assets in)
+            re_atomic_store(&OA.ready, 0), re_atomic_store(&OA.running, 1);
+            async_run(TR("Listing the assets"), oa_work, oa_done, NULL, ASYNC_QUIET | ASYNC_HIDDEN);
+        }
+    }
     ImGuiViewport* vp = igGetMainViewport();
     igSetNextWindowPos((ImVec2){ vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.22f }, ImGuiCond_Always, (ImVec2){ 0.5f, 0.0f });
     igSetNextWindowSize((ImVec2){ igGetFontSize() * 34, igGetFontSize() * 26 }, ImGuiCond_Always);
@@ -8454,7 +8686,9 @@ static void open_asset_dialog(Editor* ed) {
     if (igIsWindowAppearing()) igSetKeyboardFocusHere(0);
     igSetNextItemWidth(-1);
     bool typed = igInputTextWithHint("##find", TR("Search Assets"), find, sizeof find, 0, NULL, NULL);
-    if (typed || n < 0) n = content_search(find, found, 200);
+    bool listed = OA.all && re_atomic_load(&OA.ready);
+    if (listed && (typed || n < 0)) n = oa_filter(find, found, 200);
+    else if (!OA.all && (typed || n < 0)) n = content_search(find, found, 200); // (no memory for the list: as before)
     int open = -1;
     if (igIsKeyPressed_Bool(ImGuiKey_Enter, false) && n > 0) open = 0;
     igBeginChild_Str("##found", (ImVec2){ 0, 0 }, ImGuiChildFlags_Borders, 0);
@@ -8465,7 +8699,8 @@ static void open_asset_dialog(Editor* ed) {
         if (igSelectable_Bool(row, false, 0, (ImVec2){ 0, 0 })) open = i;
         igSetItemTooltip("%s", found[i]);
     }
-    if (!n) igTextDisabled("%s", TR("No asset by that name."));
+    if (n < 0) igTextDisabled("%s", TR("Searching..."));
+    else if (!n) igTextDisabled("%s", TR("No asset by that name."));
     igEndChild();
     if (open >= 0) content_open_asset(found[open]), ed->show_open_asset = false, igCloseCurrentPopup();
     if (igIsKeyPressed_Bool(ImGuiKey_Escape, false)) ed->show_open_asset = false, igCloseCurrentPopup();
@@ -8680,8 +8915,10 @@ static void main_menu_items(Editor* ed, double now) {
         if (ui_menu_item(ICON_TIMER, TR("Measure Frame Time (3 s)"), NULL, false, ed->bench_request <= 0.0)) ed->bench_request = 3.0;
         if (ui_menu_item(ICON_FUNCTION, TR("Editor Utilities"), NULL, false, true)) editor_utilities_open();
         ui_menu_item_ptr(ICON_BRAIN, TR("AI Connection (MCP)"), NULL, mcp_ui_show_flag(), true); // (2026-11-24: mcp.h)
+        ui_menu_item_ptr(ICON_LANGUAGE, TR("Localization Dashboard"), NULL, loc_ui_show_flag(), true); // (2026-11-24: loc.h, the game's languages)
         if (ui_menu_item(ICON_STATS, TR("Trace (Insights)"), NULL, g_show_trace, true)) g_show_trace = !g_show_trace; // (B14b)
-        if (plugin_menu_count() && ui_begin_menu(ICON_COMPONENT, TR("Plugins"), true)) { // (B14c) the plugins' own items
+        if ((plugin_menu_count() || kit_menu_count()) && ui_begin_menu(ICON_COMPONENT, TR("Plugins"), true)) { // (B14c) the plugins' own items
+            kit_menu(ed); // (2026-11-25, item 18) the built-in plugins' windows, by category
             for (uint32_t i = 0; i < plugin_menu_count(); i++)
                 if (ui_menu_item(ICON_PLUGIN, plugin_menu_label(i), NULL, false, true)) plugin_menu_run(i);
             igEndMenu();
@@ -8768,7 +9005,7 @@ static void main_menu_items(Editor* ed, double now) {
             if (ui_menu_item(ICON_EYE, TR("Show All"), "Ctrl+H", false, true)) hide_selected(ed, false);
             igSeparator();
             for (int on = 0; on < 2; on++) // the selection's icons in the viewport (Details > Show Icon, each actor)
-                if (ui_menu_item(on ? ICON_EYE : ICON_EYE_CLOSED, TR(on ? "Show Icons of Selected" : "Hide Icons of Selected"), NULL, false, has_sel)) {
+                if (ui_menu_item(on ? ICON_EYE : ICON_EYE_CLOSED, on ? TR("Show Icons of Selected") : TR("Hide Icons of Selected"), NULL, false, has_sel)) {
                     editor_undo_push(ed);
                     for (uint32_t s = 0; s < ed->nsel; s++) {
                         CTransform* st = ecs_get(&ed->world, ed->sel[s], COMP_TRANSFORM);
@@ -9826,6 +10063,15 @@ static bool vec3_row(const char* label, float v[3], float speed, const char* fmt
     return changed;
 }
 
+// (2026-11-25, item 21) a label already in the editor's language ("Point 3" made from TR("Point")): not looked up again
+static void label_cell_text(const char* shown) {
+    igTableNextRow(0, 0);
+    igTableNextColumn();
+    igAlignTextToFramePadding();
+    igTextUnformatted(shown, NULL);
+    igTableNextColumn();
+    igSetNextItemWidth(-1);
+}
 static void label_cell(const char* label) {
     igTableNextRow(0, 0);
     igTableNextColumn();
@@ -9972,7 +10218,7 @@ bool editor_camera_post_ui(CCamera* c) {
         igSameLine(0, 4);
         igBeginDisabled(!on);
         float span = fi->hi - fi->lo;
-        ch |= igDragFloat(PL(TR(fi->name)), &c->post[k], span / 400.0f, fi->lo, fi->hi, f == PP_TEMPERATURE ? "%.0f K" : f == PP_DOF_FOCAL_DISTANCE ? "%.0f cm" : "%.3f", 0);
+        ch |= igDragFloat(PL(TR(fi->name)), &c->post[k], span / 400.0f, fi->lo, fi->hi, f == PP_TEMPERATURE ? TR("%.0f K") : f == PP_DOF_FOCAL_DISTANCE ? "%.0f cm" : "%.3f", 0);
         igEndDisabled();
         igPopID();
     }
@@ -10128,7 +10374,7 @@ static bool begin_section(const char* title, const char* id) {
     if (!igCollapsingHeader_TreeNodeFlags(lab, ImGuiTreeNodeFlags_DefaultOpen)) return false;
     if (!igBeginTable(id, 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) return false;
     igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-    igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+    igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
     return true;
 }
 
@@ -10326,7 +10572,7 @@ static bool foliage_details(Editor* ed, Entity e, CFoliage* c) {
     if (c->ntypes > FOLIAGE_TYPES) c->ntypes = FOLIAGE_TYPES;
     if (igBeginTable("fol_imp_t", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) { // (Q21)
         igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-        igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+        igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
         ch |= row_check("Impostors", &c->impostors); // (far away the plants drawn by their octahedral impostor: farview.h)
         igEndTable();
     }
@@ -10343,7 +10589,7 @@ static bool foliage_details(Editor* ed, Entity e, CFoliage* c) {
         if (igTreeNodeEx_Str(head, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
             if (igBeginTable("ft_t", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) {
                 igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-                igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+                igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
                 label_cell("Mesh");
                 if (igBeginCombo("##fmesh", render_mesh_name(render_mesh_slot(t->mesh)), 0)) {
                     for (uint32_t s = 0; s < render_mesh_count(); s++)
@@ -10398,7 +10644,7 @@ static bool foliage_details(Editor* ed, Entity e, CFoliage* c) {
     igSeparatorText(TR("Brush"));
     if (igBeginTable("fol_brush", 2, ImGuiTableFlags_BordersInnerV, (ImVec2){ 0, 0 }, 0)) {
         igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-        igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+        igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
         label_cell("Tool");
         int tool = ed->fol_erase ? 1 : 0;
         const char* tn[2] = { TR("Paint"), TR("Erase") };
@@ -10484,7 +10730,7 @@ static void mode_panel(Editor* ed, double now) {
     }
     if (igBeginTable("land_brush", 2, ImGuiTableFlags_BordersInnerV, (ImVec2){ 0, 0 }, 0)) {
         igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-        igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+        igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
         if (ed->land_radius <= 0.0f) ed->land_radius = 800.0f, ed->land_strength = 600.0f;
         row_float("Brush Radius", &ed->land_radius, 5.0f, 50.0f, 1e5f, "%.0f cm");
         row_float("Brush Strength", &ed->land_strength, 5.0f, 1.0f, 1e5f, "%.0f cm/s");
@@ -11179,8 +11425,8 @@ static void details(Editor* ed) {
             const BpAsset* cur = *cls ? bp_find_hash(*cls) : NULL;
             igPushID_Int(k + 9100);
             igSetNextItemWidth(-1);
-            if (igBeginCombo("##pgcls", cur ? cur->name : TR(k ? "(stone ruins)" : "(Mannequin with BT_Chase)"), 0)) {
-                if (igSelectable_Bool(TR(k ? "(stone ruins)" : "(Mannequin with BT_Chase)"), !cur, 0, (ImVec2){ 0, 0 })) *cls = 0, g_changed = true;
+            if (igBeginCombo("##pgcls", cur ? cur->name : (k ? TR("(stone ruins)") : TR("(Mannequin with BT_Chase)")), 0)) {
+                if (igSelectable_Bool((k ? TR("(stone ruins)") : TR("(Mannequin with BT_Chase)")), !cur, 0, (ImVec2){ 0, 0 })) *cls = 0, g_changed = true;
                 for (uint32_t i = 0; i < bp_asset_count(); i++) {
                     BpAsset* a = bp_asset_at(i);
                     if (a->kind == BPA_CLASS && igSelectable_Bool(a->name, a == cur, 0, (ImVec2){ 0, 0 })) *cls = a->hash, g_changed = true;
@@ -11589,9 +11835,9 @@ static void details(Editor* ed) {
                 if (row_float("Tension Rise", &rise, 0.01f, 0.01f, 20.0f, "%.2f /s")) ppv->tension_rise = rise, g_changed = true;
                 if (row_float("Tension Fall", &fall, 0.01f, 0.01f, 20.0f, "%.2f /s")) ppv->tension_fall = fall, g_changed = true;
                 label_cell("Tension Sound Class");
-                g_changed |= igInputTextWithHint("##tsc", "SC_Ambience", ppv->tension_sound_class, sizeof ppv->tension_sound_class, 0, NULL, NULL);
+                g_changed |= igInputTextWithHint("##tsc", "SC_Ambience", ppv->tension_sound_class, sizeof ppv->tension_sound_class, 0, NULL, NULL); // i18n: none (an asset name)
                 label_cell("Tension Parameter");
-                g_changed |= igInputTextWithHint("##tpar", "Tension", ppv->tension_param, sizeof ppv->tension_param, 0, NULL, NULL);
+                g_changed |= igInputTextWithHint("##tpar", "Tension", ppv->tension_param, sizeof ppv->tension_param, 0, NULL, NULL); // i18n: none (a parameter name)
             }
             igEndTable();
         }
@@ -11750,7 +11996,7 @@ static void details(Editor* ed) {
         if (igCollapsingHeader_TreeNodeFlags(lab, ImGuiTreeNodeFlags_DefaultOpen) &&
             igBeginTable("sec_shape_t", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) {
             igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
             if (col->shape == COLLISION_BOX) g_changed |= vec3_row("Box Extent", col->extent, 1.0f, "%.0f cm", 50.0f);
             else g_changed |= row_float(col->shape == COLLISION_SPHERE ? "Sphere Radius" : "Capsule Radius", &col->extent[0], 1.0f, 1.0f, 1e5f, "%.0f cm");
             if (col->shape == COLLISION_CAPSULE) g_changed |= row_float("Capsule Half Height", &col->extent[1], 1.0f, 1.0f, 1e5f, "%.0f cm");
@@ -11767,7 +12013,7 @@ static void details(Editor* ed) {
         if (igCollapsingHeader_BoolPtr(lab, &keep, ImGuiTreeNodeFlags_DefaultOpen) &&
             igBeginTable("sec_rot", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) {
             igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
             g_changed |= vec3_row("Rotation Rate", r->rate, 1.0f, "%.1f\xc2\xb0/s", 0.0f);
             igEndTable();
         }
@@ -11785,7 +12031,7 @@ static void details(Editor* ed) {
         if (igCollapsingHeader_BoolPtr(lab, &keep, ImGuiTreeNodeFlags_DefaultOpen) &&
             igBeginTable("sec_proto_t", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) {
             igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
             g_changed |= proto_details(prt);
             if (proto_spline_kind(prt->kind)) { // (2026-11-10) the shape along a spline, as a river
                 label_cell("Spline");
@@ -11823,7 +12069,7 @@ static void details(Editor* ed) {
         if (igCollapsingHeader_BoolPtr(lab, &keep, ImGuiTreeNodeFlags_DefaultOpen) &&
             igBeginTable("sec_land_t", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) {
             igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
             g_changed |= landscape_details(ed, e, lsc);
             igEndTable();
             const LandStats* ls = landscape_stats();
@@ -11859,7 +12105,7 @@ static void details(Editor* ed) {
         if (igCollapsingHeader_BoolPtr(lab, &keep, ImGuiTreeNodeFlags_DefaultOpen) &&
             igBeginTable("sec_crowd_t", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) {
             igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
             g_changed |= crowd_details(crd);
             igEndTable();
             const CrowdStats* cs = crowd_stats();
@@ -12019,9 +12265,9 @@ static void details(Editor* ed) {
             igSetNextItemWidth(igGetContentRegionAvail().x * 0.3f);
             if (igDragFloat("##pw", &riv->width[i], 2.0f, 10.0f, 100000.0f, "W %.0f", 0)) g_changed = true;
             igSameLine(0, 4), igSetNextItemWidth(igGetContentRegionAvail().x * 0.45f);
-            if (igDragFloat("##pd", &riv->depth[i], 1.0f, 1.0f, 10000.0f, "D %.0f", 0)) g_changed = true;
+            if (igDragFloat("##pd", &riv->depth[i], 1.0f, 1.0f, 10000.0f, TR("D %.0f"), 0)) g_changed = true;
             igSameLine(0, 4), igSetNextItemWidth(igGetContentRegionAvail().x * 0.75f);
-            if (igDragFloat("##ps", &riv->speed[i], 1.0f, 0.0f, 5000.0f, "V %.0f", 0)) g_changed = true;
+            if (igDragFloat("##ps", &riv->speed[i], 1.0f, 0.0f, 5000.0f, TR("V %.0f"), 0)) g_changed = true;
             igSameLine(0, 4);
             if (np > 2 && igSmallButton("x")) del = (int)i;
             igPopID();
@@ -12120,6 +12366,10 @@ static void details(Editor* ed) {
         bool lod = grm->lod != 0;
         if (igCheckbox("##glod", &lod)) grm->lod = lod ? 1u : 0u, g_changed = true;
         if (igIsItemHovered(0)) igSetTooltip("%s", TR("Far away, fewer strands are drawn and the rest wider: the same look for less work."));
+        label_cell("Visible"); // (2026-11-25, item 16) the hair on or off (drawn and simulated or neither)
+        bool gvis = grm->visible != 0;
+        if (igCheckbox("##gvis", &gvis)) grm->visible = gvis ? 1u : 0u, g_changed = true;
+        if (igIsItemHovered(0)) igSetTooltip("%s", TR("Off: the hair is neither drawn nor simulated (its actor stays). In the game: Set Property by Name \"Visible\"."));
         // (2026-11-16) dynamic hair: simulated on the GPU, colliding with the head, the character's bones and the scene
         label_cell("Dynamic");
         bool dyn = grm->dynamic != 0;
@@ -12181,7 +12431,7 @@ static void details(Editor* ed) {
         if (igCollapsingHeader_BoolPtr(lab, &keep, ImGuiTreeNodeFlags_DefaultOpen) &&
             igBeginTable("sec_phys", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) {
             igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
             if (row_check("Simulate Physics", &rb->simulate)) {
                 g_changed = true;
                 if (rb->simulate && t) t->flags = (t->flags & ~TRANSFORM_MOBILITY_MASK) | MOBILITY_MOVABLE; // Unreal: Movable
@@ -12262,8 +12512,8 @@ static void details(Editor* ed) {
             label_cell(side ? "Constraint Actor 2" : "Constraint Actor 1");
             const CName* cur = *who && ecs_alive(w, *who) ? ecs_get(w, *who, COMP_NAME) : NULL;
             igPushID_Int(side);
-            if (igBeginCombo("##actor", cur ? cur->text : TR(side ? "None (the world)" : "None"), 0)) {
-                if (igSelectable_Bool(TR(side ? "None (the world)" : "None"), !*who, 0, (ImVec2){ 0, 0 })) *who = ENTITY_NONE, g_changed = true;
+            if (igBeginCombo("##actor", cur ? cur->text : (side ? TR("None (the world)") : TR("None")), 0)) {
+                if (igSelectable_Bool((side ? TR("None (the world)") : TR("None")), !*who, 0, (ImVec2){ 0, 0 })) *who = ENTITY_NONE, g_changed = true;
                 for (uint32_t ai = 0; ai < w->archetype_count; ai++) { // (the actors with physics)
                     const EcsArchetype* ar = &w->archetypes[ai];
                     if (!(ar->mask & COMP_BIT(COMP_RIGID_BODY)) || !(ar->mask & COMP_BIT(COMP_NAME))) continue;
@@ -12385,7 +12635,7 @@ static void details(Editor* ed) {
     if (ckc && begin_section("Checkpoint", "sec_checkpoint")) { // (save_progress.h: a volume that saves and is the respawn point)
         if (ed->playing) {
             label_cell("Status");
-            igTextDisabled("%s", TR((ckc->reached & 1u) ? "Reached" : "Not reached"));
+            igTextDisabled("%s", TR((ckc->reached & 1u) ? TR("Reached") : TR("Not reached")));
         }
         label_cell("Box Extent");
         if (igDragFloat3("##ckext", ckc->extent, 1.0f, 1.0f, 1e6f, "%.0f", 0)) g_changed = true;
@@ -12400,7 +12650,7 @@ static void details(Editor* ed) {
         if (ckc->flags & CHECKPOINT_RESPAWN_ON_DEATH) g_changed |= row_float("Respawn Delay", &ckc->respawn_delay, 0.05f, 0.0f, 600.0f, "%.2f s");
         label_cell("Slot Name");
         igSetNextItemWidth(-1);
-        if (igInputTextWithHint("##ckslot", "Checkpoint", ckc->slot, sizeof ckc->slot, 0, NULL, NULL)) g_changed = true;
+        if (igInputTextWithHint("##ckslot", "Checkpoint", ckc->slot, sizeof ckc->slot, 0, NULL, NULL)) g_changed = true; // i18n: none (an example slot name)
         igEndTable();
     }
     if (t && begin_section("Rendering", "sec_render")) {
@@ -12568,7 +12818,8 @@ static void output_log(Editor* ed) {
 }
 
 bool editor_request_quit(Editor* ed) {
-    if (!ed->confirm_quit || !ed->dirty || ed->playing) return true;
+    // (2026-11-25) the asset editors' unsaved changes too (they were saved without asking, the Blueprints only)
+    if (!ed->confirm_quit || ed->playing || (!ed->dirty && !editor_docs_unsaved(NULL, 0))) return true;
     glfwSetWindowShouldClose(ed->window, GLFW_FALSE);
     ed->quit_asking = true;
     return false;
@@ -12582,14 +12833,23 @@ static void quit_popup(Editor* ed, double now) {
         ed->quit_asking = false;
     }
     if (!igBeginPopupModal(title, NULL, ImGuiWindowFlags_AlwaysAutoResize)) return;
-    igText("%s", TR("The level has unsaved changes."));
+    if (ed->dirty) igText("%s", TR("The level has unsaved changes."));
+    { // (2026-11-25) the asset editors' (editor_docs.h)
+        static char names[4096];
+        if (editor_docs_unsaved(names, sizeof names)) {
+            igText("%s", TR("These assets have unsaved changes:"));
+            for (char *l = names, *e; (e = strchr(l, '\n')) != NULL; l = e + 1) igBulletText("%.*s", (int)(e - l), l);
+        }
+    }
     float bw = igGetFontSize() * 8.0f;
     if (igButton(TR("Save and Quit"), (ImVec2){ bw, 0 })) {
-        if (editor_save_level(ed, ed->level_path, now)) ed->quit = true;
+        bool ok = !ed->dirty || editor_save_level(ed, ed->level_path, now);
+        ok = editor_docs_save(ed) == 0 && ok; // (one that fails: the editor stays, its status says why)
+        if (ok) ed->quit = true;
         igCloseCurrentPopup();
     }
     igSameLine(0, -1);
-    if (igButton(TR("Don't Save"), (ImVec2){ bw, 0 })) ed->quit = true, igCloseCurrentPopup();
+    if (igButton(TR("Don't Save"), (ImVec2){ bw, 0 })) editor_docs_discard(), ed->quit = true, igCloseCurrentPopup();
     igSameLine(0, -1);
     if (igButton(TR("Cancel"), (ImVec2){ bw, 0 }) || igIsKeyPressed_Bool(ImGuiKey_Escape, false)) igCloseCurrentPopup();
     igEndPopup();
@@ -12682,12 +12942,13 @@ static bool editor_any_window_focused(const Editor* ed) {
 
 void editor_frame(Editor* ed, double dt, double now) {
     ImGuiIO* io = igGetIO_Nil();
+    if (ed->playing) dt *= kit_time_scale(); // (2026-11-25, item 18) the Debug Cheats plugin's Slow Motion (1: off)
     extern const char* g_re_search_hint; // (imgui_hooks.c: every combo's search field, in the editor's language)
     g_re_search_hint = TR("Search...");
-    editor_sync_selection(ed);
-    async_update(ed->playing ? 2.0 : 6.0); // the finished background work put in place; the steps' slices (async.h)
+    TRACE("Editor: Selection", editor_sync_selection(ed));
+    TRACE("Background work (done)", async_update(ed->playing ? 2.0 : 6.0)); // the finished background work put in place; the steps' slices (async.h)
     navmesh_set_wanted(ed->show_nav);
-    navmesh_update(&ed->world, ed->playing, now); // the NavMesh follows the level (its tiles built in the background)
+    TRACE("NavMesh", navmesh_update(&ed->world, ed->playing, now)); // the NavMesh follows the level (its tiles built in the background)
     // The mouse belongs to the camera while flying or possessed (the cursor is captured)
     if (ed->flying || (ed->playing && ed->possessed && !ed->mouse_released)) io->ConfigFlags |= ImGuiConfigFlags_NoMouse;
     else io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
@@ -12700,9 +12961,9 @@ void editor_frame(Editor* ed, double dt, double now) {
         update_title(ed);
         return;
     }
-    shortcuts(ed, now);
+    TRACE("Editor: Shortcuts", shortcuts(ed, now));
     if (ed->playing) {
-        pause_menu_poll_gamepad(&ed->world); // (a gamepad's Start opens the pause menu, B goes back)
+        TRACE("Gamepad", pause_menu_poll_gamepad(&ed->world)); // (a gamepad's Start opens the pause menu, B goes back)
         if (game_quit_requested()) { // Quit Game: the Play stops
             game_quit_clear();
             editor_stop(ed, now);
@@ -12726,9 +12987,9 @@ void editor_frame(Editor* ed, double dt, double now) {
         double pz0 = re_time_seconds();
         if (!frozen) ed->play_time += dt;
         TRACE("Online (receive)", online_pre_tick(&ed->world, now)); // the network: what came (states, RPCs, players), then their events
-        bp_online_events(&ed->world);
+        TRACE("Online events", bp_online_events(&ed->world));
         if (!frozen) TRACE("Systems (ECS)", systems_update(&ed->world, (float)(dt > 0.1 ? 0.1 : dt)));
-        pawn_input(ed);
+        TRACE("Pawn input", pawn_input(ed));
         if (ed->test_step) ed->test_step(ed, dt > 0.1 ? 0.1 : dt);
         if (!frozen) TRACE("AI", ai_update(&ed->world, (float)(dt > 0.1 ? 0.1 : dt))); // the AIs set their pawns' input before they move
         if (!loading) TRACE("Blueprints", bp_tick(&ed->world, (float)(dt > 0.1 ? 0.1 : dt)));
@@ -12796,7 +13057,7 @@ void editor_frame(Editor* ed, double dt, double now) {
     foliage_update(&ed->world);           // the painted plants' entities
     proto_update(&ed->world); // the prototyping shapes whose numbers changed
 
-    main_menu(ed, now);
+    TRACE("Editor: Menu", main_menu(ed, now));
     ImGuiViewport* vp = igGetMainViewport();
     float menu_h = look_menu_bar_height(); // (Q26: taller than a frame, the brand's)
     float x0 = vp->Pos.x, y0 = vp->Pos.y + menu_h, W = vp->Size.x, H = vp->Size.y - menu_h;
@@ -12828,7 +13089,7 @@ void editor_frame(Editor* ed, double dt, double now) {
     // the layout's default, or the one saved (Window > Layout), the last one back on open
     float top = y0 + tb_h, bottom = y0 + H - bar_h, vh = bottom - top;
     float gap = TMV(TM_SPACE_CARD);
-    dock_host(ed, x0 + gap, top + gap, W - 2.0f * gap, vh - 2.0f * gap);
+    TRACE("Editor: Dock", dock_host(ed, x0 + gap, top + gap, W - 2.0f * gap, vh - 2.0f * gap));
 
     igSetCursorScreenPos((ImVec2){ x0, bottom });
     igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){ pad, pad });
@@ -12844,7 +13105,7 @@ void editor_frame(Editor* ed, double dt, double now) {
     if (dock_panel_begin(DP_VIEWPORT, TR("Viewport"), NULL, 0)) {
         ImVec2 vp0 = igGetCursorScreenPos(), vs = igGetContentRegionAvail();
         xv = vp0.x, vw = fmaxf(vs.x, 1.0f), vph = fmaxf(vs.y, 1.0f);
-        viewport_draw(ed, xv, vp0.y, vw, vph, dt);
+        TRACE("Editor: Viewport", viewport_draw(ed, xv, vp0.y, vw, vph, dt)); // (2026-11-24: the editor's panels in the Trace)
         if (!(ed->playing && ed->possessed)) viewport_toolbar(ed, xv, vp0.y, vw);
     }
     dock_panel_end();
@@ -12864,11 +13125,11 @@ void editor_frame(Editor* ed, double dt, double now) {
     }
 
     if (ed->show_outliner) {
-        if (dock_panel_begin(DP_OUTLINER, TR("Outliner"), &ed->show_outliner, ImGuiWindowFlags_NoScrollbar)) outliner(ed, now);
+        if (dock_panel_begin(DP_OUTLINER, TR("Outliner"), &ed->show_outliner, ImGuiWindowFlags_NoScrollbar)) TRACE("Editor: Outliner", outliner(ed, now));
         dock_panel_end();
     }
     if (ed->show_details) {
-        if (dock_panel_begin(DP_DETAILS, TR("Details"), &ed->show_details, 0)) details(ed);
+        if (dock_panel_begin(DP_DETAILS, TR("Details"), &ed->show_details, 0)) TRACE("Editor: Details", details(ed));
         dock_panel_end();
     }
 
@@ -12896,16 +13157,18 @@ void editor_frame(Editor* ed, double dt, double now) {
         if (dock_panel_begin(DP_PLATFORMS, TR("Platform Support"), look_platforms_flag(), 0)) look_platforms_panel(ed, now);
         dock_panel_end();
     }
-    look_frame(ed, now); // (the title bar's color, the caches' readouts, the new look's offer)
+    TRACE("Editor: Look", look_frame(ed, now)); // (the title bar's color, the caches' readouts, the new look's offer)
     (void)xv, (void)vph;
     view2_window(ed, dt); // Window > Viewport 2
+    if (content_take_prefs_changed()) g_prefs_dirty = true; // (the Content Browser's filters, favorites)
     if (g_prefs_dirty) {
         editor_save_prefs(ed);
         g_prefs_dirty = false;
     }
-    services_frame(ed);
+    TRACE("Editor: Services", services_frame(ed));
     if (ed->playing) game_bake_tick(ed); // (Q16) a Build Lighting a Blueprint asked for while playing
     bake_tick(ed, now);
+    edhost_frame(ed); // (item 9) the Editors window, before the asset editors that dock into it
     bp_editor_draw(ed, now);
     mat_editor_draw(ed, now);
     particle_editor_draw(ed);
@@ -12914,6 +13177,7 @@ void editor_frame(Editor* ed, double dt, double now) {
     cinematics_window(ed, &g_show_cine); // (B9)
     sc_window(&g_show_submit); // (B14: File > Source Control > Submit Content)
     plugins_window(&g_show_plugins); // (B14c: Edit > Plugins)
+    kit_frame(ed, dt, now);          // (2026-11-25, item 18) the built-in plugins: their windows, overlays and ticks
     { // (B14b) Tools > Trace: the recordings in <project>/Saved/Profiling
         static char dir[900];
         if (!dir[0]) {
@@ -12946,6 +13210,7 @@ void editor_frame(Editor* ed, double dt, double now) {
     script_ide_draw(ed, now, (float)dt); // the Code Editor, the API reference, the Editor Utilities
     assistant_ui_draw(); // Help > Assistant (and its "Show me where" outlines)
     mcp_ui_draw(ed); // Tools > AI Connection (MCP)
+    loc_ui_draw();   // (2026-11-24) Tools > Localization Dashboard
     // the listener: the view (the player's camera while playing); the game's sounds paused with it
     audio_pause_game(ed->playing && (ed->paused || game_paused()));
     TRACE("Audio", audio_world_update(&ed->world, (float)dt, ed->playing, ed->render_view.pos, ed->render_view.fwd, ed->render_view.up));
@@ -12968,6 +13233,7 @@ void editor_frame(Editor* ed, double dt, double now) {
     about_popup(ed);
     open_asset_dialog(ed);
     quit_popup(ed, now);
+    editor_docs_popup(ed, now); // (2026-11-25) a project switch's save prompt
     update_title(ed);
 }
 

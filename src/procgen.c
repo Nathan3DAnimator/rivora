@@ -30,7 +30,11 @@ const char* const g_biome_names[BIOME_COUNT] = { "Ocean", "Beach", "Plains", "Fo
 #define TABLE 8192             // the chunks' hash table (a power of two)
 #define JOBS 32                // chunks whose heights are made a frame (on the workers); their entities within 2.5 ms
 #define MAX_CREATURES 64
-#define MAX_ROOMS 128
+// (2026-11-25, item 20) a facility's rooms: as many as asked (the arrays made for them), held only by the entities a
+// level can hold (each room up to ~9: two slabs, walls, a light, scrap, a creature): past FACILITY_ROOMS_SLOW it is said
+// to be slow, past FACILITY_ROOMS_MAX it is held there and said so (the log)
+#define FACILITY_ROOMS_SLOW 2000
+#define FACILITY_ROOMS_MAX 50000
 
 // --- Noise: gradients on an integer lattice (endless: int64 cells), double inside ---
 static uint64_t mix64(uint64_t x) {
@@ -143,8 +147,10 @@ static struct {
     void (*cam_hook)(const float d[3]);
     ProcStats stats;
     // the facility
-    Entity rooms_ents[4096];
-    uint32_t nroom_ents;
+    Entity* rooms_ents; // (grown as the rooms need: 128 rooms and 4096 actors were all it held)
+    float deep[3], deep_side; // (the tests) the last facility's deepest room
+    bool deep_ok;
+    uint32_t nroom_ents, room_ents_cap;
     uint32_t facility_hash;
     Entity creatures[MAX_CREATURES];
     uint32_t ncreatures;
@@ -160,6 +166,12 @@ void procgen_rebase_hook(ProcRebaseFn fn) {
     if (P.nhooks < 16) P.hooks[P.nhooks++] = fn;
 }
 void procgen_set_camera_hook(void (*fn)(const float d[3])) { P.cam_hook = fn; }
+bool procgen_facility_deepest(float center[3], float* side) {
+    if (!P.deep_ok) return false;
+    for (int k = 0; k < 3; k++) center[k] = P.deep[k];
+    *side = P.deep_side;
+    return true;
+}
 const ProcStats* procgen_stats(void) { return &P.stats; }
 void procgen_origin(double out[3]) { memcpy(out, P.origin, sizeof P.origin); }
 
@@ -413,28 +425,59 @@ static int room_at(const Room* r, int n, int x, int y) {
         if (r[i].x == x && r[i].y == y) return i;
     return -1;
 }
-// Grown from the entrance: a random room with a free side gets a neighbor through a door (a tree), then some loops
+// (2026-11-25) the rooms by their cell: open addressing over (x, y), half full at most (room_at searched them all for each
+// try: thousands of rooms were seconds)
+typedef struct RoomGrid { int* slot; uint32_t mask; } RoomGrid;
+static uint32_t cell_key(int x, int y) { return ((uint32_t)x * 73856093u) ^ ((uint32_t)y * 19349663u); }
+static bool grid_make(RoomGrid* g, int n) {
+    uint32_t s = 64;
+    while (s < (uint32_t)n * 2u + 2u) s *= 2u;
+    g->slot = malloc(sizeof(int) * s), g->mask = s - 1u;
+    if (g->slot) memset(g->slot, 0xFF, sizeof(int) * s);
+    return g->slot != NULL;
+}
+static int grid_at(const RoomGrid* g, const Room* r, int x, int y) {
+    for (uint32_t h = cell_key(x, y) & g->mask;; h = (h + 1u) & g->mask) {
+        int i = g->slot[h];
+        if (i < 0) return -1;
+        if (r[i].x == x && r[i].y == y) return i;
+    }
+}
+static void grid_put(RoomGrid* g, const Room* r, int i) {
+    uint32_t h = cell_key(r[i].x, r[i].y) & g->mask;
+    while (g->slot[h] >= 0) h = (h + 1u) & g->mask;
+    g->slot[h] = i;
+}
+// Grown from the entrance: a random room with a free side gets a neighbor through a door (a tree), then some loops.
+// r: room for want rooms (the caller's): want made (a free side is always somewhere: only -y of the entrance's row is
+// refused)
 static int facility_layout(uint32_t seed, int want, float loops, Room* r) {
     int n = 1;
-    memset(r, 0, sizeof(Room) * MAX_ROOMS);
+    if (want < 1) want = 1;
+    memset(r, 0, sizeof(Room) * (size_t)want);
+    RoomGrid g;
+    if (!grid_make(&g, want)) return 1;
+    grid_put(&g, r, 0);
     static const int d[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
     uint64_t s = mix64(seed + 1u);
-    for (int tries = 0; n < want && n < MAX_ROOMS && tries < want * 200; tries++) {
+    for (long long tries = 0; n < want && tries < (long long)want * 200; tries++) {
         s = mix64(s);
         int from = (int)(s % (uint64_t)n), side = (int)((s >> 20) & 3u);
         int nx = r[from].x + d[side][0], ny = r[from].y + d[side][1];
-        if (room_at(r, n, nx, ny) >= 0 || ny < 0) continue; // (the entrance's side stays outside: -y)
+        if (grid_at(&g, r, nx, ny) >= 0 || ny < 0) continue; // (the entrance's side stays outside: -y)
         r[n].x = nx, r[n].y = ny, r[n].depth = r[from].depth + 1;
         r[from].door[side] = 1, r[n].door[side ^ 1] = 1;
+        grid_put(&g, r, n);
         n++;
     }
     for (int i = 0; i < n; i++)
         for (int k = 0; k < 4; k += 2) { // (+x and +y neighbors: each pair once)
-            int j = room_at(r, n, r[i].x + d[k][0], r[i].y + d[k][1]);
+            int j = grid_at(&g, r, r[i].x + d[k][0], r[i].y + d[k][1]);
             s = mix64(s);
             if (j >= 0 && !r[i].door[k] && (double)(s & 0xFFFF) / 65536.0 < loops) r[i].door[k] = 1, r[j].door[k ^ 1] = 1;
         }
     r[0].door[3] = 1; // the entrance
+    free(g.slot);
     return n;
 }
 
@@ -461,16 +504,42 @@ static void facility_clear(World* w) {
     P.nroom_ents = 0;
 }
 static void keep(Entity e) {
-    if (e && P.nroom_ents < 4096) P.rooms_ents[P.nroom_ents++] = e;
+    if (!e) return;
+    if (P.nroom_ents >= P.room_ents_cap) { // (an edit, not a frame: grown twice as big)
+        uint32_t c = P.room_ents_cap ? P.room_ents_cap * 2u : 4096u;
+        Entity* ne = realloc(P.rooms_ents, sizeof(Entity) * c);
+        if (!ne) return;
+        P.rooms_ents = ne, P.room_ents_cap = c;
+    }
+    P.rooms_ents[P.nroom_ents++] = e;
 }
 
 static void facility_build(World* w, const CProcWorld* cfg, const CTransform* at) {
     facility_clear(w);
-    static Room r[MAX_ROOMS];
-    int n = facility_layout(cfg->seed, (int)(cfg->rooms ? cfg->rooms : 1), cfg->loop_chance, r);
+    // (2026-11-25, item 20) the rooms asked: a number typed past the Details' slider is the number made
+    uint32_t want = cfg->rooms ? cfg->rooms : 1u;
+    if (want > FACILITY_ROOMS_MAX) {
+        printf("[RealEngine] Facility: %u rooms asked, %u made: past that a level can't hold their actors (about 9 a room)\n", want, FACILITY_ROOMS_MAX);
+        want = FACILITY_ROOMS_MAX;
+    } else if (want > FACILITY_ROOMS_SLOW)
+        printf("[RealEngine] Facility: %u rooms (about %u actors): past %u it may get slow to build and to draw\n", want, want * 9u, FACILITY_ROOMS_SLOW);
+    Room* r = malloc(sizeof(Room) * want);
+    RoomGrid g = { 0 };
+    if (!r || !grid_make(&g, (int)want)) {
+        free(r);
+        printf("[RealEngine] Facility: no memory for %u rooms\n", want);
+        return;
+    }
+    int n = facility_layout(cfg->seed, (int)want, cfg->loop_chance, r);
+    for (int i = 0; i < n; i++) grid_put(&g, r, i);
     float S = cfg->room_size, H = cfg->room_height, T = 20.0f;
     const float wall[3] = { 0.55f, 0.56f, 0.58f }, floorc[3] = { 0.32f, 0.33f, 0.35f }, ceilc[3] = { 0.25f, 0.25f, 0.27f };
-    float door[3] = { 180.0f, 240.0f, 0.0f };
+    // (2026-11-25, item 19: the user's video, light through the walls far away) each wall goes T/2 into the floor and the
+    // ceiling instead of touching them face to face: the touching faces left seams the GI's rays and texels went through
+    // (the sky's light along every wall-ceiling and wall-floor junction, a bright line up the three-way corners). The
+    // overlaps are inside the slabs, nothing seen changes (the slabs stay S: wider, two rooms' would overlap in a doorway,
+    // seen, fighting for the depth). The door keeps its 240 cm above the floor
+    float door[3] = { 180.0f, 240.0f + T * 0.5f, 0.0f };
     int maxd = 1;
     for (int i = 0; i < n; i++) maxd = r[i].depth > maxd ? r[i].depth : maxd;
     for (int i = 0; i < n; i++) {
@@ -481,11 +550,11 @@ static void facility_build(World* w, const CProcWorld* cfg, const CTransform* at
         // the walls: +x and +y always (each shared side once), -x and -y where there is no room
         for (int k = 0; k < 4; k++) {
             static const int d[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
-            int j = room_at(r, n, r[i].x + d[k][0], r[i].y + d[k][1]);
+            int j = grid_at(&g, r, r[i].x + d[k][0], r[i].y + d[k][1]);
             if ((k == 1 || k == 3) && j >= 0) continue;
-            float wc[3] = { cx + (float)d[k][0] * S * 0.5f, cy + (float)d[k][1] * S * 0.5f, cz };
+            float wc[3] = { cx + (float)d[k][0] * S * 0.5f, cy + (float)d[k][1] * S * 0.5f, cz - T * 0.5f }; // (T/2 into the floor)
             float yaw = k < 2 ? 90.0f : 0.0f;
-            float ws[3] = { S + T, T, H };
+            float ws[3] = { S + T, T, H + T }; // (and T/2 into the ceiling)
             keep(proto(w, PROTO_WALL, wc, yaw, ws, T, r[i].door[k] ? door : NULL, wall));
         }
         // a light a room (warmer the deeper), items, creatures deeper in
@@ -497,7 +566,13 @@ static void facility_build(World* w, const CProcWorld* cfg, const CTransform* at
             lt->flags = MOBILITY_STATIC;
             CLight* li = ecs_get(w, l, COMP_LIGHT);
             float f = (float)r[i].depth / (float)maxd;
-            li->type = LIGHT_POINT, li->intensity = 260.0f, li->attenuation_radius = S * 1.1f, li->source_radius = 40.0f;
+            // (2026-11-25, item 19) its candela by the room's floor: 100 lux on it (a dim corridor's, Unreal's interiors
+            // start there) through a utilization of 0.5 (walls, ceiling, the light's height): I = E A / (0.5 * 4 pi). The fixed
+            // 260 cd (a household bulb) left a 12 m room at ~7 lux: black under an exposure kept from adapting (a Post
+            // Process's Min EV100), and the dynamic GI's leaks had been lighting it; after Build Lighting, without them, it
+            // looked like the bake had gone wrong
+            float floor_m2 = (S / 100.0f) * (S / 100.0f);
+            li->type = LIGHT_POINT, li->intensity = 100.0f * floor_m2 / (0.5f * 4.0f * 3.14159265f), li->attenuation_radius = S * 1.1f, li->source_radius = 40.0f;
             li->color[0] = 1.0f, li->color[1] = 0.9f - f * 0.35f, li->color[2] = 0.75f - f * 0.5f;
             li->cast_shadows = 1, li->affects_world = 1, li->ext = 1;
             li->indirect_intensity = li->specular_scale = li->volumetric_scattering = 1.0f, li->temperature = 6500.0f;
@@ -519,7 +594,15 @@ static void facility_build(World* w, const CProcWorld* cfg, const CTransform* at
             if (cr) P.creatures[P.ncreatures++] = cr, keep(cr);
         }
     }
+    { // (the tests: the deepest room, farthest from the entrance through the doors)
+        int di = 0;
+        for (int i = 1; i < n; i++)
+            if (r[i].depth > r[di].depth) di = i;
+        P.deep[0] = at->location[0] + (float)r[di].x * S, P.deep[1] = at->location[1] + (float)r[di].y * S, P.deep[2] = at->location[2];
+        P.deep_side = S, P.deep_ok = true;
+    }
     P.stats.rooms = (uint32_t)n, P.stats.creatures = P.ncreatures;
+    free(r), free(g.slot);
     bp_boxes_changed();
 }
 
@@ -761,9 +844,9 @@ int procgen_selftest(void) {
     printf("[RealEngine] procgen: the steepest meter at 50 000 km out: %.1f m\n", jump / 100.0);
     if (jump > 600.0) printf("[RealEngine] FAIL: procgen: a cliff from the noise's precision\n"), fails++;
     // a facility: every room reached from the entrance through its doors
-    static Room r[MAX_ROOMS];
+    static Room r[64];
     int n = facility_layout(42u, 30, 0.2f, r);
-    int seen[MAX_ROOMS] = { 0 }, queue[MAX_ROOMS], qh = 0, qt = 0, reached = 0;
+    int seen[64] = { 0 }, queue[64], qh = 0, qt = 0, reached = 0;
     seen[0] = 1, queue[qt++] = 0;
     static const int d[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
     while (qh < qt) {
@@ -777,6 +860,60 @@ int procgen_selftest(void) {
     }
     printf("[RealEngine] procgen: a facility of %d rooms, %d reached from the entrance\n", n, reached);
     if (n != 30 || reached != n) printf("[RealEngine] FAIL: procgen: the facility's rooms\n"), fails++;
+    // (2026-11-25, item 20 of the user's list: "digitando um número muito alto, o sistema responde a esse número") 3x
+    // the Details' slider (Rooms 1..128): the layout makes exactly that many, every one reached through its doors, and
+    // the build keeps every actor it made (the old arrays stopped at 128 rooms and 4096 actors)
+    {
+        enum { BIG = 384 };
+        Room* rb = calloc(BIG, sizeof(Room));
+        int *sb = calloc(BIG, sizeof(int)), *qb = calloc(BIG, sizeof(int));
+        int nb = rb && sb && qb ? facility_layout(7u, BIG, 0.2f, rb) : 0, reached_b = 0;
+        if (nb > 0) {
+            int h0 = 0, t0 = 0;
+            sb[0] = 1, qb[t0++] = 0;
+            while (h0 < t0) {
+                int i = qb[h0++];
+                reached_b++;
+                for (int k = 0; k < 4; k++) {
+                    if (!rb[i].door[k]) continue;
+                    int j = room_at(rb, nb, rb[i].x + d[k][0], rb[i].y + d[k][1]);
+                    if (j >= 0 && j < BIG && !sb[j]) sb[j] = 1, qb[t0++] = j;
+                }
+            }
+        }
+        free(rb), free(sb), free(qb);
+        World fw;
+        memset(&fw, 0, sizeof fw);
+        ecs_init(&fw);
+        CProcWorld cfg;
+        memset(&cfg, 0, sizeof cfg);
+        cfg.mode = PROCGEN_FACILITY, cfg.rooms = BIG, cfg.seed = 7u, cfg.room_size = 800.0f, cfg.room_height = 320.0f, cfg.loop_chance = 0.2f;
+        CTransform at;
+        memset(&at, 0, sizeof at);
+        at.scale[0] = at.scale[1] = at.scale[2] = 1.0f;
+        P.actor = ENTITY_NONE;
+        facility_build(&fw, &cfg, &at);
+        uint32_t built = P.stats.rooms, kept = P.nroom_ents, alive = fw.alive;
+        // (2026-11-25, item 19: "o bake da área interior bugado") the rooms' lamps sized by their floor (100 lux through 0.5:
+        // ~1019 cd in an 8 m room): the fixed 260 cd left a room dark once Build Lighting took the GI's leaks away
+        float lamp = 0.0f;
+        for (uint32_t i = 1; i < fw.slot_count && lamp == 0.0f; i++) {
+            Entity e = ecs_entity_at(&fw, i);
+            const CLight* li = e ? ecs_get(&fw, e, COMP_LIGHT) : NULL;
+            const CAttach* at2 = li ? ecs_get(&fw, e, COMP_ATTACH) : NULL;
+            if (at2 && at2->kind == ATTACH_PROCGEN) lamp = li->intensity;
+        }
+        float want_cd = 100.0f * (cfg.room_size / 100.0f) * (cfg.room_size / 100.0f) / (0.5f * 4.0f * 3.14159265f);
+        printf("[RealEngine] procgen: the facility's lamp %.0f cd in a room of %.0f m (100 lux on its floor: %.0f cd)\n", lamp, cfg.room_size / 100.0f, want_cd);
+        if (fabsf(lamp - want_cd) > 1.0f) printf("[RealEngine] FAIL: procgen: the facility's lamps aren't sized by their room\n"), fails++;
+        facility_clear(&fw);
+        uint32_t left = fw.alive;
+        ecs_shutdown(&fw);
+        printf("[RealEngine] procgen: a facility of %d rooms asked (3x the slider's 128): %d laid out, %d reached; built %u rooms, %u actors kept of %u, %u left after clearing\n",
+               BIG, nb, reached_b, built, kept, alive, left);
+        if (nb != BIG || reached_b != nb || built != BIG || kept != alive || left != 0)
+            printf("[RealEngine] FAIL: procgen: a facility past the slider's range must have the rooms asked\n"), fails++;
+    }
     printf("[RealEngine] procgen self-test: %s\n", fails ? "FAIL" : "ok");
     return fails;
 }

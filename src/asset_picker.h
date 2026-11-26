@@ -49,6 +49,7 @@ bool asset_picker_result(uint32_t owner, char* ref, size_t cap, uint32_t* user);
 enum { ASSET_FIELD_IDLE = 0, ASSET_FIELD_OPENED, ASSET_FIELD_PICKED };
 int asset_field(const char* id, const char* shown, const char* cur_ref, int kind, uint64_t kinds, bool allow_none,
                 char* out, size_t cap);
+void asset_field_open_next(void); // (2026-11-25, --show bp-var) the next asset_field drawn opens its picker as if clicked
 
 // The view (the corner button): 0 Preview only, 1 Name only, 2 Preview and name; size 0 Small, 1 Medium, 2 Large
 enum { PICKER_VIEW_PREVIEW = 0, PICKER_VIEW_NAME, PICKER_VIEW_BOTH, PICKER_VIEW_COUNT };

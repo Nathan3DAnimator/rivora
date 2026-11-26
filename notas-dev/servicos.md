@@ -53,6 +53,13 @@ ligado (`main.c`) e os laços da intro e da tela de carregamento (`brand.c`) nã
 depois do `igRender()`. `end_platform_frame` nos dois.
 
 ## Atualizador
+- **Limite da API (2026-11-25, bug-fixer)**: a consulta ia só à API (`releases/latest`), 60 pedidos por hora por
+  endereço; no limite (403/429) não havia atualização, e o teste `update_download` da suíte ficava vermelho. Agora, como
+  no Tlender: o relay dos relatórios (`[reports] report_url` + `/releases?repo=<releases_repo>`: o Worker pergunta com o
+  token dele e guarda a resposta), depois a API (`/releases?per_page=30`: a mais nova sem rascunho, pre-release nem
+  beta), depois o feed público `github.com/<repo>/releases.atom` (o pacote nomeado pelo `*` do padrão, os endereços
+  web). `update_relay_url`, `update_parse_atom` (updater.c), o app e o `--update-test`. Testes: `update_parse` (offline:
+  a lista e o feed) e `update_download` (pelo relay; SKIP com o motivo se todos os caminhos esbarrarem no limite).
 - **504 do GitHub (2026-11-08)**: o caminho web dos arquivos (`github.com/<repo>/releases/download/...`) respondeu
   504 Gateway Time-out por horas enquanto a API (`api.github.com/.../releases/assets/<id>`, `Accept:
   application/octet-stream`) baixava normal. Desde a 0.24 o pacote e o `.sig` vêm pela API primeiro, depois o caminho
@@ -497,6 +504,17 @@ Agora o relatório diz o passe.
   `RealEngine-0.50-win64.zip`, baixou, assinatura ok, desempacotou (61,6 s); o `rivora.exe --update-test` da 0.50 achou
   `Rivora-0.50-win64.zip` (37,1 s). Runtime Android recompilado (0.50, 57,3 MB). Código publicado no `rivora` (commit "Rivora Engine
   0.50", e-mail no-reply), base do Assistente (`realengine-assistant` 0dff5e0, 278 artigos).
+- **0.51** publicada em 2026-11-23 (https://github.com/Nathan3DAnimator/realengine-releases/releases/tag/v0.51), a "Latest",
+  314,8 MB nos dois nomes (`Rivora-` e `RealEngine-0.51-win64.zip`, assinatura conferida nos dois): o MCP (a IA controla o
+  editor; `rivora_mcp.exe` no pacote), os valores editados direto nos nós do Material Editor, o report #180 (o ator sumia
+  ao mexer no material) e a tela de carregamento com o nome novo. Suíte completa parada em 233/348 a pedido do usuário
+  ("só o que deu problema e os testes do MCP"): as 12 falhas repetidas sozinhas passaram, menos `dock_targets` (falha
+  desde a 0.47); `blueprints` falhava pela pasta `build/test_game/bp` antiga (apagada: passa); os de fps eram o editor
+  instalado aberto na GPU. Testes `mcp`, `mat_live_edit`, `mated_ui`, `scripts`, `tips_audit`, `i18n`, `assistant*`
+  passando. O editor do pacote rodou o `--mcp-test` numa pasta limpa (ponte stdio inclusa). Depois de publicar, o
+  `rivora.exe --update-test` da 0.50 achou `Rivora-0.51-win64.zip`, baixou, assinatura ok, desempacotou (39,3 s). Runtime
+  Android recompilado (0.51, 57,4 MB). Código no `rivora` (fa755ef, no-reply), base do Assistente (`realengine-assistant`
+  8df6da3, 280 artigos).
 ## Código aberto (2026-11-23)
 Pedido: "deixar a engine pronta para distribuição open source gratuita, no meu site só com um local de doação".
 - **Licença MIT** (`LICENSE`, Nathan Lourenço Peixoto). Os jogos são do usuário, sem royalties.
@@ -511,7 +529,7 @@ Pedido: "deixar a engine pronta para distribuição open source gratuita, no meu
   Empacotar Jogo põe `Rivora_LICENSE.txt` e `THIRD_PARTY_NOTICES.md` ao lado de todo jogo (de uma build, da raiz do
   repositório).
 - **Doação**: Ajuda > Apoiar a Real Engine (Doar) e o botão no Sobre abrem `[support] donate_url` do `endpoints.ini`
-  (hoje https://createanimateplay.nathan3danimator.workers.dev/#doar: o domínio createanimateplay.com ainda não foi comprado; ao comprá-lo, trocar aqui; vazio esconde o item). O Sobre diz a licença, "sem afiliação com a Epic" e abre os
+  (desde 24/11/2026 https://nathan3dstudio.com/#doar, o domínio próprio do site; o endereço workers.dev antigo continua no ar para as instalações antigas; vazio esconde o item). O Sobre diz a licença, "sem afiliação com a Epic" e abre os
   avisos.
 - **Marcas da Epic fora da interface**: MetaSound virou **Sound Graph** ("Grafo de Som"; a pasta de dados
   `/Content/Audio/MetaSounds` ficou, é dado dos projetos), Nanite Tessellation virou **Geometry Tessellation** (os

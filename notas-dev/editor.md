@@ -394,6 +394,34 @@ DLLs nativas como os plugins da Unreal. Público: `src/plugin_api.h` (só C; cop
 - Medidas: carga do ExamplePlugin 0,8 ms (21 ms a frio); chamada de nó ≈ uma busca no cache + a função.
 - Falta: plugins com conteúdo (assets em Plugins/<Nome>/Content), hot reload, plugins no Android (.so), pinos de string/ator.
 
+## Painel de plugins e plugins embutidos (2026-11-25, item 18)
+- Editar > Plugins como o da Unreal (`plugins_ui.c`): barra lateral (Todos, Embutidos, Projeto, as categorias com a
+  contagem), cartões com o ícone duotom na cor da categoria, nome, versão, autor, descrição, Ativado, estado ("precisa
+  reiniciar" só para DLL, erro, nós no hover), busca, Novo Plugin..., Abrir Pasta. `plugin.json` ganhou `Icon` (o nome
+  de um ícone da engine, `ui_icon_name`: "BRUSH"; vazio: o da categoria); o modelo do Novo Plugin já traz `Icon`.
+- `plugins_add_builtin` (plugins.c): um plugin embutido genérico (sem DLL, liga e desliga na hora, `Config/Plugins.ini`,
+  senão o padrão dele); sem projeto aberto a mudança vale só nesta execução. PLUGINS_MAX 64 -> 96.
+- O kit (`plugin_kit.h/.c` + `plugin_kit_<categoria>.c`): 32 ferramentas do editor, cada uma uma `KitPlugin` (janela em
+  Ferramentas > Plugins > categoria, sobreposição na viewport, tick, `off` que solta a memória, auto-teste). Ligados de
+  fábrica: Snap to Ground, Align and Distribute, Camera Bookmarks, Selection Sets, Command Palette.
+  - Artista: Batch Rename, Color Palette, Material Swap, Mesh Audit. Level Design: Scatter, Snap to Ground, Align and
+    Distribute, Array, Measure. Animação: Animation Retime, Animation Audit, Motion Trails. Gameplay: Debug Cheats (God
+    Mode, Fast Walk, Low Gravity, Heal, Slow Motion: `kit_time_scale` no `dt` do `editor_frame` em Play), Spawn Palette,
+    Teleporter, Tag Finder. Produtividade: Camera Bookmarks (Ctrl+Shift+0..9), Actor Notes, Selection Sets, Command Palette
+    (Ctrl+Shift+P), Asset References, Unused Assets (Lixeira, com confirmação). Render: Screenshot (F9, a viewport pelo
+    `vkctx_request_grab`), Lighting Audit, Scene Stats, Light Radius. Áudio: Sound Audit, Sound Map. IA: AI Overview, Nav
+    Path Tester. UI: Safe Frames. Online: Net Stats.
+  - Referências entre assets (Asset References, Unused Assets): um worker (`async_run`) lê cada arquivo do Content e acha os
+    hashes de 4 bytes (`bp_vpath_hash`, o que os componentes e assets binários guardam) e as palavras com o nome dos outros
+    assets (texto, caminhos); o nível aberto conta pelos bytes dos componentes dos atores. Um asset carregado só pelo nome
+    num script aparece como sem uso: o aviso fica na janela e na confirmação.
+  - Ganchos fora do kit: `editor_duplicate_actor` (a cópia do Ctrl+D sem undo nem seleção), `kit_menu`/`kit_frame` no
+    editor.c, `kit_time_scale`. A memória dos plugins é contada (`kit_alloc`, `kit_account`): desligado, nada fica.
+- Teste `plugins` (REALENGINE_KIT_WINDOWS=1): cada um ligado, o auto-teste, desligado sem vazar; depois todos ligados com as
+  janelas abertas durante o Play e desligados no fim (0 bytes). `plugin_template` confere Category e Icon do modelo.
+- Falta: ícone em imagem (PNG) no plugin.json, as ferramentas por API de plugin (DLL) em vez de embutidas, atalhos
+  configuráveis.
+
 ## Catálogo de classes, busca e arrastar (2026-11-10, sugestões "organização" e "pesquisa")
 - Um catálogo só (`place_catalog`, `editor.c`) para o + Adicionar, Ator > Adicionar, o + do Organizador e o Place
   Actors: 12 categorias como na Unreal 5, cada classe uma vez; modelos (partículas, veículos, tecido, mundo
@@ -599,3 +627,64 @@ desenho do `manip.c` do Tlender; agora vem também a camada de controle dele (`e
   mesmo; o nó fica sob o mouse. Teste: passo 4 do `mated_ui` (nó segurado na borda: a vista rolou e o nó a 0,0 px do
   mouse).
 
+## Visualizadores com o Details da Unreal (2026-11-24, item 8)
+Pedido: "os visualizadores com as opções da Unreal (LOD, Nanite, redução de triângulos, rig, textura, malha), UIs mais cheias".
+- Busca no topo e seções que recolhem em todo visualizador (`av_details_search` / `av_section` / `av_row` em
+  `src/asset_viewer_details.inc`, declarados no `asset_viewer.h`): Static Mesh, Textura, Skeletal Mesh, Esqueleto,
+  Animação (`src/anim_editor_details.inc`) e Sound Wave (`audio_editor.c`). A busca casa o título traduzido, o inglês e
+  palavras-chave de cada seção; buscando, as seções aparecem abertas.
+- **Static Mesh**: Detalhes do Asset (caminho, triângulos, vértices, tamanho, canais de UV, cores, disco), Slots de
+  Material, **Configurações de LOD** (número 1-4, % dos triângulos do LOD 0 por LOD, mínimo; Aplicar / LODs Automáticos:
+  `asset_mesh_rebuild` refaz do LOD 0 com `mesh_build_indexed_lods` e grava o `.rmesh` (a tabela de LODs que já existia:
+  sem mudar o formato), relê as malhas (`render_meshes_reload`) e guarda os valores em `.<malha>.rlod`), **Configurações
+  de Build** (Recalcular Normais pelo ângulo de suavização: faces no mesmo lugar dentro do ângulo, por área; Aplicar
+  Escala), **Estatísticas** (triângulos, %, vértices e KB por LOD, erro em cm), Sockets, Prévia.
+- **Textura**: Textura (importada/exibida, formatos, mips, Tamanho do Recurso), Configurações (mais o **LOD Bias** =
+  o Tamanho Máximo por mips: `asset_tex_set`), Canais, Ações (Reimportar), Visualização.
+- **Skeletal Mesh**: Detalhes (ossos, sockets, skins, partes, morph targets, triângulos, arquivo de origem), LODs das
+  skins (`mesh_skinned_lods_opts`: no LOD 0 dos vértices, sem cache; mínimo 2: com 1 a carga refaz os automáticos),
+  Materiais, pesos padrão dos Morph Targets (salvos no .rskm), Física e IK (abrir/criar), Osso Selecionado; **Buscar
+  Ossos** na árvore. **Esqueleto**: ossos, sockets, rig. **Animação**: duração, quadros, taxa, trilhas, notifies, curvas,
+  memória, Repetir. **Sound Wave**: Informações (duração, taxa, canais, quadros, formato, memória, pico, RMS), Som,
+  Configurações.
+- Fora (o que a engine não faz por asset não aparece): Nanite por malha (os clusters/DAG são automáticos nas malhas
+  grandes, no render.c), colisão simples/complexa por asset, screen size por LOD (o cull escolhe pelo erro na tela), mip
+  gen e endereçamento X/Y separados (o material lê um Wrap), lightmap UV gerada (só a que a importação fez). Clusters de
+  Skeletal Mesh: entram no painel quando o item 4 os trouxer.
+- **Medido** (teste `asset_viewport`, estágio de opções, RTX 3060): refazer 3 LODs de uma grade de 8192 triângulos
+  **37 ms** (8192 / 4096 / 1638 = 50% / 20%), 1 LOD, escala x2 (100 -> 200 cm) com normais refeitas; textura BC7 ->
+  sem compressão e LOD Bias 2 (64 -> 16) relidos do `.rtex`. O custo dos editores abertos segue (3 editores: CPU 0,074 ms,
+  GPU 0,557 ms). Fotos antes/depois: side-session-notes do Lead (`visualizador-*-antes-depois.png`).
+
+## Destaque da seleção em todo ator (item 17, 2026-11-25)
+- Lista do mask (`render.c`, antes das luzes): o selecionado com malha e, por um bitset dos selecionados, tudo o que pende
+  dele por `CAttach` (sobe pelo `parent` e pelo `owner` até 8 níveis): partes e pele da Skeletal Mesh (a pose animada:
+  `mesh.vert` passe 2 lê os vértices dobrados), componentes de Blueprint, veículos, blocos do Landscape. Cada draw leva
+  o id do ator no `pad` do push (2 + o índice do ator; 1 é o destaque do jogo): uma borda só em volta do ator inteiro.
+- `mask.frag`: corta pelo alfa do material Masked (o corte simples do `masked.frag`, UDIM incluído).
+- Sem seleção o passe do mask não roda (`R.mask_idle`: ele fica limpo e em leitura; refeito ao redimensionar).
+- `composite.frag`: a borda medida antes do retorno do HDR10 e aplicada em nits (antes sumia no HDR10).
+- `editor_viewport.c` `draw_selected_shape(ed, dl, v, e)`: para todos os selecionados (até 256), não só o primário; sem
+  malha nem forma própria, a colisão (caixa, esfera, cápsula), a cápsula do Player Start ou uma caixa de 25 cm (Empty).
+  Vale no G (modo jogo).
+- Teste `selection_outline` (`selection_test.c`, `--scene selection --game-view`, validado): cubo 29 281 px, ator com 2
+  componentes 2 draws / 16 598 px, pele em dois momentos 42 190 e 32 658 px (silhuetas diferentes), luz e Empty com forma,
+  nada selecionado 0 px; o passe do mask 0,022 ms (0,030 ms a 1440p). Sem cobertura no teste: Masked (não há material
+  Masked pronto nos dados), multidão, Groom, partículas e água (pipelines próprios: o item 17 parte 2).- Parte 2 (25/11): o cabelo do ator selecionado no mask (`mask_hair.frag` + `hair.vert`, `groom_draw_mask`); a multidão
+  selecionada (um Crowd Spawner): um draw por parte com os agentes como instâncias (o passo nparts e o byte do id no
+  `pass` do push, bit 31: `mesh.vert`/`mask.frag`), cada parte no LOD mais grosso com menos de meio pixel de erro na
+  distância da multidão (30 Mannequins a 15 m: 840 draws no LOD 0 custavam 0,200 ms, instanciados 0,202 - eram os
+  vértices -, com o LOD 0,035 ms). Só Skeletal Mesh por partes: uma pele não faz multidão (a VAT é pendência); água e
+  partículas com a caixa laranja do `draw_selected_shape` (a água pelo plano dela). A cadeia de peças subida até 64
+  níveis (era 8: um rig fundo perdia peças). `selection_outline`: cadeia de 13 níveis (12 peças), borda por peça, a
+  multidão de 30 agentes. Flags de teste: `--select-all`, `--select-name <prefixo>` (no 30º quadro).
+
+## Processos filhos e o 1º quadro do Play (2026-11-25, bug-fixer)
+- `re_process_start` (platform_win32.c) põe cada filho num job object com `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: ele é
+  criado suspenso, entra no job e só então segue, e morre com o editor (fim, crash, o timeout de um teste). A Prévia em
+  VR (`rivora_game.exe --vr`) aberta pelo `ui_sweep` sobrevivia e segurou a GPU de duas suítes. Teste
+  `child_process_cleanup` (`--vr-preview`, o editor sai, nenhum `rivora_game.exe` do build fica).
+- O 1º quadro do Play: os controles perguntados atrás da tela de abertura (a 1ª consulta do GLFW, ~110 ms, caía nele
+  pelo Start do menu de pausa) e as escolhas do Upscaler num thread (`ups_vendor_warm_async`): o Play de 1284 ms na
+  varredura, depois 188, agora 42-44 ms (teste `play_hitch`, limite 100 ms). Escopos de trace no `editor_play`
+  ("PIE: ...") e no começo do quadro ("Gamepad", "NavMesh", "Background work (done)"...).

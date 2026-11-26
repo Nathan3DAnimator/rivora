@@ -47,6 +47,11 @@ void update_endpoint_urls(const char* releases_repo, const char* latest_url, cha
                           size_t page_cap);
 // GET the latest release. False when it could not be read (no network...): err says why.
 bool update_fetch_latest(const char* url, const char* pattern, UpdateInfo* u, char* err, size_t err_cap);
+// (2026-11-25) <relay>/releases?repo=<owner/repo> (the reports' Worker asks GitHub with its token: no limit per address);
+// update_fetch_latest takes it first, then the API, then the feed. Empty when either is missing
+void update_relay_url(const char* relay, const char* repo, char* out, size_t cap);
+// GitHub's public release feed (releases.atom) into u: the newest release (no beta), its package by the pattern's '*'
+bool update_parse_atom(const char* xml, size_t len, const char* repo, const char* pattern, UpdateInfo* u, char* err, size_t err_cap);
 
 typedef struct UpdateStage {
     char stage_dir[1024]; // where the package was unpacked
@@ -85,4 +90,6 @@ void update_remove_dir(const char* dir);
 // --update-test: reads the configured releases/latest, downloads the package by the same paths the editor uses
 // (API first, web path as fallback, retries on 5xx) into a temp folder and checks its signature. 0 = ok.
 int update_selftest(void);
+// (2026-11-25) offline: a release list (the relay's, the API's) and the release feed (releases.atom) read: 0 ok
+int update_parse_selftest(void);
 

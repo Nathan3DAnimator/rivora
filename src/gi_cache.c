@@ -92,6 +92,20 @@ static struct {
     double last_t;
     bool has_alloc, pending;
     uint32_t since; // frames since the last reallocation
+    // (2026-11-25, item 4) frames with nothing changed in the world (no reallocation, no ECS change: no light, actor or sun
+    // moved): past 4 whole cycles the share a frame drops to a quarter (a settled cache; 5000 still capsules took the whole
+    // budget every frame: 2.3 ms High, 3.8 Epic, 7.9 Cinematic). Any change: the whole share again
+    uint32_t quiet;
+    // (2026-11-25, facility_leak) a local light changed (switched, moved, its color or reach): a short running mean for
+    // 24 cycles (until light_until, in updates: frames) - the 512 updates' mean kept a switched-off lamp's bounce for tens
+    // of seconds (the deep room 1.4-2.0 nits after 8 s, 0.73 after 25: its drop too slow for the drift tests), 4 times
+    // longer once quiet. The sun is left out: a day's cycle moves it every frame
+    uint32_t frames, light_until;
+    // the local lights seen (entity with its generation -> a hash of what lights: place, color x intensity, reach, cone):
+    // a light new to it only enters (a level's lamps as it loads: their texels are new anyway - the short mean then made
+    // the first seconds noisy, spec_leak_epic 17.8 nits); one it knew that changed starts the short mean
+#define CACHE_LIGHTS 4096
+    uint32_t light_key[CACHE_LIGHTS], light_val[CACHE_LIGHTS];
     // the reallocation waiting for gi_cache_record
     bool upload;
     uint32_t nentries, ncopies;
@@ -305,6 +319,27 @@ static const Template* template_make(Template* T, uint32_t shape, uint32_t wi, u
                 state[at] = inside ? 2 : 1;
             }
     }
+    // (2026-11-25, item 19: the sky's light in a closed room of the procedural facility) the atlas's neighbors that are
+    // another face (a crease past ~75 degrees: a box's other side, an island of the UV2 laid beside this one) are walls for
+    // the reads (pad0: a bit per +x, -x, +y, -y; gi_cache.comp and lightmap_bake.comp add them to the measured walls). The
+    // walls' rays run along this face: at an island's edge they leave the box and find nothing, and the bilinear read took
+    // the light of the texel beside it in the atlas - on a 20 cm slab, the sunlit top's on the ceiling under it
+    for (uint32_t y = 0; y < chh; y++)
+        for (uint32_t x = 0; x < cw; x++) {
+            size_t at = (size_t)y * cw + x;
+            if (!state[at]) continue;
+            static const int dx[4] = { 1, -1, 0, 0 }, dy[4] = { 0, 0, 1, -1 };
+            uint32_t mask = 0;
+            for (int k = 0; k < 4; k++) {
+                int nx = (int)x + dx[k], ny = (int)y + dy[k];
+                if (nx < 0 || ny < 0 || nx >= (int)cw || ny >= (int)chh) continue;
+                size_t nb = (size_t)ny * cw + (size_t)nx;
+                if (!state[nb]) continue;
+                const float *a = g[at].lnrm, *b = g[nb].lnrm;
+                if (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] < 0.25f) mask |= 1u << k;
+            }
+            g[at].pad0 = (float)mask;
+        }
     uint32_t count = 0;
     for (size_t i = 0; i < (size_t)cw * chh; i++)
         if (state[i]) g[count++] = g[i];
@@ -681,9 +716,33 @@ static bool needs_change(World* w, uint32_t slot, const float cam[3]) {
     return ch->shape != c.shape || wi > c.wi + 1u || c.wi > wi + 1u || hi > c.hi + 1u || c.hi > hi + 1u;
 }
 
+// A local light into the table of the ones seen: true when it was there with other values (it changed)
+static bool light_seen(Entity e, const CLight* l, const CTransform* t) {
+    if (l->type == LIGHT_DIRECTIONAL || l->type == LIGHT_SKY) return false;
+    float v[12] = { t->location[0], t->location[1], t->location[2], t->rotation[0], t->rotation[1], l->intensity * l->color[0],
+                    l->intensity * l->color[1], l->intensity * l->color[2], l->attenuation_radius, l->outer_cone,
+                    (float)(t->flags & TRANSFORM_HIDDEN), (float)l->type };
+    uint32_t hv = 2166136261u;
+    for (int q = 0; q < 12; q++) {
+        uint32_t b;
+        memcpy(&b, &v[q], 4);
+        hv = (hv ^ b) * 16777619u;
+    }
+    uint32_t key = (uint32_t)e | 1u, at = (key * 2654435761u) % CACHE_LIGHTS; // (linear probing; full: an old one replaced)
+    for (uint32_t p = 0; p < 16u && C.light_key[at] && C.light_key[at] != key; p++) at = (at + 1u) % CACHE_LIGHTS;
+    bool changed = C.light_key[at] == key && C.light_val[at] != hv;
+    if (changed && getenv("REALENGINE_CACHE_LIGHT_LOG"))
+        printf("[RealEngine] Surface cache: light %u changed at update %u (at %.0f %.0f %.0f, intensity %.1f, hidden %u)\n", entity_index(e), C.frames,
+               t->location[0], t->location[1], t->location[2], l->intensity, (unsigned)(t->flags & TRANSFORM_HIDDEN));
+    C.light_key[at] = key, C.light_val[at] = hv;
+    return changed;
+}
+
 void gi_cache_update(VkCtx* vk, World* w, const float camera[3], const GiSettings* s) {
     (void)vk;
-    C.active = C.rt && s->surface_cache;
+    static int no_cache = -1; // (2026-11-25: REALENGINE_NO_SURFACE_CACHE, the comparison: the surface cache off)
+    if (no_cache < 0) no_cache = getenv("REALENGINE_NO_SURFACE_CACHE") != NULL;
+    C.active = C.rt && s->surface_cache && !no_cache;
     if (!C.active) return;
     C.rays = s->cache_rays > 0 ? (uint32_t)s->cache_rays : 8u;
     C.per_frame = s->cache_per_frame > 0 ? (uint32_t)s->cache_per_frame : 32768u;
@@ -711,6 +770,39 @@ void gi_cache_update(VkCtx* vk, World* w, const float camera[3], const GiSetting
         if (k > RE_ECS_CHANGE_RING) need = true;
         for (uint32_t i = 0; i < k && !need; i++) need = needs_change(w, w->changed[(C.changes + i) % RE_ECS_CHANGE_RING], camera);
     }
+    bool changed = need || w->revision != C.rev || w->changes != C.changes;
+    C.frames++;
+    bool relit = false;
+    if (w->revision != C.rev) // (a level loaded or built in bulk: every light registered, a known one that changed counts)
+        for (uint32_t ai = 0; ai < w->archetype_count; ai++) {
+            const EcsArchetype* a = &w->archetypes[ai];
+            if (!a->count || !(a->mask & COMP_BIT(COMP_LIGHT)) || !(a->mask & COMP_BIT(COMP_TRANSFORM))) continue;
+            const Entity* ents = ecs_arch_entities(a);
+            const CLight* cl = ecs_arch_column(a, COMP_LIGHT);
+            const CTransform* ct = ecs_arch_column(a, COMP_TRANSFORM);
+            for (uint32_t i = 0; i < a->count; i++) relit |= light_seen(ents[i], &cl[i], &ct[i]);
+        }
+    if (relit) {
+        uint32_t cycle = C.per_frame ? (C.count + C.per_frame - 1u) / C.per_frame : 1u;
+        C.light_until = C.frames + 24u * cycle + 8u;
+    }
+    if (w->changes != C.changes) { // (a known local light among the changes: the short mean for a while)
+        uint32_t k = w->changes - C.changes;
+        bool lit = false;
+        if (k > RE_ECS_CHANGE_RING) k = RE_ECS_CHANGE_RING;
+        for (uint32_t i = 0; i < k; i++) {
+            uint32_t slot = w->changed[(w->changes - k + i) % RE_ECS_CHANGE_RING];
+            Entity e = slot < RE_ECS_MAX_ENTITIES ? ecs_entity_at(w, slot) : ENTITY_NONE;
+            const CLight* l = e != ENTITY_NONE ? ecs_get(w, e, COMP_LIGHT) : NULL;
+            const CTransform* t = l ? ecs_get(w, e, COMP_TRANSFORM) : NULL;
+            if (l && t && light_seen(e, l, t)) lit = true;
+        }
+        if (lit) {
+            uint32_t cycle = C.per_frame ? (C.count + C.per_frame - 1u) / C.per_frame : 1u;
+            C.light_until = C.frames + 24u * cycle + 8u;
+        }
+    }
+    C.quiet = changed ? 0u : C.quiet + 1u;
     C.rev = w->revision;
     C.changes = w->changes;
     if (need) C.pending = true;
@@ -730,11 +822,25 @@ void gi_cache_fill_frame(GpuFrame* fr, uint32_t frame_index) {
     // (moving fast, above 6 m/s: twice the share: the light of what comes into view settles twice as fast)
     uint32_t share = C.speed > 600.0f ? C.per_frame * 2u : C.per_frame;
     if (C.since < 60) share *= 3u; // (the first second of an allocation: three times the share, the bounces settle at once)
+    { // (2026-11-25, item 4) settled: a quarter of the share (REALENGINE_CACHE_QUIET=0: always the whole)
+        static int qon = -1;
+        if (qon < 0) { const char* e = getenv("REALENGINE_CACHE_QUIET"); qon = !(e && e[0] == '0'); }
+        uint32_t cycle = C.per_frame ? (C.count + C.per_frame - 1u) / C.per_frame : 1u;
+        if (qon && C.since >= 60 && C.quiet > 4u * cycle + 60u && C.frames >= C.light_until)
+            share = share / 4u > 4096u ? share / 4u : (share < 4096u ? share : 4096u);
+    }
+    static int short_on = -1; // (REALENGINE_CACHE_LIGHT_SHORT=0: the 512 updates' mean always, the comparison)
+    if (short_on < 0) { const char* e = getenv("REALENGINE_CACHE_LIGHT_SHORT"); short_on = !(e && e[0] == '0'); }
+    bool lit = short_on && C.frames < C.light_until;
+    C.stats.light_short = lit;
+    C.stats.quiet = C.quiet;
     fr->cache_n = C.count < share || C.since < 4 ? C.count : share;
     fr->cache_first = C.count ? C.cursor % C.count : 0;
     if (C.count) C.cursor = (C.cursor + fr->cache_n) % C.count;
     fr->cache_params[0] = (float)CACHE_ATLAS;
-    fr->cache_params[1] = 512.0f; // the running mean's length (gi_cache.comp): a fraction of a percent an update, no flicker
+    // the running mean's length (gi_cache.comp): a fraction of a percent an update, no flicker; 6 while a local light's
+    // change settles (each update 1/7 new: the old light gone in a few cycles)
+    fr->cache_params[1] = lit ? 6.0f : 512.0f;
     fr->cache_params[2] = fr->cache_params[3] = 0.0f;
 }
 

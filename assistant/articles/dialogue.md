@@ -1,6 +1,6 @@
 id: dialogue
 kind: recipe
-title: Diálogo: conversa com NPC, escolhas, condições e ações | Dialogue: NPC conversations, choices, conditions and actions
+title: Diálogo: conversa com NPC, escolhas, condições e ações | Dialogue: NPC conversations, choices, conditions and actions | Diálogo: conversaciones con NPC, opciones, condiciones y acciones
 keys: dialogo, diálogo, dialogue, conversa, conversation, falar, talk, npc, fala, falas, line, lines, legenda, subtitle, escolha, escolhas, choice, choices, opcao, opção, option, options, resposta, reply, arvore de dialogo, dialogue tree, mercador, merchant, loja, shop, quest, missao, missão, condicao, condição, condition, acao, ação, action, dialogue speaker, start dialogue, choose option, skip line, end dialogue, is in dialogue, set dialogue language, on dialogue line, on dialogue choice, on dialogue end, wbp_dialogue, letra a letra, typewriter, texto aparecendo, camera de conversa, conversation camera, idioma do dialogo, espanhol, spanish, traducao, translation, salto, jump, rdlg
 --- pt
 Um **Diálogo** é um asset (Content Browser > Adicionar > **Diálogo**; o **Exemplo do Mercador** já vem montado) com um grafo de nós: **Início**, **Fala** (quem fala — vazio é o NPC, `Player` é o jogador —, o texto em inglês, português e espanhol, voz, animação ou Montage, esperar o jogador ou uma duração), **Escolha** (mostra as **Opções** ligadas a ela), **Opção** (o que o jogador diz; **Escolher Só Uma Vez** some depois de escolhida), **Saltar para o Nó** e **Fim**.
@@ -43,6 +43,35 @@ A **Dialogue** is an asset (Content Browser > Add > **Dialogue**; the **Merchant
 
 ```diagram steps
 Start Dialogue on the NPC | a Line appears letter by letter | Choice: the Options that pass | Option: actions (item, tag, event) | End: Event On Dialogue End
+```
+```blueprint
+Event Key E -> Start Dialogue ( Target = NPC, Dialogue = "DLG_Merchant" )
+Event On Dialogue Choice ( Speaker, Option, Text ) -> Print String ( Text )
+Event On Dialogue End ( Speaker, Dialogue ) -> Add Gameplay Tag ( Tag = "Quest.Talked" )
+```
+```real
+class Merchant extends Actor
+    event OnTalk()
+        StartDialogue("DLG_Merchant")
+
+    event OnDialogueChoice(speaker: Actor, option: int, text: string)
+        print("chose: " + text)
+
+    event OnDialogueEnd(speaker: Actor, dialogue: string)
+        print("end of " + dialogue)
+```
+--- es
+Un **Dialogue** es un asset (Explorador de contenidos > Añadir > **Dialogue**; el **Merchant Example** viene listo) que contiene un grafo de nodos: **Start**, **Line** (quién habla —vacío es el NPC, `Player` es el jugador—, el texto en inglés, portugués y español, una voz, una animación o Montage, esperar al jugador o una duración), **Choice** (muestra las **Options** conectadas a él), **Option** (lo que dice el jugador; **Choose Only Once** desaparece una vez elegida), **Jump to Node** y **End**.
+- Todo nodo puede llevar **Conditions** (Has Gameplay Tag, Has Item, Variable, Health, Said Before; del jugador o del hablante) y **Actions** que se ejecutan al pasar por él (Give Item, Take Item, Add / Remove Gameplay Tag, Call Custom Event con entradas, Set Variable, Open Shop).
+- La conversación sigue el **primer enlace cuyo nodo pasa** sus condiciones; una Choice muestra **solo las Options que pasan** (una condición oculta una opción). Una Choice sin texto mantiene la última línea (la pregunta) en pantalla.
+- El editor tiene una **Preview**: ejecuta la conversación allí mismo, con un jugador inventado (tags, ítems, salud) y el idioma elegido.
+- En el NPC: **Detalles > Añadir > Dialogue Speaker**: el Dialogue, el nombre mostrado, pausar el juego, mirar al jugador y la **cámara de conversación**.
+- Nodos (categoría **Dialogue**): **Start Dialogue** (Target: el NPC), **Choose Option**, **Skip Line**, **End Dialogue**, **Is In Dialogue**, **Set Dialogue Language** ("es", "pt", "en"); eventos **Event On Dialogue Line**, **On Dialogue Choice**, **On Dialogue End**.
+- La pantalla lista es **WBP_Dialogue** (Content/UI): el nombre, el texto letra a letra, las opciones con el ratón, el teclado (flechas + Enter) y el mando (cruceta + A).
+- **Save Game to Slot** guarda lo que ya se dijo y se eligió.
+
+```diagram steps
+Start Dialogue en el NPC | una Line aparece letra a letra | Choice: las Options que pasan | Option: acciones (ítem, tag, evento) | End: Event On Dialogue End
 ```
 ```blueprint
 Event Key E -> Start Dialogue ( Target = NPC, Dialogue = "DLG_Merchant" )

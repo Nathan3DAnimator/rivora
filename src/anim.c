@@ -2937,6 +2937,10 @@ void anim_update(World* w, float dt, bool playing) {
     // (2026-11-10) the Stylized style's own animation frame rate (Project Settings: 12 = stop-motion, "on twos"): a
     // pose every 1/fps seconds, held between (the actors still move smoothly; their bodies step)
     int step_fps = render_style() == RENDER_STYLE_STYLIZED ? project()->stylized_anim_fps : 0;
+    static int uro_on = -1; // (2026-11-24, item 4) the update rate by distance
+    if (uro_on < 0) uro_on = getenv("REALENGINE_NO_URO") ? 0 : 1;
+    float cam[3];
+    bool have_cam = render_last_camera(cam);
     float step_dt = step_fps > 0 ? 1.0f / (float)step_fps : 0.0f;
     for (uint32_t i = 0; i < A.ninst; i++) {
         AnimInst* in = &insts()[i];
@@ -2947,6 +2951,23 @@ void anim_update(World* w, float dt, bool playing) {
         if (step_dt > 0.0f && in->acc < step_dt) continue;
         // what the camera may see every frame; the rest every 4th (its parts' relevance: the renderer's)
         uint32_t every = (!in->nparts && !in->nskins) || ecs_relevant(w, in->nparts ? in->parts[0] : in->skins[0]) ? 1u : 4u;
+        // (2026-11-24, item 4: Unreal's Update Rate Optimizations) and by distance: 15 m every frame, then every 2nd, 4th,
+        // 8th (the pose's time adds up: it moves as fast, in steps). REALENGINE_NO_URO=1: off
+        // (2026-11-25: not a Character's: the player's or an AI's pose drives its traversal, its IK, its montages' hits every
+        // frame; a 2-frame step left the Climb's hands 19 cm off the ledge in the traversal test)
+        bool character = ecs_get(w, in->e, COMP_CHARACTER) != NULL;
+        if (!character) { // (a Character Blueprint's Skeletal Mesh component: its owner is the Character)
+            const CAttach* ca = ecs_get(w, in->e, COMP_ATTACH);
+            character = ca && ca->owner && ecs_alive(w, (Entity)ca->owner) && ecs_get(w, (Entity)ca->owner, COMP_CHARACTER);
+        }
+        if (uro_on && have_cam && every < 8u && !character) {
+            const CTransform* et = ecs_get(w, in->e, COMP_TRANSFORM);
+            if (et) {
+                float dx = et->location[0] - cam[0], dy = et->location[1] - cam[1], dz = et->location[2] - cam[2], d2 = dx * dx + dy * dy + dz * dz;
+                uint32_t by = d2 < 1500.0f * 1500.0f ? 1u : d2 < 4000.0f * 4000.0f ? 2u : d2 < 8000.0f * 8000.0f ? 4u : 8u;
+                if (by > every) every = by;
+            }
+        }
         if ((A.frame + i) % every) continue;
         step_logic(w, in, in->acc);
         in->pose_dt = in->acc;
@@ -2980,7 +3001,13 @@ void anim_update(World* w, float dt, bool playing) {
         AnimInst* in = &insts()[i];
         A.stats.parts += in->nparts;
         if (in->update && in->dirty)
-            for (uint32_t k = 0; k < in->nskins; k++) ecs_touch(w, in->skins[k]);
+            for (uint32_t k = 0; k < in->nskins; k++) {
+                // (2026-11-24, item 4) a Movable skin neither: the dynamic set compares its palette's version every frame
+                // (render.c skin_still); 2 touches a character overflowed the log of 4096 at ~2048 animated characters
+                const CTransform* st = ecs_get(w, in->skins[k], COMP_TRANSFORM);
+                if (st && (st->flags & TRANSFORM_MOBILITY_MASK) == MOBILITY_MOVABLE) continue;
+                ecs_touch(w, in->skins[k]);
+            }
         if (!in->update || !in->dirty || !in->nparts) continue;
         const CTransform* pt = ecs_get(w, in->parts[0], COMP_TRANSFORM);
         if (pt && (pt->flags & TRANSFORM_MOBILITY_MASK) == MOBILITY_MOVABLE) continue;

@@ -165,6 +165,7 @@ void ui_set_enabled(Entity e, const char* widget, bool enabled);
 void ui_set_value(Entity e, const char* widget, float value); // a Slider's / Spin Box's value, a Check Box's state, a Combo Box's index, a Progress Bar's percent
 float ui_get_value(Entity e, const char* widget);
 const char* ui_get_text(Entity e, const char* widget);        // a Text's / Editable Text's text, a Combo Box's selected option
+const char* ui_text_shown(Entity e, const char* widget);     // (2026-11-24) what it shows now: localized (loc.h) or as it is
 void ui_play_anim(Entity e, const char* anim, int loops, float speed, bool reverse); // loops 0: forever
 void ui_stop_anim(Entity e, const char* anim);
 void ui_show_mouse(bool show);
@@ -224,6 +225,7 @@ bool ui_capturing_key(void);
 void ui_test_nav(int dir);
 void ui_test_key(const char* key);
 bool ui_test_shown(const char* widget); // a widget of a shown tree (and itself not collapsed)
+int ui_test_buttons(char (*names)[64], int cap); // (item 21, the UI sweep) the buttons shown now, by name
 // The player changes the shown widget bound to a setting: a Slider's / Spin Box's value, a Check Box (value != 0), a
 // Combo Box's choice (value: its index), a Key Selector's key (text); its event sent as the mouse's would (false: none)
 bool ui_test_bound(World* w, const char* setting, float value, const char* text);

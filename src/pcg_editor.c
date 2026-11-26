@@ -12,6 +12,7 @@
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #include <cimgui.h>
 
+#include "editor_docs.h"
 #include "asset_picker.h"
 #include "blueprint.h"
 #include "content.h"
@@ -158,7 +159,7 @@ static void canvas(float w, float h, const uint32_t* pts, const float* ms) {
         }
         float tx = orbit ? graph_card_title_x(a, title, g_fam_icon[ni->family], z) : a.x + 8 * z;
         ImDrawList_AddText_Vec2(dl, (ImVec2){ tx, a.y + 5 * z }, TH(TK_NODE_TITLE), TR(ni->name), NULL);
-        if (n->flags & PCGNF_DEBUG) ImDrawList_AddText_Vec2(dl, (ImVec2){ b.x - 18 * z, a.y + 5 * z }, TH(TK_CYAN_L), "D", NULL);
+        if (n->flags & PCGNF_DEBUG) ImDrawList_AddText_Vec2(dl, (ImVec2){ b.x - 18 * z, a.y + 5 * z }, TH(TK_CYAN_L), "D", NULL); // i18n: none (a letter)
         if (n->flags & PCGNF_DISABLED) ImDrawList_AddLine(dl, a, b, THA(TK_RED, 160), 2.0f * z);
         for (int p = 0; p < ni->nin; p++) {
             ImVec2 c;
@@ -280,7 +281,7 @@ static void canvas(float w, float h, const uint32_t* pts, const float* ms) {
     }
     ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + 10, o.y + sz.y - igGetFontSize() - 6 }, TH(TK_N12),
                             TR("Drag from an output to an input to wire (on nothing: a new node) | right click: add / node menu | D: show its points | right or middle drag: pan | wheel: zoom"), NULL);
-    ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + 12, o.y + 8 }, TH(TK_N13), "PCG", NULL);
+    ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + 12, o.y + 8 }, TH(TK_N13), "PCG", NULL); // i18n: none (the PCG's name)
     igEndChild();
 }
 
@@ -352,7 +353,7 @@ static bool prop_ui(PcgNode* n, const PcgProp* p) {
         int b = n->bind[p->slot];
         bool bound = b && b <= (int)g->nparams;
         if (bound) igPushStyleColor_Vec4(ImGuiCol_Button, THV(TK_ACCENT));
-        if (igButton("P##bind", (ImVec2){ igGetFrameHeight(), 0 })) igOpenPopup_Str("bind", 0);
+        if (igButton("P##bind", (ImVec2){ igGetFrameHeight(), 0 })) igOpenPopup_Str("bind", 0); // i18n: none (a letter)
         if (bound) igPopStyleColor(1);
         ui_tip_last_item("Bind to Parameter");
         if (igBeginPopup("bind", 0)) {
@@ -382,7 +383,7 @@ static void details(const uint32_t* pts, const float* ms) {
         if (igCheckbox(TR("Debug Points"), &dbg)) n->flags ^= PCGNF_DEBUG, ch = true;
         if (igBeginTable("pcg_props", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) {
             igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 8.0f, 0);
-            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+            igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
             int entry = 0;
             for (int i = 0; i < ni->nprops; i++) {
                 const PcgProp* p = &ni->props[i];
@@ -530,7 +531,7 @@ bool pcg_details(World* w, Entity e) {
     bool ch = false;
     if (!igBeginTable("sec_pcg", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable, (ImVec2){ 0, 0 }, 0)) return false;
     igTableSetupColumn("name", ImGuiTableColumnFlags_WidthFixed, igGetFontSize() * 7.5f, 0);
-    igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0);
+    igTableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f, 0); // i18n: none (a column id)
     row_label("Graph");
     const char* vp = pcg_graph_vpath(c->pcg.graph);
     const PcgGraph* g = pcg_graph_get(c->pcg.graph);
@@ -649,4 +650,19 @@ void pcg_draw_debug(ImDrawList* dl, const float pos[3], const float fwd[3], cons
         }
     }
     ImDrawList_PopClipRect(dl);
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+static const char* pcg_editor_docs_base(const char* vpath) { const char* b = strrchr(vpath, '/'); return b ? b + 1 : vpath; }
+int pcg_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    if (!E.open) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) return E.open = false, E.unsaved = false, 1;
+    if (!E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, pcg_editor_docs_base(E.vpath)), 1;
+    bool ok = pcg_graph_save(E.vpath, &E.g);
+    if (ok) E.unsaved = false;
+    return !ok;
 }

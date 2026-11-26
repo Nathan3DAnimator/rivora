@@ -81,3 +81,10 @@ não. `pause_options_reload` (outro processo): as mesmas opções lidas ao abrir
   com contagem regressiva; sem detecção de conflito de teclas (duas ações na mesma tecla).
 - O Key Selector não grava eixos (WASD de IA_Move vai tecla por tecla; o analógico não se remapeia).
 - Idiomas: os que o `i18n` tem (inglês, português).
+
+## Apply e o preset do view no Play (2026-11-25, bug-fixer)
+- No Play o preset salvo das Game User Settings não é posto no view ao começar (o editor segue com o seu). O Apply
+  chamava `apply_video` sempre, e o `pie_apply_video` trocava o view para o preset salvo mesmo sem nada mudado nas
+  Opções: com o editor em Cinemática, cada Apply refazia os pipelines de MSAA (um quadro de 403 ms na varredura).
+  Agora só troca quando o preset das configurações mudou desde o último aplicado (`g_pie_gus_scalability`, editor.c).
+  Teste `pause_apply_cinematic` (e o passo novo do `pause_options`: Apply sem mudar nada, o preset fica).

@@ -1,6 +1,6 @@
 id: place-actors
 kind: howto
-title: Colocar atores no nível: buscar, arrastar e categorias | Place actors in the level: search, drag and categories
+title: Colocar atores no nível: buscar, arrastar e categorias | Place actors in the level: search, drag and categories | Colocar actores en el nivel: buscar, arrastrar y categorías
 keys: adicionar ator, colocar, cubo, esfera, forma basica, place actors, add actor, add, quick add, cube, sphere, plane, camera, player start, prototipo, caixa, escada, rampa, spawnar, spawn, pesquisar, buscar, search, procurar item, arrastar, drag, soltar no viewport, categorias, submenu, luz, volume, particula, veiculo, recentes, recently placed
 --- pt
 ```diagram steps
@@ -30,3 +30,17 @@ Add (toolbar) / Actor > Add / the Outliner's + / the Place Actors panel | Type t
 - You can also **drag** an asset from the Content Browser into the viewport.
 
 Try it now: [Add a cube](add:Cube) [Add stairs](add:Stairs)
+--- es
+```diagram steps
+Añadir (barra de herramientas) / Actor > Añadir / el + del Organizador / el panel Colocar actores | Escribe el nombre: solo las coincidencias, de todas las categorías | O abre la categoría (submenús; las plantillas en un submenú propio) | Clic: a 4 m frente a la cámara | Arrastrar: cae donde el mouse apunta en el suelo
+```
+1. Abre **Ventana > Colocar actores**, el **+ Añadir** de la barra de herramientas o el menú **Actor > Añadir**. [Muéstrame dónde](show:Actor>Add)
+2. Escribe parte del nombre (en portugués o en inglés) en la búsqueda, con el foco al abrirse, o abre una categoría: Básicos, Luces, Formas, Efectos visuales, Volúmenes, Gameplay, Audio, Navegación e IA, Vehículos y Física, Mundo, Prototipado, Cinemática.
+3. **Clic** para ponerlo a 4 m frente a la cámara, o **arrástralo** a la ventana gráfica: cae donde el mouse apunta en el suelo (en una cuadrícula de 10 cm).
+
+- Los cuatro lugares comparten **un solo catálogo**: cada clase aparece una vez, en una categoría, como en Unreal 5.
+- Las **plantillas** (Particle System, Vehicle, Cloth, Procedural World, Sky Preset, Interactables) quedan en un **submenú** dentro de su categoría.
+- **Colocados recientemente:** los últimos 8 aparecen arriba del menú y en la primera pestaña del panel.
+- También puedes **arrastrar** un asset del Explorador de contenidos a la ventana gráfica.
+
+Pruébalo ahora: [Añadir un cubo](add:Cube) [Añadir una escalera](add:Stairs)

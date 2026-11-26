@@ -152,17 +152,20 @@ void toon_pack(const MatToon* t, uint32_t ramp_tex, float o[12][4]) {
         o[3][k] = fmaxf(t->rim_color[k], 0.0f) * fmaxf(t->rim_strength, 0.0f);
         o[4][k] = clampf(t->hatch_color[k], 0.0f, 1.0f);
     }
-    o[0][3] = (float)(t->bands < 0 ? 0 : t->bands > 8 ? 8 : t->bands);
+    // (2026-11-25, item 20: a number typed past the slider reaches the GPU) the bands: toon.glsl only counts with them;
+    // 255 a safe top (the Details' 0..8 is the slider's). Hatch Spacing only kept off 0 (a division), the ambient off
+    // the negatives
+    o[0][3] = (float)(t->bands < 0 ? 0 : t->bands > TOON_BANDS_MAX ? TOON_BANDS_MAX : t->bands);
     o[1][3] = clampf(t->softness, 0.0f, 1.0f);
     o[2][3] = clampf(t->spec_size, 0.0f, 1.0f);
     o[3][3] = clampf(t->rim_width, 0.0f, 1.0f);
     o[4][3] = clampf(t->hatch_strength, 0.0f, 1.0f);
-    o[5][0] = clampf(t->hatch_scale, 2.0f, 64.0f);
+    o[5][0] = fmaxf(t->hatch_scale, 0.5f);
     o[5][1] = t->hatch_angle * 0.017453292f;
     o[5][2] = clampf(t->hatch_threshold, 0.0f, 1.0f);
     o[5][3] = clampf(t->spec_hardness, 0.0f, 1.0f);
     o[6][0] = clampf(t->rim_softness, 0.0f, 1.0f);
-    o[6][1] = clampf(t->ambient, 0.0f, 4.0f);
+    o[6][1] = fmaxf(t->ambient, 0.0f);
     o[6][2] = (float)ramp_tex; // (a float value, as e6's slot: small integers' bits are denormals)
     int n = t->nstops < 1 ? 1 : t->nstops > TOON_STOPS ? TOON_STOPS : t->nstops;
     o[6][3] = (float)n;

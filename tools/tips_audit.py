@@ -50,10 +50,57 @@ def key_of(label):
         vis = ''  # (a symbol, a number: its id names it)
     return (vis or None), (ident or None)
 
+# (2026-11-25, the tester's block of items 3/5) two tooltips in a row: the second goes on the same item as the first (a
+# widget put between a control and its tooltip leaves that control none and gives the new one two: Emission Intensity
+# and Emissive Shadows in mat_editor.c). Only blank lines and comments between the two calls
+TIPCALL = re.compile(r'igSetItemTooltip\(')
+def tooltip_end(text, start):
+    """The index after the ';' that ends the call starting at start (strings and parentheses skipped); -1 none."""
+    depth, i, n = 0, start, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == '\\' else 1
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+        elif c == ';' and depth == 0:
+            return i + 1
+        i += 1
+    return -1
+
+def double_tooltips(root):
+    found = []
+    for f in sorted(os.listdir(root)):
+        if not (f.endswith('.c') or f.endswith('.inc')) or f.startswith('ui_tips_table'):
+            continue
+        text = open(os.path.join(root, f), encoding='utf-8', errors='replace').read()
+        for m in TIPCALL.finditer(text):
+            end = tooltip_end(text, m.start())
+            if end < 0:
+                continue
+            rest = text[end:]
+            gap = re.match(r'(?:\s|//[^\n]*)*', rest).group(0)
+            if rest[len(gap):].startswith('igSetItemTooltip('):
+                line = text.count('\n', 0, end + len(gap)) + 1
+                if 'tips: double' not in text.split('\n')[line - 1]:
+                    found.append('%s:%d' % (f, line))
+    return found
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     root = args[0] if args else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src')
     tips = tip_labels(root)
+    doubles = double_tooltips(root)
+    if doubles:
+        print('FAIL: %d tooltip(s) right after another tooltip: the item before has two, the control before it none '
+              '(a widget put between a control and its igSetItemTooltip):' % len(doubles))
+        for d in doubles:
+            print('  ' + d)
+        return 1
     missing, total, by_row = {}, 0, 0
     for f in sorted(os.listdir(root)):
         if not f.endswith('.c') or f.startswith('ui_tips_table') or f in GAME_UI:

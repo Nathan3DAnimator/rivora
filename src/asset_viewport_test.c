@@ -7,6 +7,7 @@
 #include "asset_viewport.h"
 
 #include "theme.h"
+#include "i18n.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +24,8 @@
 #include "editor.h"
 #include "ikrig.h"
 #include "ikrig_editor.h"
+#include "mesh_build.h"
+#include "tex_settings.h"
 #include "mat_editor.h"
 #include "particle_editor.h"
 #include "platform_files.h"
@@ -43,7 +46,7 @@ static const unsigned g_case_keys[C_COUNT] = { BP_PV_KEY_STATIC_MESH, BP_PV_KEY_
                                                BP_PV_KEY_BLEND_SPACE, BP_PV_KEY_ABP, BP_PV_KEY_IKRIG, BP_PV_KEY_IKRIG, BP_PV_KEY_MATERIAL,
                                                BP_PV_KEY_PARTICLES, BP_PV_KEY_VEHICLE, BP_PV_KEY_CLOTH };
 
-enum { S_COST1, S_COST3, S_OPEN, S_SETTLE, S_MODE, S_READ, S_SOCKET, S_DONE };
+enum { S_COST1, S_COST3, S_OPEN, S_SETTLE, S_MODE, S_READ, S_SOCKET, S_OPTIONS, S_OPT_VIEW, S_FIND, S_SOUND, S_DONE };
 
 static struct {
     bool running, ok;
@@ -56,15 +59,23 @@ static struct {
     uint8_t* sheet; // C_COUNT rows x PREVIEW_MODE_COUNT columns of thumbnails (RGB)
     double lit_frac[C_COUNT];
     char dir[600];  // the test's folder on disk (/Content/Q7Test)
+    int fcase;      // (S_FIND) the viewer whose Details search is tried
 } T;
 
 void avp_test_start(void) {
     memset(&T, 0, sizeof T);
     T.running = true, T.ok = true;
+    snprintf(T.dir, sizeof T.dir, "%s/Q7Test", content_root());
+    // (2026-11-25, the tester's block of item 8) REALENGINE_AVP_ONLY=sound: only the Sound Wave --open-asset opened (its
+    // Details' sections), none of the GPU's stages (the asset_open_sound test)
+    const char* only = getenv("REALENGINE_AVP_ONLY");
+    if (only && !strcmp(only, "sound")) {
+        T.state = S_SOUND;
+        return;
+    }
     T.state = S_COST1; // (first: the cost of one editor, then three, before the others open windows of their own)
     anim_editor_open(MANNEQUIN);
     T.sheet = calloc((size_t)THUMB_W * PREVIEW_MODE_COUNT * THUMB_H * C_COUNT * 3, 1);
-    snprintf(T.dir, sizeof T.dir, "%s/Q7Test", content_root());
     re_make_dirs(T.dir);
 }
 bool avp_test_running(void) { return T.running; }
@@ -253,13 +264,120 @@ static void socket_test(void) {
     m->dirty = dirty;
 }
 
+// (2026-11-24, item 8) The viewers' options change the asset for real: a bumpy grid of 8192 triangles made in Q7Test,
+// its LOD Settings (3 LODs at 50% and 20%: their triangles read back from its file; then 1 LOD), its Build Scale (x2:
+// its bounds doubled), Recompute Normals; a texture's Compression and LOD Bias (its settings read back). Then the mesh
+// and the texture shown in the viewer with their new sections (S_OPT_VIEW: drawn a few frames)
+#define OPT_MESH "/Content/Q7Test/SM_Q8Lod.rmesh"
+#define OPT_TEX "/Content/Q7Test/T_Q8Tex.bmp"
+static void options_test(void) {
+    enum { N = 64 };
+    GpuVertex* v = calloc((N + 1) * (N + 1), sizeof(GpuVertex));
+    uint32_t* idx = malloc(sizeof(uint32_t) * N * N * 6);
+    if (!v || !idx) {
+        FAIL("options: out of memory");
+        free(v), free(idx);
+        return;
+    }
+    for (int y = 0; y <= N; y++)
+        for (int x = 0; x <= N; x++) { // (100 cm a side, a bumpy surface: the simplification has something to keep)
+            GpuVertex* g = &v[y * (N + 1) + x];
+            g->pos[0] = x * 100.0f / N - 50.0f, g->pos[1] = y * 100.0f / N - 50.0f, g->pos[2] = 6.0f * sinf(x * 0.31f) * cosf(y * 0.23f);
+            g->uv[0] = (float)x / N, g->uv[1] = (float)y / N, g->uv2[0] = g->uv2[1] = -1.0f;
+        }
+    uint32_t ni = 0;
+    for (int y = 0; y < N; y++)
+        for (int x = 0; x < N; x++) {
+            uint32_t a = y * (N + 1) + x, b = a + 1, c = a + N + 1, d = c + 1;
+            idx[ni++] = a, idx[ni++] = b, idx[ni++] = d, idx[ni++] = a, idx[ni++] = d, idx[ni++] = c;
+        }
+    MeshBuilt mb;
+    char disk[800];
+    snprintf(disk, sizeof disk, "%s/SM_Q8Lod.rmesh", T.dir);
+    bool made = mesh_build_indexed(v, (N + 1) * (N + 1), idx, ni, false, false, &mb) && rmesh_write(disk, &mb);
+    mesh_built_free(&mb);
+    free(v), free(idx);
+    if (!made) {
+        FAIL("options: the test mesh was not written");
+        return;
+    }
+    char msg[240];
+    unsigned tris[4];
+    AssetMeshBuild b = { 3, { 100.0f, 50.0f, 20.0f, 10.0f }, 64, 60.0f, 1.0f };
+    bool ok = asset_mesh_rebuild(OPT_MESH, &b, false, false, msg, sizeof msg);
+    int n = asset_mesh_lod_info(OPT_MESH, tris);
+    double p1 = tris[0] ? 100.0 * tris[1] / tris[0] : 0.0, p2 = tris[0] ? 100.0 * tris[2] / tris[0] : 0.0;
+    printf("[RealEngine] Asset viewport: LOD Settings 3 LODs at 50%% / 20%%: %d LODs, %u / %u / %u triangles (%.0f%% / %.0f%%): %s\n", n, tris[0],
+           tris[1], tris[2], p1, p2, msg);
+    if (!ok || n != 3 || tris[0] != 8192 || p1 < 40.0 || p1 > 55.0 || p2 < 14.0 || p2 > 24.0) FAIL("LOD Settings: %d LODs, %.0f%% / %.0f%%", n, p1, p2);
+    b.lods = 1;
+    ok = asset_mesh_rebuild(OPT_MESH, &b, false, false, msg, sizeof msg);
+    n = asset_mesh_lod_info(OPT_MESH, tris);
+    if (!ok || n != 1 || tris[0] != 8192) FAIL("LOD Settings with 1 LOD: %d LODs, %u triangles", n, tris[0]);
+    float mn0[3], mx0[3], mn1[3], mx1[3];
+    render_mesh_bounds(render_mesh_id_of(OPT_MESH), mn0, mx0);
+    b.scale = 2.0f;
+    ok = asset_mesh_rebuild(OPT_MESH, &b, true, true, msg, sizeof msg); // (Build: scale x2 and the normals made again)
+    render_mesh_bounds(render_mesh_id_of(OPT_MESH), mn1, mx1);
+    float w0 = mx0[0] - mn0[0], w1 = mx1[0] - mn1[0];
+    printf("[RealEngine] Asset viewport: Build Scale x2 and Recompute Normals: %.0f -> %.0f cm wide\n", w0, w1);
+    if (!ok || fabsf(w1 - 2.0f * w0) > 1.0f) FAIL("Build Scale: %.1f -> %.1f cm", w0, w1);
+    // the texture: Compression and LOD Bias
+    uint8_t px[64 * 64 * 3];
+    for (int i = 0; i < 64 * 64 * 3; i++) px[i] = (uint8_t)(i * 7);
+    char tp[800];
+    snprintf(tp, sizeof tp, "%s/T_Q8Tex.bmp", T.dir);
+    FILE* f = fopen(tp, "wb");
+    if (f) {
+        uint8_t h[54] = { 'B', 'M' };
+        uint32_t size = 54 + sizeof px;
+        memcpy(h + 2, &size, 4), h[10] = 54, h[14] = 40, h[18] = 64, h[22] = 64, h[26] = 1, h[28] = 24;
+        fwrite(h, 1, 54, f), fwrite(px, 1, sizeof px, f), fclose(f);
+    }
+    TexSettings s0, s1, s2;
+    tex_settings_get(OPT_TEX, &s0);
+    bool t1 = asset_tex_set(OPT_TEX, TEXZ_NONE, 2);
+    tex_settings_get(OPT_TEX, &s1);
+    bool t2 = asset_tex_set(OPT_TEX, TEXZ_BC7, 0);
+    tex_settings_get(OPT_TEX, &s2);
+    printf("[RealEngine] Asset viewport: texture %s -> %s, LOD Bias 2: max size %d (64 x 64), back to %s %d\n", s0.compression == TEXZ_NONE ? "Uncompressed" : "BC7",
+           s1.compression == TEXZ_NONE ? "Uncompressed" : "BC7", s1.max_size, s2.compression == TEXZ_NONE ? "Uncompressed" : "BC7", s2.max_size);
+    if (!t1 || !t2 || s1.compression != TEXZ_NONE || s1.max_size != 16 || s2.compression != TEXZ_BC7 || s2.max_size != 0) FAIL("the texture's Compression / LOD Bias");
+}
+
+// (2026-11-25, the tester's block of item 8) The Details' search ("Search Details"): typed in a viewer, the section that
+// doesn't match hidden and the one that does shown, open; cleared, both shown again. A Static Mesh, a texture, a
+// Skeletal Mesh (the sections' titles untranslated: av_test_sections)
+typedef struct FindCase { const char* name; const char* vpath; const char* find; const char* hide; const char* show; } FindCase;
+static const FindCase g_find[] = {
+    { "Static Mesh", OPT_MESH, "LOD", "Material Slots", "LOD Settings" },
+    { "Texture", OPT_TEX, "compression", "Channels", "Texture Settings" },
+    { "Skeletal Mesh", MANNEQUIN, "physics", "Asset Details", "Physics and IK" },
+};
+static const AvSectionSeen* seen_find(const AvSectionSeen* s, int n, const char* title) {
+    for (int i = 0; i < n; i++)
+        if (!strcmp(s[i].title, title)) return &s[i];
+    return NULL;
+}
+static void find_check(const FindCase* fc, bool searching) {
+    AvSectionSeen s[AV_SEEN_MAX * 2];
+    int n = av_test_sections(s, AV_SEEN_MAX * 2);
+    const AvSectionSeen *h = seen_find(s, n, fc->hide), *w = seen_find(s, n, fc->show);
+    bool hshown = h && h->shown, wshown = w && w->shown, wopen = w && w->open;
+    printf("[RealEngine] Asset viewport: %s, search \"%s\": \"%s\" %s, \"%s\" %s%s (%d sections drawn)\n", fc->name, searching ? fc->find : "",
+           TR(fc->hide), hshown ? "shown" : "hidden", TR(fc->show), wshown ? "shown" : "hidden", wopen ? ", open" : "", n);
+    if (searching && (hshown || !wshown || !wopen))
+        FAIL("%s: the search \"%s\" should hide \"%s\" and show \"%s\" open", fc->name, fc->find, TR(fc->hide), TR(fc->show));
+    if (!searching && (!hshown || !wshown)) FAIL("%s: the search cleared should show \"%s\" and \"%s\" again", fc->name, TR(fc->hide), TR(fc->show));
+}
+
 // Called each editor frame after the UI: true when it finished (*ok: passed)
 bool avp_test_frame(Editor* ed, bool* ok) {
     if (!T.running) return false;
     switch (T.state) {
     case S_OPEN:
         if (T.cas >= C_COUNT) {
-            T.state = S_DONE;
+            T.state = S_OPTIONS;
             break;
         }
         if (T.cas != C_SKELETON && T.cas != C_ANIM) close_editors(ed); // (the persona's window kept: its tabs switch it)
@@ -364,6 +482,61 @@ bool avp_test_frame(Editor* ed, bool* ok) {
                 T.state = S_OPEN, T.wait = 0;
             }
         }
+        break;
+    }
+    case S_OPTIONS: // (the asset's options, then each viewer drawn with its sections: the mesh, then the texture)
+        close_editors(ed);
+        options_test();
+        asset_viewer_open(OPT_MESH);
+        T.state = S_OPT_VIEW, T.wait = 0;
+        break;
+    case S_OPT_VIEW:
+        if (++T.wait == 20) asset_viewer_open(OPT_TEX);
+        if (T.wait == 40) {
+            AssetViewerState vs = asset_viewer_state();
+            if (!vs.open || vs.src_w != 64) FAIL("the texture viewer didn't open the test texture (%u px)", vs.src_w);
+            T.state = S_FIND, T.wait = 0, T.fcase = 0;
+        }
+        break;
+    case S_FIND: { // (2026-11-25) "Search Details": a Static Mesh, a texture, a Skeletal Mesh
+        const FindCase* fc = &g_find[T.fcase];
+        T.wait++;
+        if (T.wait == 1) {
+            close_editors(ed);
+            if (T.fcase == 2) { // (on its Model tab: the mesh's Details)
+                anim_editor_open(fc->vpath);
+                if (T.mesh) anim_persona_switch(T.mesh, AVP_TAB_MODEL);
+            } else
+                asset_viewer_open(fc->vpath);
+        } else if (T.wait == 30) av_test_find(fc->find);
+        else if (T.wait == 36) {
+            find_check(fc, true);
+            av_test_find("");
+        } else if (T.wait == 42) {
+            find_check(fc, false);
+            T.wait = 0;
+            if (++T.fcase >= (int)(sizeof g_find / sizeof g_find[0])) T.state = S_DONE;
+        }
+        break;
+    }
+    case S_SOUND: { // (2026-11-25) the Sound Wave --open-asset opened: its editor's Details (Info, Sound, Settings)
+        if (++T.wait < 30) break;
+        AvSectionSeen s[AV_SEEN_MAX * 2];
+        int n = av_test_sections(s, AV_SEEN_MAX * 2);
+        static const char* const want[3] = { "Info", "Sound", "Settings" };
+        char got[400] = "";
+        for (int i = 0; i < n; i++) {
+            size_t l = strlen(got);
+            snprintf(got + l, sizeof got - l, "%s%s%s", l ? ", " : "", TR(s[i].title), s[i].open ? "" : " (closed)");
+        }
+        int found = 0;
+        for (int k = 0; k < 3; k++) {
+            const AvSectionSeen* q = seen_find(s, n, want[k]);
+            found += q && q->shown && q->open;
+        }
+        printf("[RealEngine] Asset viewport: the Sound Wave opened by --open-asset: Details sections %s\n", n ? got : "(none: no editor's Details drawn)");
+        if (found != 3) FAIL("the Sound Wave's editor didn't open with Info, Sound and Settings (%d of 3)", found);
+        T.state = S_DONE;
         break;
     }
     case S_DONE: {

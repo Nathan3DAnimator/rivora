@@ -1,6 +1,6 @@
 id: advanced-sessions
 kind: recipe
-title: Sessões avançadas: senha, filtros, banir | Advanced sessions: password, filters, bans
+title: Sessões avançadas: senha, filtros, banir | Advanced sessions: password, filters, bans | Sesiones avanzadas
 keys: advanced sessions, advanced session, sessoes avancadas, sessao avancada, ban player, banir jogador, unban, banned, banido, kick player, senha, password, filtro de sessao, search filter, propriedade da sessao, session property, extra settings, regiao, region, mapa, modo de jogo, game mode, private slots, vagas privadas, banir, ban, kick, trancar sessao, lock, join in progress, start session, end session, update session, convite, invite, amigo, friend, lobby, servidor dedicado, ping, matchmaking
 --- pt
 Como o plugin **Advanced Sessions** da Unreal: tudo da sessão no seu controle (categoria **Online|Advanced Sessions**).
@@ -84,3 +84,44 @@ class Lobby extends Actor
                 print("No rooms: {GetLastSessionError()}")
 ```
 See also [Multiplayer](article:multiplayer).
+--- es
+Como el plugin **Advanced Sessions** de Unreal: todo sobre la sesión en tus manos (categoría **Online|Advanced Sessions**).
+
+```diagram steps
+Set Session Property (región, nivel...) | Create Advanced Session (cupos, contraseña, mapa, modo) | Add Session Search Filter + Find Sessions Advanced | Get Session Details | Join Session Advanced (contraseña)
+```
+- **Create Advanced Session**: cupos públicos y **Private Slots** (solo para quien llega por una invitación, un amigo o la dirección), LAN o Steam, **Visibility** (0 pública, 1 solo amigos, 2 solo por invitación), **Password**, **Allow Join In Progress**, **Allow Invites**, **Should Advertise** (apagado: las búsquedas no la encuentran), mapa y modo de juego.
+- **Set Session Property** guarda tus propias claves (región, dificultad, ronda). Antes de crear, entran en la sesión; mientras corre, el anfitrión las cambia al instante y todos lo ven (**Event On Session Updated**).
+- **Find Sessions Advanced**: tipo de servidor (0 todos, 1 listen, 2 dedicado), cupos libres mínimos, sin las llenas, solo vacías / solo no vacías, sin contraseña, sin partidas iniciadas, ping máximo, misma versión. **Add Session Search Filter** compara una propiedad (0 igual, 1 distinto, 2 menor, 3 menor o igual, 4 mayor, 5 mayor o igual, 6 contiene); los números se comparan como números. Los resultados llegan del más cercano al más lejano.
+- **Get Session Details** lee cada resultado (nombre, anfitrión, jugadores, cupos, ping, mapa, modo, dedicado, contraseña, iniciada).
+- **Join Session Advanced** entra con la contraseña. Si es rechazado (llena, bloqueada, iniciada, contraseña incorrecta, baneado, otra versión): **Event On Join Session Complete** trae el motivo, y **Get Last Session Error** también.
+- Durante la partida: **Start Session** / **End Session**, **Set Session Joinable** (bloquear), **Update Session**, **Ban Player** / **Unban**, **Event On Join Refused** (en el anfitrión).
+- Steam: **Join Friend Session**, **Invite Friend To Session**, **Set Auto Accept Invites** + **Event On Session Invite Accepted**.
+
+```blueprint
+Event BeginPlay -> Set Session Property ( "region", "sa" ) -> Create Advanced Session ( "My Room", 4, 1, true, 0, "1234", true, true, true, "Arena", "CTF" )
+Event On Sessions Found -> Branch ( Count > 0 ) -> Join Session Advanced ( 0, "1234" )
+```
+```real
+class Lobby extends Actor
+    var searching = false
+
+    event Host()
+        SetSessionProperty("region", "sa")
+        CreateAdvancedSession("My Room", 4, 1, true, 0, "1234", true, true, true, "Arena", "CTF")
+
+    event Search()
+        ClearSessionSearchFilters()
+        AddSessionSearchFilter("region", "sa", 0)
+        FindSessionsAdvanced(true, 20, 0, 1, true, false, false, false, false, 150.0, true)
+        searching = true
+
+    event Tick(dt: float)
+        if searching and not IsFindingSessions()
+            searching = false
+            if GetSessionCount() > 0
+                JoinSessionAdvanced(0, "1234")
+            else
+                print("No rooms: {GetLastSessionError()}")
+```
+Mira también [Multijugador](article:multiplayer).

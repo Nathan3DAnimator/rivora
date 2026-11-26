@@ -3340,15 +3340,27 @@ static void import_hairs(TFile* f, const char* folder_disk, const char* folder_v
         sscanf(f->lines[i], "hr %d %d %d %f %f %d %d %f %f %d %d %f %d %d %d %f %f %f", &kind, &dm, &count, &dens, &mind, &seed, &inv,
                &rr, &rt, &sv, &sr, &frac, &sg, &ch, &lod, &col[0], &col[1], &col[2]);
         i++;
-        char surf[64] = "";
+        char surf[64] = "", owner[64] = "";
         int don = 0;
+        bool skinned = false; // (2026-11-25, item 16) its surface bent by an armature: the guides into the armature's space
+        M4 sw;
         float stiff = -1.0f, damp = -1.0f, grav;
         float* pts = NULL;
         uint32_t* cnt = NULL;
         uint32_t ng = 0, np = 0, cg = 0, cp = 0;
         for (; i < f->nlines && f->lines[i][0] == 'h' && !starts(f->lines[i], "hr"); i++) {
             const char* l = f->lines[i];
-            if (starts(l, "hsurf")) snprintf(surf, sizeof surf, "%s", l + 6);
+            if (starts(l, "hsurf")) {
+                snprintf(surf, sizeof surf, "%s", l + 6);
+                // (2026-11-25, item 16) a skinned surface (an Armature modifier or a bone it rides): the groom goes on the
+                // armature's actor (the SK_ one the import made, where the skin is), its guides through the surface's world
+                // as the skin's vertices were (import_skeletal: sc->world, then the engine's axes)
+                for (int oi = 0; oi < f->nobjs && !skinned; oi++)
+                    if (!strcmp(f->objs[oi].name, surf)) {
+                        int arm = sk_owner(f, oi);
+                        if (arm >= 0) skinned = true, sw = obj_world(f, oi, 0), snprintf(owner, sizeof owner, "%s", f->objs[arm].name);
+                    }
+            }
             else if (starts(l, "hdyn")) sscanf(l + 5, "%d %f %f %f", &don, &stiff, &damp, &grav);
             else if (starts(l, "hg") && kind == 0) {
                 char* q = (char*)l + 3;
@@ -3371,6 +3383,11 @@ static void import_hairs(TFile* f, const char* folder_disk, const char* folder_v
                 for (long k = 0; k < n; k++) {
                     float p[3];
                     for (int a = 0; a < 3; a++) p[a] = strtof(q, &q);
+                    if (skinned) {
+                        float pw[3];
+                        m4_point(&sw, p, pw);
+                        memcpy(p, pw, sizeof p);
+                    }
                     point_to_engine(p, pts + 3 * (np + (uint32_t)k));
                 }
                 cnt[ng++] = (uint32_t)n, np += (uint32_t)n;
@@ -3388,7 +3405,7 @@ static void import_hairs(TFile* f, const char* folder_disk, const char* folder_v
             char an[96];
             snprintf(an, sizeof an, "%s_%d", surf, h);
             // (the Tlender's stiffness 0..1 and its damping: ours alike)
-            hair_asset(folder_disk, folder_vpath, w, r, surf, an, pts, cnt, ng, &gi, don,
+            hair_asset(folder_disk, folder_vpath, w, r, skinned ? owner : surf, an, pts, cnt, ng, &gi, don,
                        stiff >= 0.0f ? fminf(stiff, 1.0f) : -1.0f, damp >= 0.0f ? fminf(damp, 0.5f) : -1.0f);
         }
         free(pts), free(cnt);
@@ -3764,7 +3781,7 @@ static bool tfile_assets(TFile f, const char* src, const char* folder_vpath, con
         size_t n = strlen(r->text);
         snprintf(r->text + n, sizeof r->text - n, ", %u lights, %u cameras", r->lights, r->cameras);
     }
-    imprep_finish(folder_disk, r->text, sizeof r->text); // (Q19) the conversion report next to the assets
+    imprep_finish(folder_disk, r->text, sizeof r->text); // (Q19) the conversion report (the project's Saved/ImportReports)
     drivers_free(&f);
     free(g_mc_images), g_mc_images = NULL, g_mc_nimages = 0;
     // (the parsed file's memory)

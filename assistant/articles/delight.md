@@ -1,6 +1,6 @@
 id: delight
 kind: howto
-title: Tirar a luz de uma textura escaneada | De-lighting a scanned texture
+title: Tirar a luz de uma textura escaneada | De-lighting a scanned texture | Quitar la luz de una textura escaneada (De-light)
 keys: delight, de-light, de-lighting, tirar a luz, tirar sombra, remover luz da textura, remove baked light, fotogrametria, photogrammetry, scan, textura escaneada, scanned texture, sombra assada na textura, sombra assada, baked shadow, albedo limpo, clean albedo, polycam, reality capture, metashape
 --- pt
 ```diagram steps
@@ -26,3 +26,15 @@ A **photogrammetry** mesh carries in its texture the light of the day it was sho
 - **How it works:** the mesh's normals are drawn into the texture's UV space; a soft lighting (spherical harmonics) is fitted to the brightness and divided out; then what is left of the broad shading goes out by half. The color (hue) is kept.
 - **Without a mesh** (a mesh whose UVs don't cover the texture): only the broad shading part.
 - The status bar shows how much the light varied before and after.
+--- es
+```diagram steps
+Importa la malla escaneada con su textura de color
+Selecciona el actor en la escena
+Herramientas > De-light Selected Actor's Texture
+El motor escribe <textura>_delit.png y la cambia en el material
+```
+Una malla de **fotogrametría** lleva en su textura la luz del día en que se fotografió (un lado más brillante, sombras, rincones oscuros). Eso choca con la luz de la escena. El **De-lighting** quita esa luz para que el color sea solo el material.
+- **Cómo usarlo:** selecciona el actor de la malla y usa **Herramientas > De-light Selected Actor's Texture**. Se procesa la textura del **Base Color** (una Image Texture) y el material pasa a la copia `_delit.png` (el original se conserva).
+- **Cómo funciona:** las normales de la malla se dibujan en el espacio UV de la textura; se ajusta una iluminación suave (armónicos esféricos) al brillo y se divide; después, lo que queda del sombreado amplio se reduce a la mitad. El color (el tono) se conserva.
+- **Sin malla** (una malla cuyas UV no cubren la textura): solo la parte del sombreado amplio.
+- La barra de estado muestra cuánto variaba la luz antes y después.

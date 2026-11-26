@@ -1,6 +1,6 @@
 id: city-routines
 kind: recipe
-title: Rotinas da cidade: hora do dia, lojas e testemunhas | City routines: time of day, shops and witnesses
+title: Rotinas da cidade: hora do dia, lojas e testemunhas | City routines: time of day, shops and witnesses | Rutinas de la ciudad: hora del día, tiendas y testigos
 keys: rotina da cidade, city routine, hora do dia, time of day, relogio do jogo, game clock, loja abre e fecha, shop opens and closes, horario de funcionamento, opening hours, smart object, smart objects, vagas, slots, npc vai a loja, npcs visit shops, testemunha, witness, chamar a policia, call the police, crime, report crime, cidade viva, living city, get time of day, set time of day, get police calls, is open now, get visitors, set smart object
 --- pt
 A cidade tem um **relógio** e lugares que os NPCs usam, como no GTA 6:
@@ -22,6 +22,19 @@ The city has a **clock** and places the NPCs use, as in GTA 6:
 - **City Routine** on the Crowd Spawner: the agents go to the open Smart Objects with room, stay around them a while and leave; when it closes, everyone goes. **Is Open Now** and **Get Visitors** tell its state.
 - **Crime and police**: **Report Crime** (Location, Radius) panics the crowd there and the nearest one becomes the witness: 2 to 4 s later they call the police. **Get Police Calls** counts the calls (send a patrol, raise the wanted level).
 - **Cost**: under 0.001 ms per agent.
+
+```blueprint
+Event Begin Play -> Set Time of Day ( Hour = 8.5, Time Scale = 60 )
+Event Key C -> Report Crime ( Location = Get Actor Location, Radius = 2500 )
+Event Tick -> Print String ( Get Police Calls )
+```
+--- es
+La ciudad tiene un **reloj** y lugares que usan los NPC, como en GTA 6:
+- **Reloj**: **Set Time of Day** (Hour, Time Scale: segundos de juego por uno real; 60 hace una hora de juego en un minuto real) y **Get Time of Day**.
+- **Smart Object**: un actor con un **Interactable** y **Smart Object Slots** mayor que 0 (una tienda, un quiosco, un banco). **Opens At** y **Closes At** son su horario (ambos 0: siempre abierto; de 22 a 6 pasa de la medianoche). **Set Smart Object** los cambia durante el juego.
+- **City Routine** en el Crowd Spawner: los agentes van a los Smart Objects abiertos con espacio, se quedan un rato a su alrededor y se van; cuando cierra, todos se van. **Is Open Now** y **Get Visitors** indican su estado.
+- **Crimen y policía**: **Report Crime** (Location, Radius) provoca pánico en la multitud de ahí y el más cercano se vuelve el testigo: de 2 a 4 s después llama a la policía. **Get Police Calls** cuenta las llamadas (envía una patrulla, sube el nivel de búsqueda).
+- **Costo**: menos de 0.001 ms por agente.
 
 ```blueprint
 Event Begin Play -> Set Time of Day ( Hour = 8.5, Time Scale = 60 )

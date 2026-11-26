@@ -38,7 +38,7 @@ bool inv_ui_inventory(CInventory* c) {
     bool ch = false;
     int s = (int)c->slots;
     if (igDragInt(PL(TR("Slots")), &s, 0.2f, 1, INV_MAX_SLOTS, "%d", 0)) c->slots = (uint32_t)(s < 1 ? 1 : s > INV_MAX_SLOTS ? INV_MAX_SLOTS : s), ch = true;
-    ch |= igDragFloat(PL(TR("Max Weight")), &c->max_weight, 0.5f, 0.0f, 100000.0f, c->max_weight > 0.0f ? "%.1f kg" : TR("no limit"), 0);
+    ch |= igDragFloat(PL(TR("Max Weight")), &c->max_weight, 0.5f, 0.0f, 100000.0f, c->max_weight > 0.0f ? TR("%.1f kg") : TR("no limit"), 0);
     bool ap = c->auto_pickup != 0;
     if (igCheckbox(PL(TR("Auto Pickup")), &ap)) c->auto_pickup = ap, ch = true;
     ch |= igDragFloat(PL(TR("Pickup Radius")), &c->pickup_radius, 1.0f, 10.0f, 5000.0f, "%.0f cm", 0);

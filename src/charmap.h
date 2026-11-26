@@ -20,33 +20,33 @@
 
 // The roles of a side, in the order of the left block; the right block repeats it (charrole_mirror).
 #define TL_CHAR_SIDE_ROLES(X)                              \
-    X(CLAVICLE, "clavicle", "Clavícula")                   \
-    X(UPPER_ARM, "upper_arm", "Braço")                     \
-    X(FOREARM, "forearm", "Antebraço")                     \
-    X(HAND, "hand", "Mão")                                 \
-    X(THUMB1, "thumb1", "Polegar 1")                       \
-    X(THUMB2, "thumb2", "Polegar 2")                       \
-    X(THUMB3, "thumb3", "Polegar 3")                       \
-    X(INDEX1, "index1", "Indicador 1")                     \
-    X(INDEX2, "index2", "Indicador 2")                     \
-    X(INDEX3, "index3", "Indicador 3")                     \
-    X(MIDDLE1, "middle1", "Médio 1")                       \
-    X(MIDDLE2, "middle2", "Médio 2")                       \
-    X(MIDDLE3, "middle3", "Médio 3")                       \
-    X(RING1, "ring1", "Anelar 1")                          \
-    X(RING2, "ring2", "Anelar 2")                          \
-    X(RING3, "ring3", "Anelar 3")                          \
-    X(PINKY1, "pinky1", "Mínimo 1")                        \
-    X(PINKY2, "pinky2", "Mínimo 2")                        \
-    X(PINKY3, "pinky3", "Mínimo 3")                        \
-    X(THIGH, "thigh", "Coxa")                              \
-    X(SHIN, "shin", "Canela")                              \
-    X(FOOT, "foot", "Pé")                                  \
-    X(TOE, "toe", "Ponta do pé")                           \
-    X(UPPER_ARM_TWIST, "upper_arm_twist", "Torção do braço") \
-    X(FOREARM_TWIST, "forearm_twist", "Torção do antebraço") \
-    X(THIGH_TWIST, "thigh_twist", "Torção da coxa")        \
-    X(SHIN_TWIST, "shin_twist", "Torção da canela")
+    X(CLAVICLE, "clavicle", "Clavicle")                   \
+    X(UPPER_ARM, "upper_arm", "Arm")                     \
+    X(FOREARM, "forearm", "Forearm")                     \
+    X(HAND, "hand", "Hand")                                 \
+    X(THUMB1, "thumb1", "Thumb 1")                       \
+    X(THUMB2, "thumb2", "Thumb 2")                       \
+    X(THUMB3, "thumb3", "Thumb 3")                       \
+    X(INDEX1, "index1", "Index 1")                     \
+    X(INDEX2, "index2", "Index 2")                     \
+    X(INDEX3, "index3", "Index 3")                     \
+    X(MIDDLE1, "middle1", "Middle 1")                       \
+    X(MIDDLE2, "middle2", "Middle 2")                       \
+    X(MIDDLE3, "middle3", "Middle 3")                       \
+    X(RING1, "ring1", "Ring 1")                          \
+    X(RING2, "ring2", "Ring 2")                          \
+    X(RING3, "ring3", "Ring 3")                          \
+    X(PINKY1, "pinky1", "Pinky 1")                        \
+    X(PINKY2, "pinky2", "Pinky 2")                        \
+    X(PINKY3, "pinky3", "Pinky 3")                        \
+    X(THIGH, "thigh", "Thigh")                              \
+    X(SHIN, "shin", "Shin")                              \
+    X(FOOT, "foot", "Foot")                                  \
+    X(TOE, "toe", "Toe")                           \
+    X(UPPER_ARM_TWIST, "upper_arm_twist", "Upper Arm Twist") \
+    X(FOREARM_TWIST, "forearm_twist", "Forearm Twist") \
+    X(THIGH_TWIST, "thigh_twist", "Thigh Twist")        \
+    X(SHIN_TWIST, "shin_twist", "Shin Twist")
 
 typedef enum CharRole {
     CR_NONE = 0,

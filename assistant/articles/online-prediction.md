@@ -1,6 +1,6 @@
 id: online-prediction
 kind: concept
-title: Testar com vários jogadores e o movimento previsto | Testing with several players and predicted movement
+title: Testar com vários jogadores e o movimento previsto | Testing with several players and predicted movement | Probar con varios jugadores y el movimiento predicho
 keys: varios jogadores, several players, number of players, numero de jogadores, testar multiplayer no editor, test multiplayer in editor, play as client, play as listen server, listen server, duas janelas, two windows, predicao, prediction, client side prediction, reconciliacao, reconciliation, server authoritative, autoridade do servidor, movimento online, online movement, lag no movimento, rubber banding, personagem voltando, character snapping back, anti cheat movimento
 --- pt
 ```diagram steps
@@ -8,7 +8,7 @@ Cliente: anda na hora (previsto) e manda cada movimento ao servidor
 Servidor: move o pawn com eles (a autoridade dele) e responde onde ficou
 Cliente: igual, nada; diferente, toma o do servidor e refaz os movimentos seguintes
 ```
-**Vários jogadores no Play:** na setinha ao lado do **Play**, **Number of Players** (1 a 4). Com mais de 1, este editor hospeda a sessão (Listen Server) e cada outro jogador abre numa janela própria, que entra sozinha; **Stop** fecha todas. Cada janela é um jogador de verdade, pela rede local, com os mesmos Blueprints e regras.
+**Vários jogadores no Play:** na setinha ao lado do **Play**, **Number of Players** (1 a 4). Com mais de 1, este editor hospeda a sessão (Listen Server) e cada outro jogador abre numa janela própria, que entra sozinha; **Stop** fecha todas. Cada janela é um jogador de verdade, pela rede local, com os mesmos Grafos e regras.
 **O movimento do personagem online** é como o da Unreal: o servidor manda, sem deixar o jogador esperar.
 - O seu **Character** anda na hora na sua tela (**predição**); cada movimento (direção, pulo, tempo do quadro) é guardado e vai ao servidor, vários por pacote (um pacote perdido não custa nada).
 - O **servidor** move o seu pawn com esses movimentos, na física dele (paredes, plataformas, pulos): ninguém consegue correr mais rápido ou atravessar parede mexendo no próprio jogo.
@@ -21,10 +21,23 @@ Client: moves at once (predicted) and sends each move to the server
 Server: moves the pawn with them (its authority) and answers where it ended
 Client: the same, nothing; different, takes the server's and redoes the moves after it
 ```
-**Several players in Play:** on the small arrow next to **Play**, **Number of Players** (1 to 4). With more than 1, this editor hosts the session (Listen Server) and each other player opens in its own window, which joins by itself; **Stop** closes them all. Each window is a real player, over the local network, with the same Blueprints and rules.
+**Several players in Play:** on the small arrow next to **Play**, **Number of Players** (1 to 4). With more than 1, this editor hosts the session (Listen Server) and each other player opens in its own window, which joins by itself; **Stop** closes them all. Each window is a real player, over the local network, with the same Graphs and rules.
 **The character's online movement** works like Unreal's: the server is in charge, without making the player wait.
 - Your **Character** moves at once on your screen (**prediction**); each move (direction, jump, frame time) is kept and goes to the server, several per packet (a lost packet costs nothing).
 - The **server** moves your pawn with those moves, in its own physics (walls, platforms, jumps): nobody can run faster or go through a wall by tampering with their own game.
 - It answers with the last move it applied and where the character ended up. If your screen agrees (within 2 cm), nothing happens; if not, your position goes back to the server's and the moves it hasn't seen yet are redone from there (**reconciliation**), without the character "going back in time".
 - Measured with 100 ms of latency, jitter and 5% loss: 1.5 cm of mean difference, corrections in fewer than 1 in 10 confirmations.
 - Vehicles and pawns that aren't Characters still send their own state (the server checks the speed).
+--- es
+```diagram steps
+Cliente: se mueve al instante (predicho) y envía cada movimiento al servidor
+Servidor: mueve el pawn con ellos (su autoridad) y responde dónde terminó
+Cliente: igual, nada; distinto, toma el del servidor y rehace los movimientos posteriores
+```
+**Varios jugadores en Play:** en la flechita junto a **Jugar**, **Number of Players** (1 a 4). Con más de 1, este editor aloja la sesión (Listen Server) y cada otro jugador se abre en su propia ventana, que se une sola; **Stop** las cierra todas. Cada ventana es un jugador real, por la red local, con los mismos Grafos y reglas.
+**El movimiento online del personaje** funciona como el de Unreal: el servidor manda, sin hacer esperar al jugador.
+- Tu **Character** se mueve al instante en tu pantalla (**predicción**); cada movimiento (dirección, salto, tiempo del fotograma) se guarda y va al servidor, varios por paquete (un paquete perdido no cuesta nada).
+- El **servidor** mueve tu pawn con esos movimientos, en su propia física (paredes, plataformas, saltos): nadie puede correr más rápido ni atravesar una pared manipulando su propio juego.
+- Responde con el último movimiento que aplicó y dónde terminó el personaje. Si tu pantalla coincide (dentro de 2 cm), no pasa nada; si no, tu posición vuelve a la del servidor y los movimientos que aún no vio se rehacen desde ahí (**reconciliación**), sin que el personaje "viaje en el tiempo".
+- Medido con 100 ms de latencia, jitter y 5% de pérdida: 1,5 cm de diferencia media, correcciones en menos de 1 de cada 10 confirmaciones.
+- Los vehículos y pawns que no son Characters siguen enviando su propio estado (el servidor comprueba la velocidad).

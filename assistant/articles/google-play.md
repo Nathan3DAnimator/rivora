@@ -1,6 +1,6 @@
 id: google-play
 kind: howto
-title: Publicar na Google Play (AAB) | Publish on Google Play (AAB)
+title: Publicar na Google Play (AAB) | Publish on Google Play (AAB) | Publicar en Google Play
 keys: google play, play store, publicar celular, publish android, aab, android app bundle, bundle, play console, chave de upload, upload key, keystore, assinar, signing, version code, versao, sdk alvo, target sdk, api 36, 16 kb, asset pack, 200 mb, icone da loja, store icon, feature graphic, grafico de destaque, politica de privacidade, privacy policy, loja, store listing
 --- pt
 ```diagram steps
@@ -42,3 +42,23 @@ Project Settings > Android: your own package name (com.yourcompany.game) | Creat
 On the same Settings page, each item turns green when it is right: your own package name, the upload key, the game's icon and a privacy policy (the Play Console asks for its address for online games).
 
 **Never lose the upload key** (`Build/Android/upload.keystore` and its `.pass` in the project). If you lose it, Google's support can replace it, but it takes time. Command line: `realengine --open Level.rlevel --package-play <folder>`. See also [Export to Android](article:android-export).
+--- es
+```diagram steps
+Configuración del proyecto > Android: tu propio nombre de paquete (com.tuempresa.juego) | Create Upload Key (una vez; guarda una copia) | Compilar > Empaquetar para Google Play Store: AAB | Play Console > Crear app > sube el .aab | Ficha de la tienda: las imágenes en <juego>_GooglePlay
+```
+## Qué se genera
+- **`<game>.aab`**: el Android App Bundle que recibe la Play Console, firmado con tu **clave de subida**. Google lo firma de nuevo para cada dispositivo (Play App Signing).
+- **`<game>.apk`**: el mismo juego para instalar y probar primero (`adb install`).
+- **`<game>_GooglePlay/`**: el ícono de 512 px y el gráfico de funciones de 1024 x 500 (hecho con la imagen de carga del proyecto) para la ficha de la tienda. Las capturas de pantalla se toman en tu teléfono.
+
+## Lo que el motor ya cumple
+- SDK de destino **36** (Android 16), obligatorio desde 2026-08-31; mínimo Android 11.
+- 64 bits (arm64-v8a) y **páginas de 16 KB** (Android 15 y posteriores).
+- Ícono adaptable (la imagen en el círculo, sobre el color *Icon Background*).
+- Un juego con más de 150 MB de archivos: van en un **asset pack de tiempo de instalación**, porque la base del bundle está limitada a 200 MB. El juego los lee de la misma forma.
+- El **Version Code** sube solo después de cada bundle, porque la tienda rechaza un número repetido.
+
+## La lista de verificación
+En la misma página de Configuración, cada ítem se pone verde cuando está correcto: tu propio nombre de paquete, la clave de subida, el ícono del juego y una política de privacidad (la Play Console pide su dirección para los juegos en línea).
+
+**Nunca pierdas la clave de subida** (`Build/Android/upload.keystore` y su `.pass` en el proyecto). Si la pierdes, el soporte de Google puede reemplazarla, pero lleva tiempo. Línea de comandos: `realengine --open Level.rlevel --package-play <carpeta>`. Mira también [Exportar a Android](article:android-export).

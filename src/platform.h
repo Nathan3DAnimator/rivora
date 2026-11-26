@@ -29,6 +29,10 @@ bool re_system_language_portuguese(void);
 bool re_screen_pixel(int x, int y, unsigned* rgb);
 // REALENGINE_MONITOR=N (the visible tests: Windows' display N): its work area. False: unset or no such display
 bool re_test_monitor(int* x, int* y, int* w, int* h);
+// The visible tests' fps measure (REALENGINE_MONITOR with --bench and --min-fps): the window off the screens while it
+// measures (hide), back where it was after (!hide). A window shown on a monitor costs 9-12% of the GPU in Windows'
+// composition (notas-dev/testes.md "Medidas de fps escondidas"), a cost the measure is not about (the targets were set hidden)
+void re_test_window_offscreen(struct GLFWwindow* w, bool hide);
 
 // Synthetic input (automated runs): the native dialogs answer "cancelled" without showing.
 extern bool g_platform_synthetic_input;

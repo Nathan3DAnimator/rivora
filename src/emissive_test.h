@@ -6,3 +6,5 @@
 
 bool emissive_test_scene(Editor* ed, const char* name); // emit, emit_off (false: not one of these)
 bool emissive_test_check(Editor* ed, const char* shot); // after the bench: PASS / FAIL printed (shot: --shot's PNG)
+// (2026-11-25) --scene emit_intensity: its stages, each frame (main.c); the Emission Intensity saved, in the Details, in Play
+void emissive_test_tick(Editor* ed, double dt);

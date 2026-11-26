@@ -1,6 +1,6 @@
 id: first-person-camera
 kind: recipe
-title: Câmera em primeira pessoa realista: balanço, respiração, recuo, autofoco | Realistic first-person camera: bob, breathing, recoil, autofocus
+title: Câmera em primeira pessoa realista: balanço, respiração, recuo, autofoco | Realistic first-person camera: bob, breathing, recoil, autofocus | Cámara en primera persona realista: balanceo, respiración, retroceso, autoenfoque
 keys: primeira pessoa, first person, fps, first person camera, camera em primeira pessoa, head bob, balanco da cabeca, balanco da camera, bob, passos, footstep, passo sincronizado, inercia do olhar, look lag, atraso da camera, inclinacao, lean, strafe, respiracao, breathing, cansado, exertion, esforco, medo, fear, assustado, aterrissar, landing, queda, recuo, recoil, coice, kick, autofoco, autofocus, foco automatico, profundidade de campo, depth of field, dof, bokeh, vinheta, vignette, corpo visivel, ver as pernas, own body, true first person, hide bone by name, esconder cabeca, use controller rotation yaw, preset realista, cinematico, arcade, terror, horror, set first person exertion, set first person fear, add camera recoil, set focus target, get focus distance, set first person camera preset
 --- pt
 A **Câmera em Primeira Pessoa** é parte do componente **Camera** (Details > Camera > **First Person Camera**): ligada, a câmera do pawn possuído se mexe como a cabeça de uma pessoa, e o que está preso nela (a arma, os braços) vai junto.
@@ -35,6 +35,26 @@ The **First Person Camera** is part of the **Camera** component (Details > Camer
 
 ```diagram steps
 The pawn's Camera | Details: First Person Camera | Realistic preset | Show Own Body | Play
+```
+```blueprint
+Event Begin Play -> Set First Person Camera Preset ( Target = self, Preset = "Horror" )
+Event Key E -> Set First Person Exertion ( Target = self, Exertion = 1.0 )
+Event Key F -> Add Camera Recoil ( Target = self, Pitch = 2.0, Yaw = 0.3, Kick = 1.5 ) -> Start Camera Shake ( Shake = "Gunshot", Scale = 1.0 )
+Event Key G -> Play World Camera Shake ( Shake = "Explosion", Epicenter = Get Actor Location ( self ), Inner Radius = 300, Outer Radius = 2000, Falloff = 1 )
+```
+--- es
+La **First Person Camera** es parte del componente **Camera** (Detalles > Camera > **First Person Camera**): activada, la cámara del peón poseído se mueve como la cabeza de una persona, y lo que cuelga de ella (el arma, los brazos) la acompaña.
+- **Balanceo de la cabeza al compás de los pies**: baja en el contacto de cada pie, hacia el lado del pie de apoyo. El ritmo se ajusta a los notifies **Footstep** de la animación (los del Mannequin los tienen); sin ellos viene de la distancia caminada (**Stride**). Se desvanece en el aire.
+- **La inercia de la mirada** (Look Lag: un resorte entre el mouse y la vista), la **inclinación** en los giros y desplazamientos laterales, la **respiración** (más profunda al cansarse, más rápida con miedo), el **aterrizaje** (la vista baja según la altura de la caída) y el **retroceso** (Add Camera Recoil).
+- **Autoenfoque**: un rayo en el centro de la pantalla (o el actor de **Set Focus Target**), con el enfoque llegando a él como un ojo (rápido) o una lente (lento); la profundidad de campo y el bokeh son los de la **Cine Camera** (Physical Lens), o por el ángulo de la vista y el **Focus f-stop**.
+- **Viñeta de esfuerzo**: los bordes se oscurecen con el esfuerzo (la del propio post process).
+- **Cuerpo visible**: **Show Own Body** oculta la cabeza del Skeletal Mesh (Hide Bone by Name) y ves tus piernas y torso al mirar hacia abajo; activa **Use Controller Rotation Yaw** en el Character para que el cuerpo mire hacia donde miras.
+- **Presets**: Realista, Cinemático, Arcade, Terror. La plantilla **First Person** del Project Browser viene con Realista, el cuerpo y un retroceso en el disparo.
+- **Camera Shakes**: Añadir > Camera > Camera Shake (Explosion, Earthquake, Handheld, Hit, Gunshot, Footstep, Heartbeat, Dread), cada canal un seno, ruido Perlin o una curva; **Start Camera Shake**, **Stop Camera Shake**, **Play World Camera Shake** (un epicentro y radios).
+- **Costo**: ~0.005 ms de CPU por cuadro (la cámara y los shakes); Debug Viewer > First Person Camera.
+
+```diagram steps
+La Camera del peón | Detalles: First Person Camera | Preset Realista | Show Own Body | Jugar
 ```
 ```blueprint
 Event Begin Play -> Set First Person Camera Preset ( Target = self, Preset = "Horror" )

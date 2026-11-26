@@ -1,6 +1,6 @@
 id: ragdoll-wounds
 kind: recipe
-title: Ferimentos do Ragdoll Ativo: segurar, mancar, se contorcer | Active Ragdoll wounds: holding, limping, writhing
+title: Ferimentos do Ragdoll Ativo: segurar, mancar, se contorcer | Active Ragdoll wounds: holding, limping, writhing | Heridas del Ragdoll Activo: sujetarse, cojear, retorcerse
 keys: ferimento, wound, ferido, injured, mancar, limp, mancando, limping, segurar o ferimento, hold the wound, mao no ferimento, hand on wound, se contorcer, writhe, writhing, dor no chao, pain on the ground, queda alta, high fall, agitar os bracos, flail, windmill, euphoria, reacao por regiao, reaction by region, orcamento de ragdoll, ragdoll budget, muitos ragdolls, many ragdolls, apply wound reaction, get limp, is writhing
 --- pt
 Reações como as do GTA 6 em cima do **Ragdoll Ativo**: cada ferimento muda o corpo conforme a região atingida.
@@ -29,6 +29,22 @@ GTA 6-style reactions on top of the **Active Ragdoll**: each wound changes the b
 
 ```diagram steps
 Active Ragdoll | Apply Hit Reaction (push) | Apply Wound Reaction (region) | holds, limps or falls and writhes | gets up
+```
+```blueprint
+Event AnyDamage -> Apply Hit Reaction ( Target = self, Bone Name = "calf_l", Impulse = Make Vector(300, 0, 0), Weaken = 0.5, Recover Time = 1.0 ) -> Apply Wound Reaction ( Target = self, Bone Name = "calf_l", Location = Get Actor Location, Severity = 0.6 )
+Event Tick -> Print String ( Get Limp ( Target = self ) )
+```
+--- es
+Reacciones al estilo GTA 6 sobre el **Active Ragdoll**: cada herida cambia el cuerpo según la región que golpea.
+- **Apply Wound Reaction** (Target, Bone Name, Location, Severity 0..1): la herida en un punto del hueso. Úsalo junto con **Apply Hit Reaction**, que da el empujón.
+- **Torso, brazo o cabeza**: la mano del otro lado va al punto y lo sujeta (4 a 12 s, según la gravedad). En el brazo izquierdo, lo sujeta la mano derecha.
+- **Pierna**: **cojea**. La rodilla herida se dobla, la pelvis baja y se inclina hacia ese lado, y los músculos de la pierna se debilitan (8 a 20 s). **Get Limp** devuelve cuánto cojea ahora, para mezclar un andar herido o frenarlo.
+- **Grave (más de 0.7)**: las rodillas ceden y cae. En el suelo **se retuerce** unos segundos (la columna y las piernas se mueven) antes de levantarse. **Is Writhing** es verdadero mientras dura: un sonido de dolor, un aviso para reanimar.
+- **Caída alta**: cayendo rápido (más de 5 m/s durante un cuarto de segundo), los brazos se agitan hasta tocar el suelo.
+- **Presupuesto**: solo simulan los **32 ragdolls activos más cercanos a la cámara**. Los demás, de pie, siguen la animación, y los caídos duermen donde yacen. El que tropieza o se levanta termina primero. 200 ragdolls activos cuestan unos 1,5 ms.
+
+```diagram steps
+Active Ragdoll | Apply Hit Reaction (empujón) | Apply Wound Reaction (región) | se sujeta, cojea o cae y se retuerce | se levanta
 ```
 ```blueprint
 Event AnyDamage -> Apply Hit Reaction ( Target = self, Bone Name = "calf_l", Impulse = Make Vector(300, 0, 0), Weaken = 0.5, Recover Time = 1.0 ) -> Apply Wound Reaction ( Target = self, Bone Name = "calf_l", Location = Get Actor Location, Severity = 0.6 )

@@ -1,6 +1,6 @@
 id: import-rasset-rigid
 kind: howto
-title: .rasset e rigs rígidos (peças presas a ossos) | .rasset and rigid rigs (pieces parented to bones)
+title: .rasset e rigs rígidos (peças presas a ossos) | .rasset and rigid rigs (pieces parented to bones) | .rasset y rigs rígidos (piezas unidas a huesos)
 keys: rasset, empacotado, packed, normalroughnessmetallic, basecolor, emissive, exportar para a real engine, export to real engine, formato de troca, exchange format, osso pai, bone parent, parent to bone, rig rigido, rigid rig, robo, robot, capsula, maquina, machine, skeletal mesh nao criado, no skeletal mesh, controles do rig, rig widgets, custom shape, textura borrada, blurry texture, 4k, 4096, relative parenting, parentesco relativo, deslocado, offset, fora do lugar, out of place, static meshes soltas, loose static meshes, exportar de novo, export again, udim 1001, um tile, one tile, rivora, rivora engine
 --- pt
 ```diagram steps
@@ -21,7 +21,6 @@ Tlender: Exportar > Rivora Engine (.rasset) | Arquivo > Importar ou arrastar o .
 ## Texturas 4K e o conjunto empacotado
 - O material é assado no tamanho da maior textura que ele lê, até 4096: uma textura 4K (UDIM ou não) não perde detalhe. Vale também para um UDIM de **um tile só** (só o 1001, comum em exportações do Substance e do Tlender).
 - Texturas exportadas pelo Tlender no preset **Rivora Engine (empacotado)**: clique direito na `_BaseColor` > Criar > **Material**; a `_NormalRoughnessMetallic` e a `_Emissive` da mesma pasta entram ligadas sozinhas.
-
 --- en
 ```diagram steps
 Tlender: Export > Rivora Engine (.rasset) | File > Import or drag the .rasset | Meshes, materials, skeleton, animations | Skeletal Mesh in the level
@@ -41,3 +40,22 @@ Tlender: Export > Rivora Engine (.rasset) | File > Import or drag the .rasset | 
 ## 4K textures and the packed set
 - The material is baked at the size of the largest texture it reads, up to 4096: a 4K texture (UDIM or not) keeps its detail. That holds for a UDIM with **a single tile** too (1001 alone, common in Substance and Tlender exports).
 - Textures the Tlender exported with the **Rivora Engine (packed)** preset: right-click the `_BaseColor` > Create > **Material**; the `_NormalRoughnessMetallic` and the `_Emissive` in the same folder come wired in.
+--- es
+```diagram steps
+Tlender: Export > Rivora Engine (.rasset) | Archivo > Importar o arrastra el .rasset | Mallas, materiales, esqueleto, animaciones | Skeletal Mesh en el nivel
+```
+## El .rasset
+- El **.rasset** es el formato de intercambio con el Tlender (Export > Rivora Engine). **Archivo > Importar** o arrastra el archivo: se convierte en mallas, materiales PBR con las imágenes que lleva, el esqueleto, la malla con skin como **Skeletal Mesh**, animaciones, morph targets, luces y cámaras. [Mostrar dónde](show:File>Import Into Level...)
+- Un .rasset que ya está en el Explorador de contenidos: arrástralo a la ventana gráfica y se importa y se coloca.
+- Los pesos de morph animados se convierten en las curvas de morph de la animación.
+- Las pistas de objeto (un objeto que se mueve, no un hueso) todavía no entran: el Informe de importación lo dice.
+
+## Rigs rígidos: piezas unidas a huesos
+- Los robots, cápsulas y máquinas suelen tener cada pieza **unida a un hueso** (Parent > Bone), sin modificador Armature. Esas piezas se convierten en partes de un **Skeletal Mesh**: cada una sigue a su hueso entera, y las animaciones de la armature las mueven.
+- Las formas de control del rig (los objetos "cs_" de Auto-Rig Pro, los widgets de Rigify) y las mallas en colecciones desactivadas en el render **no** se importan: el informe cuenta cuántas se dejaron fuera.
+- Un hueso con **Relative Parenting** (el `c_traj` de Auto-Rig Pro): la pieza sigue la deformación del hueso, no su cola, como en el Tlender y en Blender. El .tlend y el .rasset del mismo archivo quedan en el mismo lugar.
+- Un .rasset exportado por un Tlender **anterior a la 0.44** entra como Static Meshes sueltas (con los controles del rig) y sin Skeletal Mesh: **expórtalo de nuevo** desde el Tlender actual.
+
+## Texturas 4K y el conjunto empaquetado
+- El material se hornea (bake) al tamaño de la mayor textura que lee, hasta 4096: una textura 4K (UDIM o no) conserva su detalle. Eso vale también para un UDIM con **un solo tile** (1001 solo, común en exportaciones de Substance y del Tlender).
+- Texturas que el Tlender exportó con el preset **Rivora Engine (packed)**: clic derecho en la `_BaseColor` > Crear > **Material**; la `_NormalRoughnessMetallic` y la `_Emissive` de la misma carpeta quedan conectadas.

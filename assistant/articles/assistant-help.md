@@ -1,6 +1,6 @@
 id: assistant-help
 kind: concept
-title: Sobre este assistente | About this assistant
+title: Sobre este assistente | About this assistant | Acerca de este asistente
 keys: assistente, ajuda, como usar o assistente, offline, internet, baixar artigos, f1, perguntas
 --- pt
 - Pergunte com suas palavras, em português, inglês ou espanhol; erros de digitação são tolerados.
@@ -16,3 +16,10 @@ keys: assistente, ajuda, como usar o assistente, offline, internet, baixar artig
 - The **Show me where** buttons outline the control on the screen for a few seconds.
 - Not found? **Send it as a suggestion** sends the question so the article gets written.
 - **F1** opens the assistant (in the Code Editor, F1 is the API reference).
+--- es
+- Pregunta con tus propias palabras, en portugués, inglés o español; los errores de tipeo no importan.
+- Las respuestas vienen de los **artículos** (descargados de GitHub en la primera pregunta, nada se instala), de las **funciones del motor** y de la **descripción de cada control**.
+- **Download for offline use** (Descargar para uso sin conexión) guarda los artículos en el equipo; **Update** (Actualizar) trae la versión nueva.
+- Los botones **Show me where** (Mostrar dónde) resaltan el control en la pantalla durante unos segundos.
+- ¿No lo encuentras? **Send it as a suggestion** (Enviar como sugerencia) envía la pregunta para que se escriba el artículo.
+- **F1** abre el asistente (en el Editor de código, F1 es la referencia de la API).

@@ -1,6 +1,6 @@
 id: distant-view
 kind: howto
-title: Visão distante: sombra do terreno, impostores e a neblina do céu | Distant view: the terrain's shadow, impostors and the sky's fog
+title: Visão distante: sombra do terreno, impostores e a neblina do céu | Distant view: the terrain's shadow, impostors and the sky's fog | Vista lejana: la sombra del terreno, impostores y la niebla del cielo
 keys: visão distante, visao distante, vista distante, distant view, vista lejana, rdr2, red dead, mirante, lookout, mirador, horizonte longe, far horizon, montanhas ao longe, far mountains, montañas a lo lejos, sombra distante, far shadow, sombra lejana, sombra do terreno, terrain shadow, sombra del terreno, sombra das montanhas, mountain shadow, vale na sombra, valley shadow, far shadow strength, impostor, impostores, impostors, octaedral, octahedral, octaédrico, cartão de árvore, tree card, billboard, árvores ao longe, far trees, árboles lejanos, floresta ao longe, far forest, bosque lejano, hlod impostor, estouro de lod, lod pop, lod popping, salto de lod, sky atmosphere ambient, atmosfera na neblina, sky atmosphere fog, perspectiva aérea distante, far aerial perspective, r.farshadow, r.impostors
 --- pt
 ```diagram steps
@@ -37,10 +37,19 @@ Event BeginPlay
   -> Set Property by Name ( Property = "Far Shadow Strength", Value = 0.6 )
 ```
 --- es
-La **vista lejana** (como la de Red Dead Redemption 2) junta tres cosas que dejan kilómetros de paisaje bonitos y baratos:
+```diagram steps
+Landscape: sus alturas en una cuadrícula (8 m por texel) | Sol: el horizonte de cada texel en la GPU (solo cuando el sol gira) | Más allá de los mapas de sombras virtuales: la sombra del terreno | Lejos: el impostor (una tarjeta octaédrica) de la malla | La niebla lejana en el color del cielo
+```
+La **vista lejana** (como la de Red Dead Redemption 2) reúne tres cosas que hacen que kilómetros de paisaje se vean bien y cuesten poco:
 
-1. **Sombra lejana** (Details de la luz direccional > **Far Shadow**, **Far Shadow Strength**): las sombras virtuales del sol cubren 2 km alrededor de la cámara (Épico). Más allá, la **sombra del terreno**: las alturas de las Landscapes en una grilla y, por cada texel, cuánto sube el terreno hacia el sol (calculado en la GPU solo cuando el sol gira). Las montañas sombrean los valles detrás de ellas hasta donde alcanza la vista.
-2. **Impostores** (Details del actor Foliage > **Impostors**): una malla que usan muchos actores (árboles, rocas, los proxies del HLOD) se fotografía desde 64 direcciones del hemisferio superior en dos atlas. A lo lejos cada instancia se vuelve **una tarjeta** frente a la cámara que mezcla las tres vistas más cercanas con paralaje. La tarjeta se ilumina como la malla, así el cambio no "salta". El cambio sigue el preset: menos de **20 px** de radio en pantalla en Épico.
-3. **La niebla en el color del cielo** (Details de la Exponential Height Fog > **Sky Atmosphere Ambient**): la luz ambiente de la niebla lejana viene del cielo del lado hacia donde mira la vista, no del gris del cielo entero, así las montañas se funden con el cielo detrás de ellas.
+1. **Far Shadow** (en Detalles de la luz direccional > **Far Shadow**, **Far Shadow Strength**): los mapas de sombras virtuales del sol cubren 2 km alrededor de la cámara (Épico). Más allá, la **sombra del terreno**: las alturas de los Landscapes en una cuadrícula y, para cada texel, la pendiente con que el terreno sube hacia el sol (calculada en la GPU solo cuando el sol gira). Las montañas sombrean los valles tras ellas hasta donde alcanza la vista; dentro de los mapas virtuales añade lo que se alza más allá de su alcance (el valle bajo la cresta al atardecer). No hay nada que activar en el Landscape.
+2. **Impostores** (en Detalles del actor Foliage > **Impostors**): una malla que usan muchos actores (árboles, rocas, los proxies del HLOD) se fotografía desde 64 direcciones del hemisferio superior en dos atlas (color y alfa; normal, profundidad y rugosidad). A lo lejos cada instancia se convierte en **una tarjeta** orientada a la cámara que mezcla las tres vistas más cercanas con un paso de paralaje según la profundidad. La tarjeta se ilumina como la malla (la sombra del sol en el punto que muestra, la GI, la perspectiva aérea, la niebla), así que el cambio no se nota. El cambio sigue el preset: por debajo de **20 px** de radio en pantalla en Épico (Cinemático 16, Alto 24, Medio 28, Bajo 32). Un material **Translucent**, un esqueleto y un actor en movimiento conservan su malla.
+3. **La niebla en el color del cielo** (en Detalles del Exponential Height Fog > **Sky Atmosphere Ambient**): la luz ambiental de la niebla lejana viene del cielo del lado hacia el que mira la vista (más brillante y cálida hacia el sol), no del gris de todo el cielo, así que las montañas se funden con el cielo detrás de ellas en el color de la **perspectiva aérea** (Settings > Aerial Perspective Scale).
 
-En el juego: `r.FarShadow`, `r.Impostors`, `r.Impostors.ScreenSize`, `r.Fog.SkyAtmosphere` y las propiedades por nombre.
+En el juego: `r.FarShadow` (0/1), `r.FarShadow.Resolution`, `r.Impostors` (0/1), `r.Impostors.ScreenSize` (px), `r.Impostors.Resolution`, `r.Fog.SkyAtmosphere` (0..1) y las propiedades por nombre.
+
+```blueprint
+Event BeginPlay
+  -> Set Console Variable ( Name = "r.Impostors.ScreenSize", Value = 32 )
+  -> Set Property by Name ( Property = "Far Shadow Strength", Value = 0.6 )
+```

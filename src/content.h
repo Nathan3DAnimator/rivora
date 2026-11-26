@@ -96,6 +96,10 @@ typedef struct ContentLevelHooks {
     bool (*open)(const char* path);
     bool (*create)(const char* path);
     void (*save_all)(void); // the toolbar's Save All (the editor's: the level and the changed assets)
+    // (2026-11-24, the Filters) the level at that disk path has unsaved changes; the assets the level's actors use (their
+    // vpaths' hashes, bp_vpath_hash: meshes, materials, classes, sounds...), their count
+    bool (*unsaved)(const char* path);
+    int (*used_assets)(uint32_t* out, int cap);
 } ContentLevelHooks;
 void content_set_level_hooks(const ContentLevelHooks* h);
 // The editors call it first when asked to open an asset: true when the Content Browser just made it (Add): it is
@@ -149,3 +153,31 @@ typedef struct ContentEditorHooks {
     void (*meshes_changed)(void);
 } ContentEditorHooks;
 void content_set_editor_hooks(const ContentEditorHooks* h);
+
+// --- (2026-11-24) Filters, as Unreal's Content Browser Filters (content.c): the type filters that are on add up (OR),
+// the Other filters and the search narrow them (AND); any filter on lists the current folder and below without folders ---
+typedef enum CbFilterId {
+    CBF_BLUEPRINT = 0, CBF_WIDGET, CBF_MATERIAL, CBF_MATERIAL_INSTANCE, CBF_STATIC_MESH, CBF_SKELETAL_MESH, CBF_TEXTURE,
+    CBF_SOUND, CBF_LEVEL, CBF_ANIMATION, CBF_PARTICLES, CBF_SEQUENCE, CBF_DATA_ASSET, CBF_STRUCT, CBF_ENUM, CBF_AI,
+    CBF_INPUT, CBF_SCRIPT, CBF_IK_RIG, CBF_PHYSICS, CBF_VEHICLE, CBF_DIALOGUE, CBF_QUEST, CBF_CAMERA_SHAKE, CBF_PCG,
+    CBF_MODEL_FILE, CBF_OTHER_FILE,
+    CBF_FIRST_OTHER, // the Other Filters
+    CBF_FAVORITES = CBF_FIRST_OTHER, CBF_RECENT, CBF_MODIFIED, CBF_IN_LEVEL,
+    CBF_COUNT
+} CbFilterId;
+int content_filter_count(void);
+const char* content_filter_label(int id);                // English (TR)
+void content_filter_set(int id, bool added, bool on);    // added: its chip shown; on: it filters
+void content_filter_get(int id, bool* added, bool* on);
+void content_filters_clear(void);
+bool content_is_favorite(const char* vpath);
+void content_set_favorite(const char* vpath, bool on);
+double content_filter_scan_ms(void);                     // the last folder read's time (with the filters)
+// The folder (and the search) listed now, as the panel would (the tests): the count, then each item's vpath
+int content_test_list(const char* folder_vpath, const char* search);
+const char* content_test_item(int i);
+// editor.ini: the chips, which are on, the favorites and the recent assets; a change to write (taken once)
+#include <stdio.h>
+void content_write_prefs(FILE* f);
+bool content_read_pref(const char* key, const char* v);
+bool content_take_prefs_changed(void);

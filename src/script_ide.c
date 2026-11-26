@@ -1,5 +1,6 @@
 // The scripts' IDE (script_ide.h): documents in tabs, a text buffer edited by hand (ImGui draws it: no InputText), the
 // language's colors, live errors, completion, signature help, go to definition, find / replace; the API reference.
+#include "editor_docs.h"
 #include "script_ide.h"
 
 #include "theme.h"
@@ -105,7 +106,7 @@ static void relines(Doc* d) {
             if (c == '"') str = !str;
             if (str) continue;
             if (c == '/' && i + 1 < e && d->text[i + 1] == '/') break;
-            if ((d->lang == SL_C || d->lang == SL_CSHARP) && c == '/' && i + 1 < e && d->text[i + 1] == '*') in = true, i++;
+            if ((d->lang == SL_C || d->lang == SL_CSHARP || d->lang == SL_CPP) && c == '/' && i + 1 < e && d->text[i + 1] == '*') in = true, i++;
         }
     }
 }
@@ -303,12 +304,12 @@ static void colorize(Doc* d, int l, uint8_t* col) {
             continue;
         }
         char c = s[i];
-        bool hash = c == '#' && (d->lang == SL_PYTHON || d->lang == SL_REAL || d->lang == SL_C || d->lang == SL_CSHARP);
+        bool hash = c == '#' && (d->lang == SL_PYTHON || d->lang == SL_REAL || d->lang == SL_C || d->lang == SL_CSHARP || d->lang == SL_CPP);
         if ((c == '/' && i + 1 < n && s[i + 1] == '/') || hash) {
-            memset(col + i, (d->lang == SL_C || d->lang == SL_CSHARP) && hash ? C_KEYWORD : C_COMMENT, (size_t)(n - i));
+            memset(col + i, (d->lang == SL_C || d->lang == SL_CSHARP || d->lang == SL_CPP) && hash ? C_KEYWORD : C_COMMENT, (size_t)(n - i));
             return;
         }
-        if (c == '/' && i + 1 < n && s[i + 1] == '*' && (d->lang == SL_C || d->lang == SL_CSHARP)) {
+        if (c == '/' && i + 1 < n && s[i + 1] == '*' && (d->lang == SL_C || d->lang == SL_CSHARP || d->lang == SL_CPP)) {
             block = true;
             continue;
         }
@@ -1139,7 +1140,7 @@ void script_ide_draw(struct Editor* ed, double now, float dt) {
         igEndChild();
     }
     // the status line
-    igTextDisabled("%s  |  %s %d, %s %d  |  %s  |  %u %s, %u %s  |  %.2f ms, %u nodes, %u ops%s%s", g_script_lang_names[d->lang], TR("Line"),
+    igTextDisabled(TR("%s  |  %s %d, %s %d  |  %s  |  %u %s, %u %s  |  %.2f ms, %u nodes, %u ops%s%s"), g_script_lang_names[d->lang], TR("Line"),
                    d->cl + 1, TR("Col"), d->cc + 1, sf && sf->ok ? TR("compiles") : TR("errors"), nerr, TR("errors"), nwarn, TR("warnings"),
                    sf ? sf->compile_ms : 0.0, sf ? sf->nodes : 0, sf ? sf->ops : 0, I.status[0] ? "  |  " : "", I.status);
     igEnd();
@@ -1156,7 +1157,8 @@ bool script_ide_add_menu(const char* folder) {
     bool made = false;
     for (int l = 0; l < SL_COUNT; l++) {
         char label[48];
-        snprintf(label, sizeof label, "%s %s", g_script_lang_names[l], TR("Script"));
+        if (strstr(g_script_lang_names[l], "Script")) snprintf(label, sizeof label, "%s", g_script_lang_names[l]); // (Rivora Script)
+        else snprintf(label, sizeof label, "%s %s", g_script_lang_names[l], TR("Script"));
         if (!ui_menu_item(ICON_FUNCTION, label, NULL, false, true)) continue;
         char vp[700];
         for (int k = 0; k < 1000; k++) {
@@ -1171,7 +1173,7 @@ bool script_ide_add_menu(const char* folder) {
         }
     }
     igSeparator();
-    if (ui_menu_item(ICON_FUNCTION, TR("Editor Utility (Real)"), NULL, false, true)) {
+    if (ui_menu_item(ICON_FUNCTION, TR("Editor Utility (Rivora Script)"), NULL, false, true)) {
         char vp[700];
         for (int k = 0; k < 1000; k++) {
             char nm[48];
@@ -1200,4 +1202,28 @@ void script_ide_demo(const char* vpath, int line, int col, const char* word) {
         I.comp = true, I.comp_sel = 0;
         comp_build(d);
     }
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int script_ide_docs(int op, struct Editor* ed, char* names, size_t cap) { // (its tabs: the files of the project they came from)
+    (void)ed;
+    int n = 0;
+    if (op == DOCS_CLOSE) {
+        n = I.open ? I.n : 0;
+        for (int i = 0; i < I.n; i++) {
+            for (int k = 0; k < I.d[i]->nundo; k++) free(I.d[i]->undo[k].text);
+            free(I.d[i]->text), free(I.d[i]->ls), free(I.d[i]->lstate), free(I.d[i]);
+            I.d[i] = NULL;
+        }
+        I.n = 0, I.cur = -1, I.open = false, I.focused = false, I.comp = false;
+        return n;
+    }
+    for (int i = 0; i < I.n; i++) {
+        Doc* d = I.d[i];
+        if (op == DOCS_OPEN) n += I.open;
+        else if (op == DOCS_UNSAVED && d->dirty) n++, editor_docs_add_name(names, cap, d->name);
+        else if (op == DOCS_SAVE && d->dirty) n += !doc_save(d);
+    }
+    return n;
 }

@@ -480,9 +480,39 @@ void main() {
         float yv = (gl_FragCoord.y - f.viewport.y) / osize.y;
         if (yv < f.terror[1].w || yv > 1.0 - f.terror[1].w) c = vec3(0.0);
     }
+    // Outline: where the selection's object id changes (mask.frag: an id per selected object, 0 outside), on the side of
+    // the smaller id: around the selection and between two selected objects (only with a selection: pad0). Measured here,
+    // drawn below in the SDR's sRGB and (2026-11-25, item 17) in HDR10's nits too (it returned before the outline)
+    float ol_near = 0.0, ol_hl = 0.0, ol_glow = 0.0;
+    if (f.pad0 != 0u) {
+        ivec2 ms = textureSize(u_mask, 0);
+        ivec2 pcx = ivec2(uv * vec2(ms));
+        float id = texelFetch(u_mask, pcx, 0).r;
+        const ivec2 taps[8] = ivec2[8](ivec2(2, 0), ivec2(-2, 0), ivec2(0, 2), ivec2(0, -2), ivec2(1, 1), ivec2(-1, -1), ivec2(1, -1), ivec2(-1, 1));
+        float tv[8];
+        for (int i = 0; i < 8; i++) {
+            float s = texelFetch(u_mask, clamp(pcx + taps[i], ivec2(0), ms - 1), 0).r;
+            tv[i] = s;
+            if (s > id + 0.002) ol_near = 1.0, ol_hl = max(ol_hl, step(0.998, s)); // (the game's highlight: the top id)
+        }
+        // (2026-11-25, item 17) a gap a few pixels wide inside one actor (between its parts: a rig's neck, a Mannequin's
+        // joints): the same id on both opposite sides (the taps come in pairs) is the actor's inside, no line there. Only the
+        // outer silhouette is outlined, as Unreal's
+        if (id < 0.002)
+            for (int i = 0; i < 8; i += 2)
+                if (tv[i] > 0.002 && abs(tv[i] - tv[i + 1]) < 0.002) ol_near = 0.0;
+        // the game's highlight (interaction.h): a warm white outline (IAR_OUTLINE, pad0 bit 1), its silhouette lit a little
+        // (IAR_GLOW, bit 2); the editor's selection stays Unreal's orange
+        uint hm = f.pad0 >> 1;
+        if (ol_hl > 0.0 && (hm & 1u) == 0u) ol_near = 0.0;
+        if ((hm & 2u) != 0u && id > 0.998) ol_glow = 1.0;
+    }
+    vec3 ol_color = ol_hl > 0.0 ? vec3(1.0, 0.93, 0.7) : vec3(1.0, 0.62, 0.12); // (sRGB)
     if (f.hdr.x > 0.0) { // (A9.4) HDR10: the picture at paper white, its highlights opened toward the peak; the UI over it; PQ
         float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
         vec3 nits = c * f.hdr.y * (1.0 + (f.hdr.z / f.hdr.y - 1.0) * hdr_over * smoothstep(0.6, 1.0, l));
+        nits = mix(nits, from_srgb(ol_color) * f.hdr.y, ol_near); // (the outline at paper white)
+        if (ol_glow > 0.0) nits = nits * 1.18 + vec3(0.04) * f.hdr.y;
         nits = mix(nits, f.fade.rgb * f.hdr.y, clamp(f.fade.a, 0.0, 1.0));
         if (f.hdr.w > 0.0) {
             vec4 u = texelFetch(u_ui, ivec2(gl_FragCoord.xy), 0);
@@ -492,26 +522,8 @@ void main() {
         return;
     }
     c = to_srgb(c);
-    // Outline: where the selection's object id changes (mask.frag: an id per selected object, 0 outside), on the side of
-    // the smaller id: around the selection and between two selected objects (only with a selection: pad0)
-    if (f.pad0 != 0u) {
-        ivec2 ms = textureSize(u_mask, 0);
-        ivec2 pcx = ivec2(uv * vec2(ms));
-        float id = texelFetch(u_mask, pcx, 0).r;
-        float near = 0.0, hl = 0.0;
-        const ivec2 taps[8] = ivec2[8](ivec2(2, 0), ivec2(-2, 0), ivec2(0, 2), ivec2(0, -2), ivec2(1, 1), ivec2(-1, -1), ivec2(1, -1), ivec2(-1, 1));
-        for (int i = 0; i < 8; i++) {
-            float s = texelFetch(u_mask, clamp(pcx + taps[i], ivec2(0), ms - 1), 0).r;
-            if (s > id + 0.002) near = 1.0, hl = max(hl, step(0.998, s)); // (the game's highlight: the top id)
-        }
-        // the game's highlight (interaction.h): a warm white outline (IAR_OUTLINE, pad0 bit 1), its silhouette lit a little
-        // (IAR_GLOW, bit 2); the editor's selection stays Unreal's orange
-        uint hm = f.pad0 >> 1;
-        if (hl > 0.0 && (hm & 1u) == 0u) near = 0.0;
-        c = mix(c, hl > 0.0 ? vec3(1.0, 0.93, 0.7) : vec3(1.0, 0.62, 0.12), near);
-        if ((hm & 2u) != 0u && id > 0.998) c = mix(c, vec3(1.0, 0.95, 0.8), 0.18) + vec3(0.04);
-    }
-    if ((f.mr_flags & MR_ON) != 0u) { // (Q25b) mixed reality: the alpha over the passthrough; the fade covers the real world too
+    c = mix(c, ol_color, ol_near);
+    if (ol_glow > 0.0) c = mix(c, vec3(1.0, 0.95, 0.8), 0.18) + vec3(0.04);    if ((f.mr_flags & MR_ON) != 0u) { // (Q25b) mixed reality: the alpha over the passthrough; the fade covers the real world too
         vec4 m = mr_out(f, c, uv);
         float fa = clamp(f.fade.a, 0.0, 1.0);
         o_color = vec4(mix(m.rgb, f.fade.rgb, fa), mix(m.a, 1.0, fa));

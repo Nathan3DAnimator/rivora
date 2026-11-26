@@ -1,6 +1,6 @@
 id: open-source-license
 kind: concept
-title: Licença MIT, jogos sem royalties e doações | MIT License, royalty-free games and donations
+title: Licença MIT, jogos sem royalties e doações | MIT License, royalty-free games and donations | Licencia, código abierto y privacidad
 keys: licenca, licença, license, mit, codigo aberto, código aberto, open source, gratuito, gratis, free, royalties, royalty, vender meu jogo, sell my game, posso vender, can i sell, steam, avisos de terceiros, third party notices, third-party, privacidade, privacy, telemetria, telemetry, doacao, doação, doar, donate, donation, apoiar, support, epic games, afiliado, affiliated
 --- pt
 ```diagram steps
@@ -40,3 +40,22 @@ Rivora Engine: open source (MIT) | Make your game | Package Game puts the licens
 ## Notices
 - The Rivora Engine is **not affiliated with or endorsed by Epic Games**. It takes after Unreal's usability, with none of its code.
 - **Help > About Rivora Engine > License and Third-Party Notices** opens the full texts.
+--- es
+```diagram steps
+Rivora Engine: código abierto (MIT) | Haz tu juego | Package Game pone la licencia y los avisos a su lado | Véndelo donde quieras, sin regalías
+```
+## La licencia
+- La Rivora Engine es **gratuita y de código abierto** bajo la **Licencia MIT**: úsala, cámbiala y distribúyela, productos comerciales incluidos.
+- **Los juegos hechos con ella son tuyos.** Véndelos en Steam o donde sea, **sin regalías**, sin pedir permiso.
+- La Licencia MIT solo pide que su aviso de copyright vaya junto: **Package Game** ya pone `Rivora_LICENSE.txt` y `THIRD_PARTY_NOTICES.md` (las licencias de las bibliotecas y las fuentes) en la carpeta del juego. Los escaladores (DLSS, FSR, XeSS) llevan sus propias licencias junto a cada DLL.
+- El contenido de tu juego (modelos, sonidos, música, texto) debe ser tuyo o tener licencia de uso comercial. Los assets de las demos son **CC0** y pueden ir en tu juego.
+
+## Privacidad
+- **Sin telemetría.** El motor solo se conecta a internet para buscar actualizaciones, descargar los artículos del Asistente y enviar un informe de error **cuando tú lo confirmas**. Detalles en `PRIVACY.md`.
+
+## Apoyo
+- **Ayuda > Support Rivora Engine (Donate)** abre la página de donaciones del sitio. El motor sigue siendo gratuito; las donaciones lo mantienen en marcha.
+
+## Avisos
+- La Rivora Engine **no está afiliada ni respaldada por Epic Games**. Toma como modelo la usabilidad de Unreal, sin nada de su código.
+- **Ayuda > About Rivora Engine > License and Third-Party Notices** abre los textos completos.

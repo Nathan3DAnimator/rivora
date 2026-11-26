@@ -5,7 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "async.h"
 #include "components.h"
+#include "i18n.h"
 #include "render.h"
 #include "vkctx.h"
 #include "volume.h"
@@ -43,6 +45,7 @@ typedef struct FireState {
     VolumeClip clip;
     GpuBuf stage[RE_FRAMES_IN_FLIGHT];
     uint32_t frame_up;
+    uint32_t loading_key; // (2026-11-25) the clip a worker reads now (0: none): drawn when it comes (vol_done)
 } FireState;
 
 static struct {
@@ -118,6 +121,41 @@ static float n1(float t) {
     return a + (b - a) * f;
 }
 
+// (2026-11-25, bug-fixer) A Heterogeneous Volume's clip read on a worker: the files (24 .vdb for the example) read and
+// resampled into its grid took the editor's frame (1096 ms the frame it was placed, the UI sweep). The volume shows
+// when its clip comes; nothing else waits (a --bench waits for it: async_idle)
+typedef struct VolLoad {
+    Entity e;
+    uint32_t key;
+    CVolume v; // (a copy: the actor may change or go meanwhile)
+    VolumeClip clip;
+    bool ok;
+} VolLoad;
+static const char* vol_label(void) { return TR("Loading a Heterogeneous Volume"); } // (fire_fill's "tr" is a transform)
+static void vol_work(AsyncTask* t, void* arg) {
+    (void)t;
+    VolLoad* L = arg;
+    L->ok = volume_load(&L->v, &L->clip);
+}
+static void vol_done(AsyncTask* t, void* arg, bool ok) { // (the main thread, at a frame's start)
+    (void)t;
+    VolLoad* L = arg;
+    FireState* s = NULL;
+    for (uint32_t i = 0; i < F.n && !s; i++)
+        if (F.s[i].e == L->e && F.s[i].loading_key == L->key) s = &F.s[i];
+    if (s && F.vk) {
+        s->loading_key = 0;
+        vkDeviceWaitIdle(F.vk->device); // (its staging buffers may be read)
+        for (int i = 0; i < RE_FRAMES_IN_FLIGHT; i++) gpu_buf_destroy(F.vk, &s->stage[i]);
+        volume_free(&s->clip);
+        if (ok && L->ok) s->clip = L->clip, L->clip.data = NULL;
+        s->clip.key = L->key; // (tried once for these options, read or not)
+        s->frame_up = ~0u, s->time = 0.0f;
+    }
+    volume_free(&L->clip); // (the actor gone or changed meanwhile: dropped)
+    free(L);
+}
+
 void fire_fill(World* w, float dt, const float sun_dir[3], uint32_t slot) {
     F.slot = slot % RE_FRAMES_IN_FLIGHT;
     F.stats.fires = F.stats.cells = 0;
@@ -169,11 +207,15 @@ void fire_fill(World* w, float dt, const float sun_dir[3], uint32_t slot) {
                 if (F.s[i].e == ents[r]) s = &F.s[i];
             if (!s && F.n < FIRE_MAX) s = &F.s[F.n++], memset(s, 0, sizeof *s), s->e = ents[r], s->playback = true, relayout = true;
             if (!s) continue;
-            if (s->clip.key != volume_key(&vc[r])) {
-                vkDeviceWaitIdle(F.vk->device); // (its staging buffers may be read)
-                for (int i = 0; i < RE_FRAMES_IN_FLIGHT; i++) gpu_buf_destroy(F.vk, &s->stage[i]);
-                if (!volume_load(&vc[r], &s->clip)) s->clip.key = volume_key(&vc[r]); // (tried once for these options)
-                s->frame_up = ~0u, s->time = 0.0f;
+            uint32_t vkey = volume_key(&vc[r]);
+            if (s->clip.key != vkey && s->loading_key != vkey) { // (read on a worker: vol_done puts it in place)
+                VolLoad* L = calloc(1, sizeof *L);
+                if (L) {
+                    L->e = ents[r], L->key = vkey, L->v = vc[r];
+                    s->loading_key = vkey;
+                    // (no workers: it runs here and vol_done puts it in place at once, as before)
+                    async_run(vol_label(), vol_work, vol_done, L, ASYNC_QUIET);
+                }
             }
             if (!s->clip.data) { s->used = true; continue; }
             if (s->nx != s->clip.nx || s->ny != s->clip.ny || s->nz != s->clip.nz) s->nx = s->clip.nx, s->ny = s->clip.ny, s->nz = s->clip.nz, relayout = true;

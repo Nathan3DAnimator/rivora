@@ -85,14 +85,14 @@ static void preview(void) {
     float w = fs * 12, hh = fs * 1.5f, r = TMV(TM_RADIUS_NODE);
     ImDrawList_AddRectFilled(dl, p, (ImVec2){ p.x + w, p.y + fs * 4.2f }, TH(TK_BG_RAISED), r, 0);
     ImDrawList_AddRectFilled(dl, p, (ImVec2){ p.x + w, p.y + hh }, TH(TK_NODE_FUNCTION), r, ImDrawFlags_RoundCornersTop);
-    ImDrawList_AddText_Vec2(dl, (ImVec2){ p.x + 8, p.y + (hh - fs) * 0.5f }, TH(TK_NODE_TITLE), "Print String", NULL);
+    ImDrawList_AddText_Vec2(dl, (ImVec2){ p.x + 8, p.y + (hh - fs) * 0.5f }, TH(TK_NODE_TITLE), "Print String", NULL); // i18n: none (a node's name in the preview)
     const int pins[4] = { TK_PIN_EXEC, TK_PIN_STRING, TK_PIN_FLOAT, TK_PIN_BOOL };
     for (int k = 0; k < 4; k++)
         ImDrawList_AddCircleFilled(dl, (ImVec2){ p.x + 12 + k * fs * 1.4f, p.y + hh + fs * 1.2f }, fs * 0.3f, TH(pins[k]), 12);
     ImVec2 q = { p.x + w + fs, p.y };
     ImDrawList_AddRectFilled(dl, q, (ImVec2){ q.x + w * 0.8f, q.y + fs * 4.2f }, TH(TK_BG_RAISED), r, 0);
     ImDrawList_AddRectFilled(dl, q, (ImVec2){ q.x + w * 0.8f, q.y + hh }, TH(TK_NODE_EVENT), r, ImDrawFlags_RoundCornersTop);
-    ImDrawList_AddText_Vec2(dl, (ImVec2){ q.x + 8, q.y + (hh - fs) * 0.5f }, TH(TK_NODE_TITLE), "Event BeginPlay", NULL);
+    ImDrawList_AddText_Vec2(dl, (ImVec2){ q.x + 8, q.y + (hh - fs) * 0.5f }, TH(TK_NODE_TITLE), "Event BeginPlay", NULL); // i18n: none (a node's name in the preview)
     igDummy((ImVec2){ w * 2, fs * 4.4f });
     igEndChild();
     igPopStyleVar(1);

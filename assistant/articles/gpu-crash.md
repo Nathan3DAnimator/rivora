@@ -1,6 +1,6 @@
 id: gpu-crash
 kind: error
-title: Erro: a GPU parou de responder (device lost) | Error: the GPU stopped responding (device lost)
+title: Erro: a GPU parou de responder (device lost) | Error: the GPU stopped responding (device lost) | La GPU se detuvo (crash de la GPU)
 keys: gpu parou, gpu travou, device lost, vk_error_device_lost, tela preta, driver reiniciou, placa de video travou, crash da gpu, gpu crash, gpu hang, tdr, nvlddmkm
 match: VK_ERROR_DEVICE_LOST
 --- pt
@@ -17,3 +17,10 @@ The graphics card stopped in the middle of a frame and the driver reset it. The 
 - A frame the GPU doesn't finish in 10 s counts as the same error (the driver sometimes resets without telling the program).
 - Send the report when the editor asks the next time it opens: with the pass, the fix is much faster. [Report a bug](article:report-bug)
 - Meanwhile: update the driver and try a lighter preset (Settings > Medium).
+--- es
+La tarjeta gráfica se detuvo en medio de un cuadro y el controlador la reinició. El editor guarda la escena (Emergency save) y escribe un informe.
+- El informe dice **en qué pase se detuvo la GPU** ("The GPU stopped at frame N in “tecido (simulacao)”"): cada pase del cuadro se marca mientras la GPU trabaja.
+- Cuando el controlador da su motivo, este viene incluido (la dirección y el tipo de la falla).
+- Un cuadro que la GPU no termina en 10 s cuenta como el mismo error (a veces el controlador se reinicia sin avisar al programa).
+- Envía el informe cuando el editor lo pida la próxima vez que se abra: con el pase, la corrección es mucho más rápida. [Reportar un error](article:report-bug)
+- Mientras tanto: actualiza el controlador y prueba un preset más ligero (Configuración > Medio).

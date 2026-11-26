@@ -37,6 +37,7 @@
 #include "pcg.h"
 #include "hud.h"
 #include "spline.h"
+#include "platform_files.h"
 
 #define DEG2RAD 0.017453292519943295f
 #define NEAR_CM 1.0f
@@ -388,6 +389,10 @@ static Entity pick(Editor* ed, const View* v, ImVec2 m) {
             ImVec2 p;
             if (!project_point(v, t->location, &p)) continue;
             bool card = ecs_get(w, e, COMP_SKELETAL_MESH) || ecs_get(w, e, COMP_STATIC_MESH);
+            if (card && e != ed->selected && v->ppc <= 0.0f) { // (2026-11-24: a far mesh actor's card isn't drawn: draw_icon_at)
+                float dd[3] = { t->location[0] - v->ro[0], t->location[1] - v->ro[1], t->location[2] - v->ro[2] };
+                if (dot3(dd, dd) > 2000.0f * 2000.0f) continue;
+            }
             float r = card ? s * 0.95f : s * 0.62f + 2.0f, dx = p.x - m.x, dy = p.y - m.y;
             if (card ? fabsf(dx) > r || fabsf(dy) > r : dx * dx + dy * dy > r * r) continue;
             float d[3] = { t->location[0] - v->ro[0], t->location[1] - v->ro[1], t->location[2] - v->ro[2] };
@@ -464,12 +469,19 @@ static void draw_icon_at(Editor* ed, ImDrawList* dl, const View* v, Entity e, co
     float d[3] = { t->location[0] - v->pos[0], t->location[1] - v->pos[1], t->location[2] - v->pos[2] };
     float dist = v->ppc > 0.0f ? 900.0f : sqrtf(dot3(d, d)); // (orthographic: no depth, the full size)
     s *= fminf(fmaxf(900.0f / fmaxf(dist, 1.0f), 0.5f), 1.25f);
+    // (2026-11-24, item 4: the Unamed scene's 2080 Skeletal Mesh Actors drew ~100 k ImGui shapes a frame, ~14 ms of CPU) a
+    // mesh actor's card only near (its mesh shows it; Unreal draws none for them) and, with many icons, the line and the
+    // ring to the ground only near too; the selection always
+    bool sel_now = e == ed->selected;
+    bool meshy = ecs_get(w, e, COMP_SKELETAL_MESH) || ecs_get(w, e, COMP_STATIC_MESH);
+    if (!sel_now && meshy && dist > 2000.0f) return;
+    bool decor = sel_now || g_icons.n <= 256 || dist < 1500.0f;
     bool occ = gi != UINT32_MAX && g_icons.occluded && g_icons.occluded[gi];
     uint32_t fade = occ ? THA(TK_N0, 85) : TH(TK_N0);
     float gz = gi != UINT32_MAX && g_icons.ground ? g_icons.ground[gi] : 0.0f;
     const CLight* lt = ecs_get(w, e, COMP_LIGHT);
     bool everywhere = lt && (lt->type == LIGHT_DIRECTIONAL || lt->type == LIGHT_SKY); // (the sun and the sky: no place)
-    if (!everywhere && t->location[2] - gz > 5.0f) { // the line to the ground and the shadow on it (a circle lying on the floor)
+    if (decor && !everywhere && t->location[2] - gz > 5.0f) { // the line to the ground and the shadow on it (a circle lying on the floor)
         float g[3] = { t->location[0], t->location[1], gz };
         ImVec2 gp;
         if (project_point(v, g, &gp)) {
@@ -680,14 +692,15 @@ static void draw_navmesh(Editor* ed, ImDrawList* dl, const View* v, bool polys) 
     (void)ed;
 }
 
-static void draw_selected_shape(Editor* ed, ImDrawList* dl, const View* v) {
+uint32_t g_sel_shapes_drawn, g_sel_fallback_drawn; // (2026-11-25, item 17) the selection's shapes drawn so far (the tests: selection_test.c)
+static void draw_selected_shape(Editor* ed, ImDrawList* dl, const View* v, Entity sel) {
     World* w = &ed->world;
-    const CTransform* t = ecs_get(w, ed->selected, COMP_TRANSFORM);
+    const CTransform* t = ecs_get(w, sel, COMP_TRANSFORM);
     if (!t) return;
     float m[3][3];
     rotator_axes(t->rotation, m);
     const uint32_t col = THA(TK_AMBER_L, 192);
-    const CLight* l = ecs_get(w, ed->selected, COMP_LIGHT);
+    const CLight* l = ecs_get(w, sel, COMP_LIGHT);
     if (l) {
         if (l->type == LIGHT_POINT) {
             circle3(dl, v, t->location, m[0], m[1], l->attenuation_radius, col, 1.5f);
@@ -717,7 +730,7 @@ static void draw_selected_shape(Editor* ed, ImDrawList* dl, const View* v) {
             line3(dl, v, t->location, tip, TH(TK_AMBER), 3.0f);
         }
     }
-    const CPostProcess* ppv = ecs_get(w, ed->selected, COMP_POST_PROCESS);
+    const CPostProcess* ppv = ecs_get(w, sel, COMP_POST_PROCESS);
     if (ppv && !(ppv->flags & PPV_UNBOUND)) { // the volume's box (100 cm * scale each way), Unreal's pink wireframe
         float p[8][3];
         for (int c = 0; c < 8; c++)
@@ -728,7 +741,7 @@ static void draw_selected_shape(Editor* ed, ImDrawList* dl, const View* v) {
             for (int b = 1; b < 8; b <<= 1)
                 if (!(c & b)) line3(dl, v, p[c], p[c | b], TH(TK_PINK_L), 1.5f);
     }
-    if (ecs_get(w, ed->selected, COMP_DECAL)) { // a decal's box (100 cm * scale each way) and the way it projects (its X)
+    if (ecs_get(w, sel, COMP_DECAL)) { // a decal's box (100 cm * scale each way) and the way it projects (its X)
         float p[8][3];
         for (int c = 0; c < 8; c++)
             for (int k = 0; k < 3; k++)
@@ -741,7 +754,7 @@ static void draw_selected_shape(Editor* ed, ImDrawList* dl, const View* v) {
         for (int k = 0; k < 3; k++) tip[k] = t->location[k] + m[0][k] * t->scale[0] * 100.0f;
         line3(dl, v, t->location, tip, TH(TK_AMBER), 3.0f);
     }
-    const CNav* nav = ecs_get(w, ed->selected, COMP_NAV);
+    const CNav* nav = ecs_get(w, sel, COMP_NAV);
     if (nav && nav->kind != NAV_LINK_PROXY) { // a Nav Mesh Bounds / Modifier Volume's box (100 cm * scale each way)
         float p[8][3];
         for (int c = 0; c < 8; c++)
@@ -753,7 +766,7 @@ static void draw_selected_shape(Editor* ed, ImDrawList* dl, const View* v) {
             for (int b = 1; b < 8; b <<= 1)
                 if (!(c & b)) line3(dl, v, p[c], p[c | b], ncol, 1.5f);
     }
-    const CCheckpoint* ckp = ecs_get(w, ed->selected, COMP_CHECKPOINT);
+    const CCheckpoint* ckp = ecs_get(w, sel, COMP_CHECKPOINT);
     if (ckp) { // a Checkpoint's box (its extent * scale) and where the player comes back (save_progress.h)
         float p[8][3];
         for (int c = 0; c < 8; c++)
@@ -768,7 +781,7 @@ static void draw_selected_shape(Editor* ed, ImDrawList* dl, const View* v) {
         for (int k = 0; k < 3; k++) up[k] = sp[k] + m[2][k] * 180.0f;
         line3(dl, v, sp, up, TH(TK_AMBER), 2.5f);
     }
-    const CCamera* cam = ecs_get(w, ed->selected, COMP_CAMERA);
+    const CCamera* cam = ecs_get(w, sel, COMP_CAMERA);
     if (cam) {
         float d = 120.0f, hx = tanf(cam->fov_deg * 0.5f * DEG2RAD) * d, hy = hx * 9.0f / 16.0f, p[4][3];
         for (int i = 0; i < 4; i++) {
@@ -780,8 +793,53 @@ static void draw_selected_shape(Editor* ed, ImDrawList* dl, const View* v) {
             line3(dl, v, t->location, p[i], col, 1.0f);
         }
     }
+// (2026-11-25, item 17) an actor with no mesh and no shape above (an Empty, a Player Start, a trigger): its collision
+    // (a box, a sphere, a capsule) or a small box, so it shows selected with the icons hidden (G) too
+    bool shaped = l || ppv || ecs_get(w, sel, COMP_DECAL) || nav || ckp || cam;
+    if (shaped) g_sel_shapes_drawn++;
+    // (a Water Body: its plane is only for picking, not in the selection's mask: its box drawn from that plane's bounds;
+    // a particle system, a fire: no mesh, the default box)
+    const bool water = ecs_get(w, sel, COMP_WATER) != NULL;
+    if (!shaped && (water || !ecs_get(w, sel, COMP_STATIC_MESH)) && !ecs_get(w, sel, COMP_SKELETAL_MESH)) {
+        g_sel_shapes_drawn++, g_sel_fallback_drawn++;
+        const CCollision* cc = ecs_get(w, sel, COMP_COLLISION);
+        bool ps = ecs_get(w, sel, COMP_PLAYER_START) != NULL;
+        float e3[3] = { 25.0f, 25.0f, 25.0f };
+        int shape = COLLISION_BOX;
+        if (cc) shape = (int)cc->shape, memcpy(e3, cc->extent, sizeof e3);
+        else if (water) { // its plane's half extents (the mesh's bounds), a few cm deep
+            const CStaticMesh* wsm = ecs_get(w, sel, COMP_STATIC_MESH);
+            float bmn[3] = { -50, -50, 0 }, bmx[3] = { 50, 50, 0 };
+            if (wsm) render_mesh_bounds(wsm->mesh, bmn, bmx);
+            e3[0] = fmaxf((bmx[0] - bmn[0]) * 0.5f, 1.0f), e3[1] = fmaxf((bmx[1] - bmn[1]) * 0.5f, 1.0f), e3[2] = 5.0f;
+        }
+        else if (ps) shape = COLLISION_CAPSULE, e3[0] = 42.0f, e3[1] = 96.0f; // (Unreal's player capsule)
+        if (shape == COLLISION_BOX) {
+            float p[8][3];
+            for (int c = 0; c < 8; c++)
+                for (int k = 0; k < 3; k++)
+                    p[c][k] = t->location[k] + m[0][k] * t->scale[0] * ((c & 1) ? e3[0] : -e3[0]) +
+                              m[1][k] * t->scale[1] * ((c & 2) ? e3[1] : -e3[1]) + m[2][k] * t->scale[2] * ((c & 4) ? e3[2] : -e3[2]);
+            for (int c = 0; c < 8; c++)
+                for (int b = 1; b < 8; b <<= 1)
+                    if (!(c & b)) line3(dl, v, p[c], p[c | b], col, 1.5f);
+        } else {
+            float r = e3[0] * t->scale[0], hh = shape == COLLISION_CAPSULE ? fmaxf(e3[1] * t->scale[2] - r, 0.0f) : 0.0f;
+            float top[3], bot[3];
+            for (int k = 0; k < 3; k++) top[k] = t->location[k] + m[2][k] * hh, bot[k] = t->location[k] - m[2][k] * hh;
+            circle3(dl, v, top, m[0], m[1], r, col, 1.5f);
+            circle3(dl, v, bot, m[0], m[1], r, col, 1.5f);
+            circle3(dl, v, t->location, m[0], m[2], r + hh, col, 1.5f); // (the outline seen from the side: a sphere's ring, a capsule's long one)
+            circle3(dl, v, t->location, m[1], m[2], r + hh, col, 1.5f);
+            for (int s = 0; s < 4 && hh > 0.0f; s++) {
+                float d[3], a0 = (float)s * 1.5707963f, p0[3], p1[3];
+                for (int k = 0; k < 3; k++) d[k] = (m[0][k] * cosf(a0) + m[1][k] * sinf(a0)) * r;
+                for (int k = 0; k < 3; k++) p0[k] = top[k] + d[k], p1[k] = bot[k] + d[k];
+                line3(dl, v, p0, p1, col, 1.5f);
+            }
+        }
+    }
 }
-
 // --- The gizmo (copied and adapted from the Tlender's manipulators, manip.c / ui.c / view3d.c; 2026-11-23: its whole
 // control layer too). Move: arrows, plane squares, the center ball (free in the view plane). Rotate: the front half of
 // each axis ring, the outer ring (about the view axis), the trackball inside (free), the swept angle as a pie. Scale:
@@ -2379,7 +2437,14 @@ void viewport_draw(Editor* ed, float x, float y, float w, float h, double dt) {
     if (ed->playing && !io->WantTextInput && igIsKeyPressed_Bool(ImGuiKey_Apostrophe, false)) ed->show_ai = !ed->show_ai;
     if (ed->playing && ed->show_ai) draw_ai(ed, dl, &v);
     if (ed->show_nav || editing) draw_navmesh(ed, dl, &v, ed->show_nav); // (the Nav Links always while editing, as Unreal's)
-    if (!pie_view && ecs_alive(&ed->world, ed->selected)) draw_selected_shape(ed, dl, &v);
+    // (2026-11-25, item 17) every selected actor's shape, not only the primary's; with the icons hidden (G) too
+    if (!pie_view) {
+        if (ed->nsel)
+            for (uint32_t i = 0; i < ed->nsel && i < 256u; i++) {
+                if (ecs_alive(&ed->world, ed->sel[i])) draw_selected_shape(ed, dl, &v, ed->sel[i]);
+            }
+        else if (ecs_alive(&ed->world, ed->selected)) draw_selected_shape(ed, dl, &v, ed->selected);
+    }
 
     // Gizmo: hover, drag, release (the undo history gets the state from before the drag). While dragging, the gizmo is
     // the one the drag began with (its pivot and axes): the handles follow the mouse, not the moving actor

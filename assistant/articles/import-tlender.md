@@ -1,6 +1,6 @@
 id: import-tlender
 kind: howto
-title: Importar do Tlender, OBJ, glTF e FBX | Import from the Tlender, OBJ, glTF and FBX
+title: Importar do Tlender, OBJ, glTF e FBX | Import from the Tlender, OBJ, glTF and FBX | Importar modelos del Tlender, OBJ, glTF o FBX
 keys: importar, import, tlender, tlend, obj, fbx, gltf, glb, modelo 3d, blender, personagem importado, arrastar arquivo
 --- pt
 ```diagram steps
@@ -16,7 +16,6 @@ Arquivo > Importar (ou arrastar o arquivo) | Opções: Colocar no Nível | Roda 
 - Uma armature com a malha que ela deforma vira **Skeletal Mesh**; cada action vira uma **animação**.
 - Luzes e câmeras do .tlend, do glTF e do FBX viram atores; modificadores, nós sem equivalente e drivers do Tlender: veja o Relatório de Importação.
 - Cada Static Mesh guarda o **material da importação**: o visualizador da malha mostra com as texturas, a malha arrastada do Content Browser para o nível já vem com ele, e a miniatura ganha a cor dele.
-
 --- en
 ```diagram steps
 File > Import (or drag the file) | Options: Place in Level | Runs in the background (a card) | Meshes, materials and animations ready
@@ -31,3 +30,17 @@ File > Import (or drag the file) | Options: Place in Level | Runs in the backgro
 - An armature with the mesh it deforms becomes a **Skeletal Mesh**; each action an **animation**.
 - The .tlend's, glTF's and FBX's lights and cameras become actors; the Tlender's modifiers, nodes without an equivalent and drivers: see the Import Report.
 - Each Static Mesh keeps its **import's material**: the mesh viewer shows it with its textures, the mesh dragged from the Content Browser into the level comes with it, and its thumbnail takes its color.
+--- es
+```diagram steps
+Archivo > Importar (o arrastra el archivo) | Opciones: Place in Level | Se ejecuta en segundo plano (una tarjeta) | Mallas, materiales y animaciones listos
+```
+## Cómo importar
+1. **Archivo > Import Into Level...** o arrastra los archivos del Explorador al editor. [Muéstrame dónde](show:File>Import Into Level...)
+2. En la ventana de opciones, marca **Place in Level** para que los objetos queden donde estaban en el archivo.
+3. La importación se ejecuta en segundo plano: el editor no se congela, y una tarjeta abajo a la derecha muestra su progreso.
+
+## Qué se convierte en qué
+- Las mallas pasan a ser **Static Meshes**; los materiales se reconstruyen a partir de sus nodos (los de Blender).
+- Un armature con la malla que deforma pasa a ser un **Skeletal Mesh**; cada action, una **animación**.
+- Las luces y cámaras de .tlend, glTF y FBX pasan a ser actores; los modificadores del Tlender, los nodos sin equivalente y los drivers: consulta el Informe de importación.
+- Cada Static Mesh conserva el **material de su importación**: el visor de mallas lo muestra con sus texturas, la malla arrastrada del Explorador de contenidos al nivel llega con él, y su miniatura toma su color.

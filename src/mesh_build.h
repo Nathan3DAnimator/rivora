@@ -51,9 +51,22 @@ bool mesh_build_corners_col(const GpuVertex* corners, const uint32_t* colors, ui
 // of different source vertices never weld, the deltas follow the welding and the reordering
 bool mesh_build_skinned(const GpuVertex* corners, uint32_t ntri, const uint32_t* csrc, const MeshMorphs* morphs, MeshBuilt* out);
 bool mesh_build_indexed(const GpuVertex* v, uint32_t nv, const uint32_t* idx, uint32_t ni, bool atlas, bool lods, MeshBuilt* out);
+// (2026-11-24, the Static Mesh viewer's LOD Settings) The same with the LODs asked for: lods (1 = LOD 0 alone, up to
+// RMESH_MAX_LODS), each one's share of LOD 0's triangles (percent[l]; 0: a quarter of the one before), from min_tris
+// triangles (0: 16; the automatic rule waits for 1024). The .rmesh's LOD table holds them (no format change)
+typedef struct MeshLodOptions {
+    uint32_t lods;
+    float percent[RMESH_MAX_LODS];
+    uint32_t min_tris;
+} MeshLodOptions;
+bool mesh_build_indexed_lods(const GpuVertex* v, uint32_t nv, const uint32_t* idx, uint32_t ni, bool atlas, const MeshLodOptions* o, MeshBuilt* out);
+// A skin's LODs made again with those options (its old ones dropped; not cached); false: none made
+bool mesh_skinned_lods_opts(MeshBuilt* mb, const MeshLodOptions* o);
 // A skin's LODs (RMESH_SKINNED, one LOD): simplified over the positions, on LOD 0's vertices (skin.comp bends those only),
 // appended to idx. The importer's skins have them; older .rmesh skins get them when they load. False: none made
 bool mesh_skinned_lods(MeshBuilt* mb);
+uint32_t mesh_islands(const MeshBuilt* m, uint32_t small_tris, uint32_t* n_small); // (small_tris: windows.h defines "small") // (2026-11-25) LOD 0's islands joined by position
+double mesh_lod_true_error(const MeshBuilt* m, uint32_t l, float* mx, float* mean); // (2026-11-25) LOD l's measured error (cm, offline)
 void mesh_built_free(MeshBuilt* m);
 bool rmesh_write(const char* path, const MeshBuilt* m);
 // A .rmesh into memory: v2 as written, v1 processed (welding, LODs). False when unreadable or over the limits

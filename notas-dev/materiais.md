@@ -493,3 +493,69 @@ Texturas UDIM (um tile por quadrado da UV) no Image Texture, com bake e streamin
 - Teste `mated_ui` (passo 0): a barra do Metálico arrastada de 1/4 a 3/4 dá 0,766, o IOR arrastado 60 px sobe
   (1,5 -> 2,1), o nó selecionado, sem mover, sem link. Custo: os campos são widgets do ImGui só nos nós visíveis com zoom
   >= 80% (o editor seguiu em ~1,9 ms por quadro na foto).
+
+## Shading mais leve: parâmetros vivos, Emission Intensity, bake no quadro, classe por malha (2026-11-24, itens 3 e 5)
+Pesquisa: o dossiê do researcher (parte A). O grafo continua o do Blender; mudou quando e como o bake roda e qual variante
+cada draw usa (o modelo Frostbite/id: shader fixo por classe, material como dados).
+- **Dobra afim** (`src/material_affine.inc`): no compilador, cada valor do IR vira, por componente, estático, uniforme
+  (parâmetros e constantes: um programa pequeno que a CPU roda, 64 instruções, 160 termos) ou `raiz * a + b`. Regras: Math
+  Add/Subtract/Multiply/Divide por uniforme/Multiply Add (sem Clamp), Vector Math equivalentes e Scale, Mix (fator
+  uniforme; Mix, Add, Subtract, Multiply), Invert, Separate/Combine XYZ e Color (RGB), conversões, o Strength do closure,
+  Mix/Add Shader. Canais dobráveis: cor base, metálico, emissão, rugosidade (normal e alpha nunca). O bake escreve as
+  raízes (`MOP_GATHER`); `write_slot` avalia a e b dos parâmetros do slot no bloco `GpuMatAff` (64 B por slot, depois do
+  GpuToon) com `MATF_AFFINE` só quando não é a identidade; `mat_affine()` aplica em mesh.frag (também decals e camadas),
+  preview, Light Function, água e impostores. As médias (GI, luz emissiva) passam pelos mesmos coeficientes
+  (`slot_avgs`, `mat_slot_emission`).
+- Parâmetro **assado**: o que entra num nó não afim (Escala de um ruído, UV, Color Ramp, Mix com fator de textura, normal,
+  alpha). A análise repete sem eles (um assado conta como constante: o ruído com Escala assada é raiz), até estabilizar;
+  `bake_mask` diz quais pedem bake. `REALENGINE_NO_AFFINE=1`: tudo assado como antes.
+- **Emission Intensity**: parâmetro de todo material que brilha (`MAT_EMISSION_INTENSITY`), multiplica os termos da
+  emissão; campo nos Detalhes (`Material.emission_intensity`, chave opcional `emission_intensity` no .rmat: os antigos
+  abrem com 1, versão 1 mantida como no `emissive_light`), Material Instance e Set Scalar Parameter Value on Materials.
+- **Memória**: com a dobra, uma Material Instance que só muda valores vivos usa as texturas do pai (é ganho, não regressão):
+  o `--stress-textures` (400 MIs com o próprio Tint, antes ~434 variantes de 4096 streamadas) caía para 34 e o
+  `texture_streaming` não via pressão de memória; o material de stress agora tem Clamp Result no Mix, o que deixa o Tint
+  assado e as 400 MIs com texturas próprias, para o teste continuar medindo a pressão de verdade.
+- Material Instance só com valores vivos usa as texturas do pai; o Material Editor, ao mexer num valor que dobra (ou na
+  Emission Intensity), escreve só os slots (assinatura do bake igual: `bake_sig`, só enquanto editado).
+- **Alocadores** (bugs do dossiê, confirmados): `params_alloc` só crescia (cada bake pegava parâmetros novos; passados 65536
+  vec4 devolvia 0 e materiais se sobrepunham) e o buffer de programas recomeçava do zero cheio (o streaming assava com o
+  `bake_off` antigo, sobre outro programa). Agora faixas tomadas e devolvidas (`params_need`, `prog_place`), o programa
+  velho enterrado até os quadros em voo terminarem.
+- **Bake no quadro** (`bake_variant_frame`): gravado no command buffer do quadro, sem `vkDeviceWaitIdle`/`vkQueueWaitIdle`;
+  texturas sempre novas, trocadas no slot só quando aquele quadro terminou (`pend_resolve`, como os jobs do streaming);
+  editado: 256² e depois sobe à resolução cheia em fatias (`S.force`); médias lidas alguns quadros depois (`rb_resolve`);
+  `comp_live` vale também para Material Instances. Masked, UDIM, flipbook e o primeiro bake seguem o caminho antigo.
+  `REALENGINE_SYNC_BAKES=1`: o antigo. Um bake no quadro só reenvia a cena quando a classe ou o slot do material mudam
+  (`mat_class_sig`; antes todo bake reenviava todas as instâncias).
+- Armadilha achada: o cemitério de texturas (64) cheio esperava a GPU e liberava tudo, inclusive o que o quadro em
+  gravação usava: com um bake por quadro a GPU caía em ~15 quadros. Agora 1024 e só o que veio de quadros enviados
+  (`st_drain_submitted`).
+- **Classe por malha**: `MESH_INFO_EXT` separa as corridas do cull; `draw_runs` usa as pipelines RE_EXT só nas malhas com
+  material RE_EXT (`g_run_x`). Chuva, Light Function, Force Toon e decals ainda trocam todas (o que tocam não é sabido por
+  malha: falta marcar por instância no cull). `REALENGINE_NO_EXT_SPLIT=1`: todas, o "antes". Granularidade: a malha (uma
+  esfera primitiva com um material RE_EXT leva as outras esferas junto).
+- Medidas (RTX 3060, 2560×1417, sem validação, OVRServer/ffmpeg do usuário abertos):
+  - Set Scalar/Vector Parameter num Blueprint: era um bake por mudança (4-23 ms; 24,9 ms a 4096 no `mat_live_edit`),
+    agora **2,85 µs** por valor e 0 bakes (`mat_live_param`); Material Instance: 0 bakes, texturas do pai.
+  - Material Editor, valor que dobra: **0,066 ms** por edição (era um bake); dobrado contra bake completo: erro máx.
+    0,0065 na cor base (linear), 0,003 na rugosidade, 0 na emissão.
+  - Cena `materials` com um material editado a cada quadro (`REALENGINE_MAT_EDIT_BENCH=1`): base 88 fps (CPU 11,3 ms),
+    bake síncrono sem reenvio 138 fps (7,2 ms), **bake no quadro 317 fps (1,8 ms)**.
+  - Cena `materials` (`--gpu-passes`): passe principal "malhas" 1,563/1,574 ms (sem separar) → **1,420/1,408 ms**
+    (−9,7%); GPU do quadro 3,41/3,36 → 3,27/3,22 ms; 288/285 → 301/302 fps.
+- **Cor na hora e texturas progressivas** (pedido do usuário: "tudo aparece branco enquanto carrega"): no `mat_load` cada
+  material (e instância) ganha um slot provisório (`ph_write`): texturas neutras 4×4 (branca, normal plana, preta) e o
+  bloco afim com a = 0 e b = as constantes do grafo (Base Color, Metallic, Roughness, Emission × Strength × Emission
+  Intensity; um nó RGB/Value ou parâmetro da instância; um Mix deles; textura e ruído: cinza até o bake), refeito se o
+  grafo muda antes do primeiro bake. O primeiro bake no quadro sai a 64² e sobe pelo streaming (64 → 256 → 1024 → cheia,
+  `MAT_FIRST_RES`). Medido (`mat_first_frame`, 4 materiais de 1024): o primeiro quadro desenhado já com as 4 cores
+  172 ms depois de criar a cena (nenhum bake antes; antes desta mudança, os 4 cubos brancos), textura cheia em 292 ms.
+  Masked, UDIM e flipbook: o primeiro bake ainda é síncrono (o provisório só some no mesmo quadro).
+- Medidas finais (build_ba): cena materials 309 fps, GPU 3,15 ms, passe principal "malhas" 1,355 ms (base 1,486);
+  um material editado a cada quadro: 265 fps, CPU 1,9 ms/quadro (base 88 fps, 11,3 ms).
+- Testes: `mat_live_param` (MI e Blueprint sem bake, imagem igual ao bake completo, Escala ainda assa, editor só escreve,
+  300 rebakes sem perder espaço), `mat_class_split` (a cena materials com corridas comuns e RE_EXT), `mat_first_frame`
+  (a foto do primeiro quadro com as cores, a subida 64 → 256 → 1024).
+- Ficou de fora (passo 5): spec constants / Graphics Pipeline Library para as travadas a frio; a emissão em BC7 (a raiz
+  da emissão já sai sem a intensidade, mas segue RGBA16F); classe por instância no cull (decals, chuva, Light Function).

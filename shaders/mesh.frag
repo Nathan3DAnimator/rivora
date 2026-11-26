@@ -738,6 +738,63 @@ float gifb(GiFbBuf b, ivec3 c) {
     uint i = (uint(c.z) * 64u + uint(c.y)) * 64u + uint(c.x);
     return float((b.v[i >> 2u] >> ((i & 3u) * 8u)) & 255u) * (1.0 / 255.0);
 }
+// (2026-11-25) the local lights' bounce after it (64 x 64 x 16 cells of 50 cm: rgb in halves, the cell's stopped faces
+// toward +x, +y, +z in bits 16-18): the light around p from the 8 cells about it that its own cell reaches without
+// crossing a stopped face (what is behind a wall never reads through it, nor the floor at a wall's foot the other room),
+// leaning toward where it grows along the normal (light seen, not light passing by: no glow on the wall beside a lit
+// door), faded out over the volume's last cells
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer GiFlBuf { uvec2 v[]; };
+vec3 gi_bounce(FrameBuf f, vec3 p, vec3 n) {
+    uvec2 a = uvec2(floatBitsToUint(f.water[24].x), floatBitsToUint(f.water[24].y));
+    uint lo = a.x + 65536u;
+    GiFlBuf b = GiFlBuf(uvec2(lo, a.y + (lo < a.x ? 1u : 0u)));
+    uint pk = floatBitsToUint(f.water[25].w);
+    vec3 o = vec3(f.water[24].zw, f.water[25].x) + vec3(uvec3(pk, pk >> 8u, pk >> 16u) & 255u) * 50.0;
+    float wv = f.water[26].w, ofs = floor(wv / 16.0), kd = wv - ofs * 16.0; // (how far out along the normal, cm; the lean)
+    vec3 g = (p + n * ofs - o) / 50.0 - 0.5;
+    const vec3 nmax = vec3(63.0, 63.0, 15.0);
+    if (any(lessThan(g, vec3(0.0))) || any(greaterThanEqual(g, nmax))) return vec3(0.0);
+    ivec3 c0 = ivec3(floor(g));
+    vec3 t = g - vec3(c0);
+    vec3 V[8];
+    uint fl[8];
+    for (int k = 0; k < 8; k++) {
+        ivec3 c = c0 + ivec3(k & 1, (k >> 1) & 1, k >> 2);
+        uvec2 q = b.v[(uint(c.z) * 64u + uint(c.y)) * 64u + uint(c.x)];
+        V[k] = vec3(unpackHalf2x16(q.x), unpackHalf2x16(q.y).x);
+        fl[k] = q.y >> 16u;
+    }
+    // the cells reached from p's own (the face between two of them kept by the lower one; the faces inside the 8 are the
+    // lower cells' only: none stopped, the usual case even beside a wall (its plane is past them), all 8)
+    uint inner = (fl[0] & 7u) | (fl[1] & 6u) | (fl[2] & 5u) | (fl[3] & 4u) | (fl[4] & 3u) | (fl[5] & 2u) | (fl[6] & 1u);
+    uint reach = 255u;
+    if (inner != 0u) {
+        reach = 1u << uint((t.x >= 0.5 ? 1 : 0) | (t.y >= 0.5 ? 2 : 0) | (t.z >= 0.5 ? 4 : 0));
+        for (int it = 0; it < 3; it++)
+            for (uint k = 0u; k < 8u; k++)
+                if ((reach & (1u << k)) != 0u)
+                    for (uint ax = 0u; ax < 3u; ax++)
+                        if ((fl[k & ~(1u << ax)] & (1u << ax)) == 0u) reach |= 1u << (k ^ (1u << ax));
+    }
+    // the reached cells' blend and its slope along each axis (in cells)
+    vec3 s = vec3(0.0), ds[3] = vec3[3](vec3(0.0), vec3(0.0), vec3(0.0));
+    float S = 0.0;
+    vec3 dS = vec3(0.0);
+    for (uint k = 0u; k < 8u; k++) {
+        if ((reach & (1u << k)) == 0u) continue;
+        vec3 bit = vec3(uvec3(k, k >> 1u, k >> 2u) & 1u);
+        vec3 w3 = mix(1.0 - t, t, bit), sg = bit * 2.0 - 1.0;
+        float w = w3.x * w3.y * w3.z;
+        vec3 dw = sg * vec3(w3.y * w3.z, w3.x * w3.z, w3.x * w3.y);
+        s += V[k] * w, S += w;
+        ds[0] += V[k] * dw.x, ds[1] += V[k] * dw.y, ds[2] += V[k] * dw.z, dS += dw;
+    }
+    if (S < 1e-4) return vec3(0.0);
+    vec3 m = s / S;
+    vec3 dn = ((ds[0] - m * dS.x) * n.x + (ds[1] - m * dS.y) * n.y + (ds[2] - m * dS.z) * n.z) / S;
+    vec3 e = min(g, nmax - g); // (the fade at the volume's edge: 2 cells)
+    return clamp(m + dn * kd, m * 0.1, m * 2.5) * clamp(min(e.x, min(e.y, e.z)) * 0.5, 0.0, 1.0);
+}
 #endif
 void main() {
 #if defined(RE_MASKED) && !defined(RE_MASKED_EQ)
@@ -889,6 +946,14 @@ void main() {
         // Blender's emission strength 1: 100 nits
         emissive = (gm.flags & MATF_EMISSIVE) == 0u ? vec3(0.0) :
                    (udim_on ? textureGrad(u_mat_tex[nonuniformEXT(emis_tex)], udim_uv, udim_gx, udim_gy).rgb : texture(u_mat_tex[nonuniformEXT(emis_tex)], muv, mbias).rgb) * 100.0;
+        // (2026-11-24) the affine fold: the parameters that only scale or offset a channel, and the Emission Intensity,
+        // applied here to what the bake kept (material_affine.inc): an instance's or a Blueprint's values without a bake
+        [[dont_flatten]] if ((gm.flags & MATF_AFFINE) != 0u) {
+            vec3 e0 = emissive * 0.01;
+            mat_affine(f.materials, floatBitsToUint(inst.emissive_rough.x), base, metal, rough, e0);
+            emissive = e0 * 100.0;
+            rough = max(rough, 0.045);
+        }
         if ((gm.flags & MATF_WORLD_GRID) != 0u) { // Unreal's grid material: 1 m squares and lines, faint 10 cm lines
             vec3 an = abs(n);
             vec2 wp = an.z >= an.x && an.z >= an.y ? i_world.xy : an.x >= an.y ? i_world.yz : i_world.xz;
@@ -928,7 +993,10 @@ void main() {
                     vec4 tb2 = texture(u_mat_tex[nonuniformEXT(lm.tex_base)], luv, mbias), tn2 = texture(u_mat_tex[nonuniformEXT(lm.tex_nrm)], luv, mbias);
                     vec3 n2 = vec3(tn2.xy * 2.0 - 1.0, 0.0);
                     n2.z = sqrt(max(1.0 - dot(n2.xy, n2.xy), 0.0));
-                    lb += srgb_to_linear(tb2.rgb) * lw[k], ln += n2 * lw[k], lr += tn2.z * lw[k], lmt += tn2.w * lw[k];
+                    vec3 lbk = srgb_to_linear(tb2.rgb), lek = vec3(0.0);
+                    float lrk = tn2.z, lmk = tn2.w;
+                    if ((lm.flags & MATF_AFFINE) != 0u) mat_affine(f.materials, uint(X.e3[k] + 0.5), lbk, lmk, lrk, lek); // (2026-11-24)
+                    lb += lbk * lw[k], ln += n2 * lw[k], lr += lrk * lw[k], lmt += lmk * lw[k];
                 }
                 base = lb, nts = normalize(ln + vec3(0.0, 0.0, 1e-4)), rough = clamp(lr, 0.045, 1.0), metal = lmt;
             }
@@ -1042,9 +1110,12 @@ void main() {
             vec4 db = textureGrad(u_mat_tex[nonuniformEXT(dm.tex_base)], duv, gx, gy);
             vec4 dn = textureGrad(u_mat_tex[nonuniformEXT(dm.tex_nrm)], duv, gx, gy);
             a *= db.a;
-            base = mix(base, srgb_to_linear(db.rgb), a);
-            rough = mix(rough, clamp(dn.z, 0.045, 1.0), a);
-            metal = mix(metal, dn.w, a);
+            vec3 dbase = srgb_to_linear(db.rgb), de = vec3(0.0);
+            float drough = dn.z, dmetal = dn.w;
+            if ((dm.flags & MATF_AFFINE) != 0u) mat_affine(f.materials, uint(d.u_axis.w + 0.5), dbase, dmetal, drough, de); // (2026-11-24: a decal's tint parameter)
+            base = mix(base, dbase, a);
+            rough = mix(rough, clamp(drough, 0.045, 1.0), a);
+            metal = mix(metal, dmetal, a);
             vec2 dxy = dn.xy * 2.0 - 1.0; // (its tangent space: U along its Y, V down its Z)
             n = normalize(mix(n, normalize(n + d.u_axis.xyz * dxy.x - d.v_axis.xyz * dxy.y), a));
         }
@@ -1399,7 +1470,9 @@ void main() {
         // (the sky's hidden part sees the surfaces around, lit by the sun's bounce off the ground: the patent's terrain
         // bounce map - where it sees out at all: none in a closed room (under 1/4 of the sky seen it fades out);
         // what faces down or sideways sees the ground when it sees out)
-        irr = sky_irr * vis + f.water[26].rgb * ((1.0 - vis) * 0.8 * min(vis * 4.0, 1.0) + clamp(0.5 - 0.5 * n.z, 0.0, 1.0) * min(vis * 4.0, 1.0)); // (0.8: the closest to the RealGI, tools/gi_fallback_compare.py) // (0.8: the closest to the RealGI, tools/gi_fallback_compare.py)
+        irr = sky_irr * vis + f.water[26].rgb * ((1.0 - vis) * 0.8 * min(vis * 4.0, 1.0) + clamp(0.5 - 0.5 * n.z, 0.0, 1.0) * min(vis * 4.0, 1.0)); // (0.8: the closest to the RealGI, tools/gi_fallback_compare.py)
+        // (2026-11-25) the local lights' bounce (a room lit by a lamp, the light through a door: gi_fallback.c)
+        if (f.water[26].w > 0.0) irr += gi_bounce(f, i_world, n);
     }
 #endif
     // the Movable actors nearby (the bake and the probes miss them): the light they hide (AO) and the light they bounce

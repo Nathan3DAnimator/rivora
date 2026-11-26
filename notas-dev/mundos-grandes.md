@@ -79,5 +79,8 @@ Os proxies do HLOD (instâncias da mesma malha dos atores) ganham o impostor oct
   Nenhum registro faltando dentro do alcance nas duas, com ou sem (o orçamento de 1 ms dá conta da grade de teste); o
   ganho é a carga espalhada antes (2 células pedidas à frente a 250 km/h). Streaming 0,047 ms por quadro (pior 0,21).
 - Teste `wp_fast` (área mundos-grandes): 250 km/h, nenhum quadro com célula à vista carregando, ≤ 0,2 % de engasgos.
+  (25/11, bug-fixer) Engasgo = acima de 2× a mediana **e** de 1/60 s (um quadro perdido a 60 Hz), e o streaming no pior
+  quadro em até 2 ms: o dobro da mediana sozinho (~6,5 ms a 300 fps) media o ruído da GPU (0,37-0,70%, instável aqui
+  e na base) e não o streaming (0,3-0,5 ms no pior quadro). Agora 0 engasgos em 3 de 3.
 - Fica para depois: menos trânsito e multidão e LOD mais baixo em alta velocidade, leitura e descompressão das células
   nos workers (hoje o ator é refeito dos bytes na thread principal).

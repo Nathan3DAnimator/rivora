@@ -1,6 +1,6 @@
 id: rt-denoiser
 kind: concept
-title: Denoiser de ray tracing (Fotorrealista) | Ray tracing denoiser (Photoreal)
+title: Denoiser de ray tracing (Fotorrealista) | Ray tracing denoiser (Photoreal) | Denoiser de ray tracing (Fotorrealista)
 keys: denoiser, denoise, ruido, ruído, noise, granulado, chuviscado, pontilhado, grain, speckle, reblur, relax, nrd, ray reconstruction, gi ray traced, gi por raio, iluminacao indireta por raio, ray traced gi, reflexo aspero, rough reflection, reflexo borrado, glossy reflection, sombra suave ruidosa, noisy soft shadow, fantasma, ghosting, rastro, trail, fotorrealista ruido, photoreal noise, oclusao de contato, contact shadow gi, REALENGINE_DENOISER, REALENGINE_DEN_DEBUG
 --- pt
 ```diagram steps
@@ -38,3 +38,21 @@ In the **Photoreal** style (and **Video-realistic**) the engine replaces the sur
 - **MSAA off only** (temporal AA/TSR): with MSAA the separate filters stay.
 - **Error against the path-traced reference** (house): 11.5% → 7.7%.
 - **Debug:** `REALENGINE_DEN_DEBUG=1` shows only the diffuse, `2` only the reflection, `3` the shadows' visibility, `4` the history length (red short, green full). `REALENGINE_DENOISER=1` turns it on in any style, `=0` off.
+--- es
+```diagram steps
+Pasada principal: 1 rayo de GI difusa + 1 rayo de reflexión (GGX) por píxel
+Pre-desenfoque (8 muestras alrededor)
+Historial: reproyectado, solo en el mismo actor, la misma normal y la misma profundidad
+Post-desenfoque (amplio mientras el historial es corto) y estabilización
+Color final: difuso x albedo + reflexión x peso + luz x visibilidad de la sombra
+```
+En el estilo **Photoreal** (y **Video-realistic**) el motor reemplaza la luz indirecta de la caché de superficie por **rayos reales**, como un path tracer en tiempo real, y pasa todo por **un único denoiser**, al estilo del ReBLUR de NVIDIA:
+- **GI difusa:** un rayo por píxel hasta 30 m (lo que golpea se ilumina con la caché de superficie). Las esquinas y los objetos que se tocan reciben la sombra de contacto que le falta a la caché. Las superficies con lightmap conservan su lightmap.
+- **Reflexiones rugosas:** un rayo en una dirección elegida del lóbulo GGX (rugosidad entre el corte de la reflexión nítida y 0.9). Las reflexiones tipo espejo conservan su rayo exacto, sin filtrar.
+- **Sombras de luces de área y de muchas luces:** la visibilidad estocástica pasa por el mismo filtro (en lugar del separado).
+- **Sin ghosting:** el historial solo se reutiliza en el **mismo actor**, con la **misma normal** y a la **misma profundidad**; lo que falla se descarta, nunca se mezcla. Guarda pocos cuadros (difuso 64, reflexión de 4 a 24 según la rugosidad, sombra 8), y un historial rápido acorta el largo cuando la luz cambia (una lámpara apagada, una puerta abierta).
+- **Costo** (RTX 3060, 1440p Epic): el filtro ~1.6 ms; los rayos ~1.5 ms en la casa y ~5.6 ms en el RPG (vegetación). La casa corre a ~140 fps y el RPG a ~74 fps en Photoreal; Realistic no cambia (ni siquiera tiene el código de los rayos).
+- **Checkerboard** (Low a Epic): un píxel que necesita ambos rayos traza uno por cuadro, en tablero de ajedrez, y el filtro rellena el otro con los vecinos (como el ReBLUR): la mitad de los rayos. Cinematic traza ambos; `REALENGINE_DEN_CHECKER=0` lo apaga. Consulta [GPU por pasada](article:gpu-passes).
+- **Solo con MSAA apagado** (AA temporal/TSR): con MSAA se mantienen los filtros separados.
+- **Error contra la referencia con path tracing** (casa): 11.5% → 7.7%.
+- **Depuración:** `REALENGINE_DEN_DEBUG=1` muestra solo el difuso, `2` solo la reflexión, `3` la visibilidad de las sombras, `4` la longitud del historial (rojo corto, verde completo). `REALENGINE_DENOISER=1` lo activa en cualquier estilo, `=0` lo apaga.

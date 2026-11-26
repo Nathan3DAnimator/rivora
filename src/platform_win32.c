@@ -184,6 +184,22 @@ bool re_test_monitor(int* x, int* y, int* w, int* h) {
     return true;
 }
 
+// (2026-11-23) the visible suites' fps measures, hidden: the background mode's place (left of every monitor), the same
+// size (the swapchain stays: no resize, no DPI change across a display), back to the monitor once measured
+void re_test_window_offscreen(struct GLFWwindow* w, bool hide) {
+    static int sx, sy;
+    static bool moved;
+    if (!w || hide == moved) return;
+    if (hide) {
+        int ww = 0, wh = 0;
+        glfwGetWindowPos(w, &sx, &sy);
+        glfwGetWindowSize(w, &ww, &wh);
+        glfwSetWindowPos(w, GetSystemMetrics(SM_XVIRTUALSCREEN) - ww - 200, GetSystemMetrics(SM_YVIRTUALSCREEN) + 40);
+    } else
+        glfwSetWindowPos(w, sx, sy);
+    moved = hide;
+}
+
 bool platform_file_dialog_ext(struct GLFWwindow* parent, bool save, const char* label, const char* extensions,
                               char* path, size_t cap) {
     if (g_platform_synthetic_input) return false;
@@ -306,6 +322,7 @@ static DWORD WINAPI folder_thread(LPVOID arg) {
 }
 
 bool platform_folder_dialog(struct GLFWwindow* parent, const char* title, char* path, size_t cap) {
+    if (g_platform_synthetic_input) return false; // (the tests' input, the UI sweep: no modal dialog of the system)
     FolderJob j;
     ZeroMemory(&j, sizeof j);
     j.owner = parent ? glfwGetWin32Window(parent) : NULL;
@@ -687,6 +704,9 @@ bool re_test_monitor(int* x, int* y, int* w, int* h) {
     (void)x, (void)y, (void)w, (void)h;
     return false;
 }
+void re_test_window_offscreen(struct GLFWwindow* w, bool hide) {
+    (void)w, (void)hide;
+}
 // (the game has no file dialogs: answered "cancelled")
 bool platform_file_dialog_ext(struct GLFWwindow* parent, bool save, const char* label, const char* extensions, char* path, size_t cap) {
     (void)parent, (void)save, (void)label, (void)extensions, (void)path, (void)cap;
@@ -911,14 +931,34 @@ void re_parallel_for(int count, void (*fn)(void* arg, int index), void* arg) {
 #ifdef _WIN32
 // (B13) the editor's other players' processes
 struct ReProcess { PROCESS_INFORMATION pi; };
+// (2026-11-25, bug-fixer) Every child in one job that ends with this process (KILL_ON_JOB_CLOSE: the system closes the
+// job's handle when the editor ends, crashes or is killed by a test's timeout). A VR Preview's rivora_game.exe started by
+// the UI sweep outlived it and took the GPU through two suites (72 false fps failures)
+static HANDLE children_job(void) {
+    static HANDLE job;
+    static bool tried;
+    if (!tried) {
+        tried = true;
+        job = CreateJobObjectW(NULL, NULL);
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION li;
+        memset(&li, 0, sizeof li);
+        li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (job && !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &li, sizeof li)) CloseHandle(job), job = NULL;
+    }
+    return job;
+}
 ReProcess* re_process_start(const char* cmdline) {
     ReProcess* p = calloc(1, sizeof *p);
     wchar_t* w = p ? malloc(sizeof(wchar_t) * 4096) : NULL;
     if (!w || !MultiByteToWideChar(CP_UTF8, 0, cmdline, -1, w, 4096)) return free(w), free(p), NULL;
     STARTUPINFOW si = { sizeof si };
-    BOOL ok = CreateProcessW(NULL, w, NULL, NULL, FALSE, 0, NULL, NULL, &si, &p->pi);
+    // (suspended until it is in the job: nothing of it runs outside)
+    BOOL ok = CreateProcessW(NULL, w, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &p->pi);
     free(w);
     if (!ok) return free(p), NULL;
+    HANDLE job = children_job();
+    if (job) AssignProcessToJobObject(job, p->pi.hProcess);
+    ResumeThread(p->pi.hThread);
     return p;
 }
 void re_process_kill(ReProcess* p) {

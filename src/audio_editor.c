@@ -1,7 +1,10 @@
 // The audio assets' editor (audio_editor.h; notas-dev/audio.md): Unreal's Sound Wave, Sound Cue, Sound Attenuation,
 // Sound Class, Sound Mix, Sound Concurrency and Submix editors in one window (the open asset's), the Add > Sounds menu,
 // the Sound Waves' thumbnails.
+#include "editor_docs.h"
 #include "audio_editor.h"
+#include "ui_number.h" // (2026-11-25, item 20: a typed value past the slider is kept)
+#include "asset_viewer.h" // (2026-11-24: the Details' search and sections)
 #include "theme.h"
 #include "graph_menu.h"
 
@@ -140,7 +143,7 @@ static bool chk(const char* label, uint8_t* v) {
     return ch;
 }
 static bool num(const char* label, float* v, float speed, float lo, float hi, const char* fmt) {
-    return igDragFloat(PL(TR(label)), v, speed, lo, hi, fmt, ImGuiSliderFlags_AlwaysClamp);
+    return ui_num_float(PL(TR(label)), v, speed, lo, hi, lo, 3.4e38f, fmt, 0); // (the bottom real, the top the slider's)
 }
 static bool combo(const char* label, uint8_t* v, const char* const* items, int n) {
     int i = *v;
@@ -220,11 +223,24 @@ static void wave_ui(SoundWave* w) {
     SoundWaveHeader* h = &w->h;
     wave_view(w);
     double mb = (double)h->data_bytes / (1024.0 * 1024.0);
-    igTextDisabled("%.2f s  |  %u Hz  |  %s  |  %.2f MB  |  %s %.1f dB  |  RMS %.1f dB", w->length, h->sample_rate,
+    igTextDisabled(TR("%.2f s  |  %u Hz  |  %s  |  %.2f MB  |  %s %.1f dB  |  RMS %.1f dB"), w->length, h->sample_rate,
                    h->channels == 2 ? TR("Stereo") : TR("Mono"), mb, TR("Peak"), 20.0 * log10(fmax(h->peak, 1e-6)),
                    20.0 * log10(fmax(h->rms, 1e-6)));
-    igSeparatorText(TR("Sound"));
+    // (2026-11-24, item 8) the Details as the Sound Wave editor's: a search, sections that fold (asset_viewer.h)
+    static char find[64];
+    av_details_search(find, sizeof find);
+    if (av_section("Info", "duration sample rate channels size peak rms format memory frames")) {
+        av_row(TR("Duration"), "%.3f s", w->length);
+        av_row(TR("Sample Rate"), "%u Hz", h->sample_rate);
+        av_row(TR("Channels"), "%s", h->channels == 2 ? TR("Stereo") : TR("Mono"));
+        av_row(TR("Frames"), "%u", h->frames);
+        av_row(TR("Format"), "%s", "PCM 16-bit");
+        av_row(TR("Memory"), "%.2f MB%s", mb, (h->flags & SND_STREAM) ? TR(" (streamed)") : "");
+        av_row(TR("Peak"), "%.1f dB", 20.0 * log10(fmax(h->peak, 1e-6)));
+        av_row("RMS", "%.1f dB", 20.0 * log10(fmax(h->rms, 1e-6)));
+    }
     bool ch = false;
+    if (av_section("Sound", "volume pitch priority looping loop region streaming ui")) {
     ch |= num("Volume", &h->volume, 0.01f, 0.0f, 4.0f, "%.2f");
     ch |= num("Pitch", &h->pitch, 0.01f, 0.1f, 4.0f, "%.2f");
     ch |= num("Priority", &h->priority, 0.01f, 0.0f, 100.0f, "%.2f");
@@ -240,10 +256,13 @@ static void wave_ui(SoundWave* w) {
     }
     if (igCheckbox(PL(TR("Streaming")), &stream)) h->flags = stream ? h->flags | SND_STREAM : h->flags & ~SND_STREAM, ch = true;
     if (igCheckbox(PL(TR("UI Sound")), &ui)) h->flags = ui ? h->flags | SND_UI : h->flags & ~SND_UI, ch = true;
-    igSeparatorText(TR("Settings"));
+    }
+    if (av_section("Settings", "sound class attenuation concurrency")) {
     ch |= audio_pick(PL(TR("Sound Class")), &h->sound_class, AUA_CLASS);
     ch |= audio_pick(PL(TR("Attenuation")), &h->attenuation, AUA_ATTENUATION);
     ch |= audio_pick(PL(TR("Concurrency")), &h->concurrency, AUA_CONCURRENCY);
+    }
+    av_details_end();
     if (ch) w->dirty = true, E.unsaved = true;
 }
 
@@ -378,7 +397,7 @@ static bool mix_ui(AuMix* m) {
 static bool conc_ui(AuConcurrency* c) {
     bool ch = false;
     int n = (int)c->max_count;
-    if (igDragInt(PL(TR("Max Count")), &n, 0.2f, 0, 256, n ? "%d" : "no limit", ImGuiSliderFlags_AlwaysClamp)) c->max_count = (uint32_t)n, ch = true;
+    if (ui_num_int(PL(TR("Max Count")), &n, 0.2f, 0, 256, 0, 1 << 20, n ? "%d" : TR("no limit"), 0)) c->max_count = (uint32_t)n, ch = true;
     ch |= combo("Resolution Rule", &c->rule, g_rule_names, AU_RES_COUNT);
     ch |= chk("Limit To Owner", &c->per_owner);
     ch |= num("Retrigger Time", &c->retrigger_time, 0.005f, 0.0f, 10.0f, "%.3f s");
@@ -531,7 +550,7 @@ static bool node_details(AuCue* c, AuCueNode* n) {
             char l[32];
             snprintf(l, sizeof l, "%s %d", TR("Weight"), k);
             igPushID_Int(k);
-            ch |= igDragFloat(PL(l), &n->weight[k], 0.01f, 0.0f, 100.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            ch |= ui_num_float(PL(l), &n->weight[k], 0.01f, 0.0f, 100.0f, 0.0f, 3.4e38f, "%.2f", 0);
             igPopID();
         }
         break;
@@ -541,16 +560,16 @@ static bool node_details(AuCue* c, AuCueNode* n) {
             char l[32];
             snprintf(l, sizeof l, "%s %d", TR("Input Volume"), k);
             igPushID_Int(k);
-            ch |= igDragFloat(PL(l), &n->weight[k], 0.01f, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            ch |= ui_num_float(PL(l), &n->weight[k], 0.01f, 0.0f, 4.0f, 0.0f, 3.4e38f, "%.2f", 0);
             igPopID();
         }
         break;
     case CUE_MODULATOR:
-        ch |= igDragFloatRange2(PL(TR("Volume Range")), &n->p[0], &n->p[1], 0.01f, 0.0f, 4.0f, "%.2f", "%.2f", ImGuiSliderFlags_AlwaysClamp);
-        ch |= igDragFloatRange2(PL(TR("Pitch Range")), &n->p[2], &n->p[3], 0.01f, 0.1f, 4.0f, "%.2f", "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        ch |= ui_num_float_range(PL(TR("Volume Range")), &n->p[0], &n->p[1], 0.01f, 0.0f, 4.0f, 0.0f, 3.4e38f, "%.2f", "%.2f", 0);
+        ch |= ui_num_float_range(PL(TR("Pitch Range")), &n->p[2], &n->p[3], 0.01f, 0.1f, 4.0f, 0.01f, 3.4e38f, "%.2f", "%.2f", 0);
         break;
     case CUE_DELAY:
-        ch |= igDragFloatRange2(PL(TR("Delay Range")), &n->p[0], &n->p[1], 0.005f, 0.0f, 60.0f, "%.3f s", "%.3f s", ImGuiSliderFlags_AlwaysClamp);
+        ch |= ui_num_float_range(PL(TR("Delay Range")), &n->p[0], &n->p[1], 0.005f, 0.0f, 60.0f, 0.0f, 3.4e38f, "%.3f s", "%.3f s", 0);
         break;
     default: igTextDisabled("%s", TR("No settings.")); break;
     }
@@ -1077,4 +1096,17 @@ bool audio_volume_details(CAudioVolume* v) {
     ch |= num("Interior Volume", &v->interior_volume, 0.01f, 0.0f, 1.0f, "%.2f");
     ch |= num("Interior LPF", &v->interior_lpf, 50.0f, 20.0f, 20000.0f, "%.0f Hz");
     return ch;
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int audio_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    if (!E.ms && !E.wave && !E.asset) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) return stop_preview(), E.ms = NULL, E.wave = NULL, E.asset = NULL, E.unsaved = false, 1;
+    if (!E.unsaved || (!E.ms && !E.wave && E.asset->builtin)) return 0; // (an engine's asset: not saved, as its x)
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, E.ms ? E.ms->name : E.wave ? E.wave->name : E.asset->name), 1;
+    save();
+    return E.unsaved;
 }

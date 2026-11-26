@@ -1,6 +1,6 @@
 id: rain-water
 kind: howto
-title: Chuva, poças, córregos e oceano | Rain, puddles, streams and ocean
+title: Chuva, poças, córregos e oceano | Rain, puddles, streams and ocean | Lluvia, charcos, arroyos y océano
 keys: escoamento, escorrer agua, runoff, agua escorrendo, molhar o plano, chuva, rain, chover, tempestade, storm, garoa, drizzle, molhado, wet, poca, puddle, poças, enchente, flood, alagado, rio, river, corrego, stream, escorrer, runoff, gotas, drops, respingo, splash, oceano, ocean, mar, sea, ondas, waves, espuma, foam, lago, lake, piscina, pool, agua, water, fft, barco flutuando, boat float, rastro, wake, neve, snow, nevar, nevasca, snowfall, flocos, flakes, inverno, winter, derreter, melt, cobertura de neve, snow cover, agua transparente, transparent water, raso, shallow, fundo do lago, lake bottom, espuma na margem, shore foam, praia, beach, refracao, refraction, causticas, caustics, luz no fundo da piscina, pool light lines, textura no fundo, pegadas, footprints, rastro na neve, snow trail, pisar na neve, chuva inclinada, vento, chuva com angulo, beiral, goteira, goteiras, drip, drips, borda molhada, quadrados molhados, wet edge, quantidade de gotas, drop amount, mais chuva, more rain, velocidade da chuva, fall speed, chuva mais rapida, faster rain, personagem na chuva, character in the rain, pingos voando, flung drops, area seca, dry trail, parede espelhada, mirror wall, exclusao de agua, water body exclusion, area sem oceano, ilha, terra abaixo do mar, doca, buraco no oceano
 --- pt
 ```diagram steps
@@ -19,7 +19,7 @@ Ligue **Snow** no mesmo ator Rain:
 - Uma **cobertura branca** junta no que fica virado para cima (chão, telhados, topo dos muros); embaixo de telhados fica sem neve. **Ângulo de Cobertura**: a inclinação máxima onde a neve fica. **Tempo de Cobertura**: quantos segundos de neve moderada até ficar todo branco.
 - Quando para de nevar ela **derrete** (**Tempo de Derreter**; 0 = nunca) e a água escorre como a da chuva. **Cobertura Inicial**: um nível que já começa nevado.
 - **Pegadas**: os Characters que andam na neve deixam pegadas, pé esquerdo e direito, com a borda de neve empurrada; a neve que continua caindo as cobre de novo. Sozinhas, sem configurar (uns 20 m em volta da câmera). ~0,03 ms.
-- Por Blueprint: **Set Rain Intensity** liga e desliga a nevasca. ~0,3 ms.
+- Por Grafo: **Set Rain Intensity** liga e desliga a nevasca. ~0,3 ms.
 
 ## Oceano e lagos
 - Um **Water Body** é desenhado como água (reflexo do céu, brilho do sol, cor funda, luz atravessando as cristas). Com **Ocean** ligado vira um **oceano sem fim**: ondas por FFT (o espectro do vento, JONSWAP), **espuma** onde quebram, **Agitação** e **Ondulação de Longe** ajustáveis. ~0,8 ms.
@@ -34,7 +34,6 @@ Ligue **Snow** no mesmo ator Rain:
 - **O que se move na chuva:** um personagem andando, um carro ou um braço balançando não deixam rastro seco; o chão embaixo continua molhado. As gotas param em cima deles, e os pingos que saem deles voam na direção do movimento (do ator e da animação) e caem em arco.
 - Paredes molhadas ficam brilhantes, mas não viram espelho.
 - **Áreas sem oceano:** Adicionar Rápido > Mundo > **Water Body Exclusion** (ou ligue **Exclusion** num Water Body): dentro do retângulo dele (escale e gire) não há oceano, nem ondas para barcos e nado. Para terra abaixo do nível do mar, docas, o interior de um barco.
-
 --- en
 ```diagram steps
 Quick Add > Rain (the Rain actor) | Details: Rain Intensity, Wetness, Puddles, Flow | Quick Add > Ocean (or a Water Body with Ocean on) | Play: boats float on the waves, what moves leaves a wake
@@ -52,7 +51,7 @@ Turn on **Snow** on the same Rain actor:
 - A **white cover** gathers on what faces up (ground, roofs, wall tops); under roofs there is none. **Cover Angle**: the steepest surface the snow stays on. **Cover Time**: seconds of moderate snow until it is all white.
 - When it stops it **melts** (**Melt Time**; 0 = never) and its water runs like the rain's. **Start Cover**: a level that starts snowed on.
 - **Footprints**: Characters walking in the snow leave prints, left and right foot, with the rim of snow they push aside; the falling snow fills them back. On their own, nothing to set (about 20 m around the camera). ~0.03 ms.
-- From a Blueprint: **Set Rain Intensity** starts and stops the snowfall. ~0.3 ms.
+- From a Graph: **Set Rain Intensity** starts and stops the snowfall. ~0.3 ms.
 
 ## Ocean and lakes
 - A **Water Body** is drawn as water (the sky reflected, the sun's glints, the deep color, light through the crests). With **Ocean** on it becomes an **endless ocean**: FFT waves (the wind's spectrum, JONSWAP), **foam** where they break, adjustable **Choppiness** and **Swell**. ~0.8 ms.
@@ -67,3 +66,35 @@ Turn on **Snow** on the same Rain actor:
 - **What moves in the rain:** a walking character, a car or a swinging arm leave no dry trail; the ground under them stays wet. The drops stop on top of them, and the drops flung off them fly along their motion (the actor's and the animation's) and fall in an arc.
 - Wet walls get a sheen but never turn into mirrors.
 - **Areas without ocean:** Quick Add > World > **Water Body Exclusion** (or turn on **Exclusion** on a Water Body): inside its rectangle (scale and turn it) there is no ocean, nor waves for boats and swimming. For land below sea level, docks, a boat's inside.
+--- es
+```diagram steps
+Añadir rápido > Rain (el actor Rain) | Detalles: Rain Intensity, Wetness, Puddles, Flow | Añadir rápido > Ocean (o un Water Body con Ocean activado) | Jugar: los barcos flotan en las olas, lo que se mueve deja una estela
+```
+## Lluvia
+Un actor **Rain** hace llover alrededor de la cámara:
+- **Gotas** que caen con el viento y **salpicaduras** donde aterrizan; se detienen bajo los techos y los árboles (la lluvia "ve" la escena desde arriba con rayos).
+- Las superficies que alcanza la lluvia se **mojan** con el tiempo (más oscuras, más brillantes) y se **secan** cuando para; bajo un techo se mantiene seca. Las paredes tienen **agua que escurre**.
+- El agua **realmente se acumula**: una simulación de agua poco profunda (tuberías virtuales) la lleva cuesta abajo hacia **charcos** y, con lluvia fuerte, **arroyos** que casi son ríos. **Water Gain** la acelera (1 = real); **Infiltration** y **Evaporation** quitan agua; **Start Water** empieza inundado.
+- Todo está en los Detalles; cuesta ~0,4 ms en una RTX 3060 a 1440p.
+
+## Nieve
+Activa **Snow** en el mismo actor Rain:
+- Los **copos** caen despacio, revoloteando con el viento (**Flake Size**); **Rain Intensity** pasa a ser la fuerza de la nevada.
+- Una **capa blanca** se acumula sobre lo que mira hacia arriba (suelo, techos, tope de las paredes); bajo los techos no hay. **Cover Angle**: la superficie más inclinada en la que se queda la nieve. **Cover Time**: segundos de nieve moderada hasta que todo queda blanco.
+- Cuando para, **se derrite** (**Melt Time**; 0 = nunca) y su agua corre como la de la lluvia. **Start Cover**: un nivel que empieza nevado.
+- **Huellas**: los Characters que caminan en la nieve dejan marcas, pie izquierdo y derecho, con el borde de nieve que apartan; la nieve que cae las vuelve a llenar. Solas, sin nada que ajustar (unos 20 m alrededor de la cámara). ~0,03 ms.
+- Desde un Grafo: **Set Rain Intensity** inicia y detiene la nevada. ~0,3 ms.
+
+## Océano y lagos
+- Un **Water Body** se dibuja como agua (el cielo reflejado, los destellos del sol, el color profundo, la luz a través de las crestas). Con **Ocean** activado se vuelve un **océano sin fin**: olas FFT (el espectro del viento, JONSWAP), **espuma** donde rompen, **Choppiness** y **Swell** ajustables. ~0,8 ms.
+- Los **barcos** flotan en las olas grandes; los **vehículos, personajes y cuerpos de física** hacen **anillos y estelas** (Interaction).
+- La lluvia hace anillos también en el océano y en los lagos.
+- **Agua transparente** (High y Epic, con ray tracing): donde es poco profunda **se ve el fondo** a través del agua, que se desvanece con la profundidad según su **Clarity** (el rojo se va primero: verde-azul en lo poco profundo, azul más abajo). **Shore Foam**: agua blanca en las playas y alrededor de rocas y postes que están dentro. Cada lago tiene su propio color, claridad y espuma. El fondo se ve con la **textura** de su material (y las líneas del M_Grid), y el sol hace **cáusticas**: la red de líneas brillantes que las olas dibujan en el fondo, nítida en lo poco profundo y dispersa más abajo. ~0,35 ms más en Epic con agua poco profunda en toda la vista.
+- **Lluvia con viento:** la lluvia cae inclinada por el **viento** (Wind Speed y Direction del actor Rain) y lo que alcanza se moja: bajo un alero del lado del viento se moja, del otro lado se queda seco. La parte de atrás de una pared se queda seca.
+- **Borde suave:** de mojado a seco de forma gradual (unos centímetros, como las salpicaduras), sin cuadrados ni franja dura.
+- **Escorrentía:** el agua corre sobre la superficie como agua real: por rampas y techos hasta el borde (y cae) o hasta un lugar plano, donde se extiende y se acumula en los puntos bajos. Por donde pasa se moja, más cuanta más agua pasa, y se mantiene mojado mientras sigue corriendo después de la lluvia.
+- **Goteo:** los bordes que acumulan agua (un techo, una cornisa, un escalón, una rama) gotean: se forma una gota colgando del borde, se hincha, cae estirándose y salpica en el suelo, una y otra vez.
+- **Cuántas gotas y qué rápido:** en el actor Rain, **Drop Amount** (hasta 4x) y **Fall Speed** (de 0,25x a 3x; más rápido se inclina menos con el viento). El agua en el suelo sigue dependiendo de la Intensity.
+- **Lo que se mueve bajo la lluvia:** un personaje que camina, un coche o un brazo que se balancea no dejan un rastro seco; el suelo bajo ellos sigue mojado. Las gotas se detienen encima de ellos, y las gotas que se desprenden vuelan según su movimiento (el del actor y el de la animación) y caen en arco.
+- Las paredes mojadas ganan brillo pero nunca se vuelven espejos.
+- **Zonas sin océano:** Añadir rápido > World > **Water Body Exclusion** (o activa **Exclusion** en un Water Body): dentro de su rectángulo (escálalo y gíralo) no hay océano, ni olas para barcos y nado. Para tierra bajo el nivel del mar, muelles, el interior de un barco.

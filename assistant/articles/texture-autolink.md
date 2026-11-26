@@ -1,6 +1,6 @@
 id: texture-autolink
 kind: howto
-title: Soltar várias texturas no Principled e ligar pelo nome | Drop several textures on the Principled and link by name
+title: Soltar várias texturas no Principled e ligar pelo nome | Drop several textures on the Principled and link by name | Soltar texturas sobre el Principled BSDF
 keys: ligar texturas automatico, auto link textures, arrastar varias texturas, drag several textures, principled bsdf, basecolor normal roughness, pbr, mapas pbr, pbr maps, nomenclatura, naming, texturas no material, textures into material, conectar texturas, connect textures, orm, metallic roughness, substance, quixel
 --- pt
 ```diagram steps
@@ -30,3 +30,17 @@ Select the textures in the Content Browser | Drag them together | Drop them on t
   - **Emissive / Emission** → Emission Color (strength 1); **Opacity / Alpha / Mask** → Alpha (the material becomes Masked)
   - **AO / Height** and unknown names are placed beside them, unlinked
 - The maps that aren't color come in as **Non-Color** (linear). Dropped on empty space, the textures become a column of Image Textures.
+--- es
+```diagram steps
+Selecciona las texturas en el Explorador de contenidos | Arrástralas juntas | Suéltalas sobre el Principled BSDF | Cada una en su entrada, en una columna
+```
+## Cómo usarlo
+- En el **Explorador de contenidos**, selecciona varias texturas (Ctrl o Shift + clic) y arrastra una de ellas: todas van juntas (la vista previa dice "and N more").
+- Suéltalas **sobre un Principled BSDF** en el Editor de Materiales: cada textura va a la entrada que dice su **nombre**, organizadas en una columna en el orden de las entradas:
+  - **BaseColor / Albedo / Diffuse / Color** → Base Color (sRGB)
+  - **Metallic / Metalness** → Metallic; **Roughness** → Roughness; **Gloss** a través de un Invert
+  - **ORM / ARM** → un Separate Color: verde a Roughness, azul a Metallic
+  - **Normal / NormalGL / Nrm** → un Normal Map; **NormalDX** con la convención de DirectX
+  - **Emissive / Emission** → Emission Color (intensidad 1); **Opacity / Alpha / Mask** → Alpha (el material pasa a ser Masked)
+  - **AO / Height** y los nombres desconocidos se colocan al lado, sin enlazar
+- Los mapas que no son de color entran como **Non-Color** (lineal). Soltadas en un espacio vacío, las texturas se convierten en una columna de Image Textures.

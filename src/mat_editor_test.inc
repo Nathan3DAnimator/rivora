@@ -77,7 +77,7 @@ static void mated_test_setup(void) {
     }
     mat_graph_default(m->graph); // (the Principled BSDF into the Material Output, as new)
     m->graph->view[0] = m->graph->view[1] = 0.0f, m->graph->view[2] = 1.0f;
-    E.m = m, E.open = true, E.sel = -1, E.unsaved = false, E.status[0] = 0;
+    med_take(m), E.host = false; // (item 9: a window of its own where the test puts it, not a tab of the Editors window)
     MT.bsdf = MT.base_color = MT.metallic = MT.ior = -1;
 }
 static void mated_test_window(void) {

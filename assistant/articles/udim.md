@@ -1,6 +1,6 @@
 id: udim
 kind: howto
-title: Texturas UDIM: vários tiles numa malha | UDIM textures: many tiles on one mesh
+title: Texturas UDIM: vários tiles numa malha | UDIM textures: many tiles on one mesh | Texturas UDIM: varios tiles en una malla
 keys: udim, udims, tile udim, tiles, 1001, 1002, 1011, uvtile, u1_v1, mari, substance painter, texturas em tiles, tiled texture, texturas en mosaico, personagem 8k, character 8k, personaje 8k, varios mapas uv, multiple uv tiles, rudim, importar udim, import udim, importar pasta udim, import udim folder, usar como udim, use as udim, texture sample udim, virtual texture, textura virtual, costura entre tiles, seam between tiles, costura udim, udim seam, streaming por tile, tile streaming, bc5 normal, bc7
 --- pt
 Um personagem ou um cenário grande pinta cada parte num **tile** do UV: o 1001 cobre o UV 0..1, o 1002 fica à direita (u 1..2), o 1011 fica acima (v 1..2), dez por linha. Cada tile tem a própria imagem (`Corpo.1001.png`, `Corpo.1002.png`...), então o modelo inteiro ganha a resolução de vários mapas.
@@ -29,9 +29,13 @@ A character or a large set paints each part on a UV **tile**: 1001 covers UV 0..
 Paint in tiles (1001, 1002, 1011...) | Import the folder or one tile: .rudim (BC7 / BC5, mips) | Image Texture with the .rudim | Baked per tile, no seam | Streaming: only the tiles seen
 ```
 --- es
-Un personaje o un escenario grande pinta cada parte en un **tile** del UV: el 1001 cubre el UV 0..1, el 1002 queda a la derecha (u 1..2), el 1011 arriba (v 1..2), diez por fila. Cada tile tiene su propia imagen (`Cuerpo.1001.png`, `Cuerpo.1002.png`...), así el modelo entero gana la resolución de varios mapas.
-1. **Importar**: suelte un tile desde el Explorador en el Content Browser (los otros tiles del conjunto vienen juntos) o clic derecho > **Importar carpeta UDIM...**. Sale un asset **.rudim**: cada tile comprimido en **BC7** (normal maps en **BC5**, por el nombre: *normal*, *nrm*, *_n*) con sus mips, leído directo del disco.
-2. **Material**: arrastre el .rudim al grafo (se vuelve un **Image Texture**) y conéctelo como una imagen común. El tile sale del UV de cada píxel; no hay nodo nuevo. Una imagen `<nombre>.1001.png` con otros tiles al lado muestra el botón **Usar como UDIM** en los Details del nodo. Normal map: Image Texture en *Non-Color* > Normal Map.
-3. **Sin costuras**: cada tile se lee con la derivada del UV entero (el mip no salta en el borde del tile) y sujeto a su propio borde (nada se filtra del lado opuesto). El material se hornea por tile.
-4. **Streaming por tile**: solo los tiles que la cámara ve suben de resolución; los que salen de vista por 2 s bajan al mínimo (64), dentro del presupuesto de texturas. Véalo en el **Debug Viewer** (F10) > Texture Streaming.
-5. **Importadores**: glTF, FBX, OBJ y `.tlend` reconocen UDIM por el nombre del archivo (`.1001.`, `_1001.`, `<UDIM>`, `_u1_v1`) y crean el .rudim solos.
+Un personaje o un conjunto grande pinta cada parte en un **tile** UV: el 1001 cubre el UV 0..1, el 1002 está a su derecha (u 1..2), el 1011 encima (v 1..2), diez por fila. Cada tile tiene su propia imagen (`Body.1001.png`, `Body.1002.png`...), así que todo el modelo obtiene la resolución de muchos mapas.
+1. **Importar**: suelta un tile del Explorador en el Explorador de contenidos (los demás tiles del conjunto vienen con él) o clic derecho > **Import UDIM Folder...**. Crea un asset **.rudim**: cada tile comprimido a **BC7** (los mapas de normales a **BC5**, por su nombre: *normal*, *nrm*, *_n*) con sus mips, leído directamente del disco.
+2. **Material**: arrastra el .rudim al grafo (se convierte en un **Image Texture**) y enlázalo como cualquier imagen. El tile sale del UV de cada píxel; no hay ningún nodo nuevo. Una imagen `<nombre>.1001.png` con otros tiles al lado muestra el botón **Use as UDIM** en los Detalles del nodo. Mapa de normales: Image Texture en *Non-Color* > Normal Map.
+3. **Sin costuras**: cada tile se lee con las derivadas de todo el UV (el mip no salta en el borde del tile) y se limita a su propio borde (nada se cuela del otro lado). El material se hornea por tile.
+4. **Streaming por tile**: solo suben los tiles que ve la cámara; los que llevan 2 s fuera de la vista bajan al mínimo (64), dentro del presupuesto de texturas. Míralo en el **Debug Viewer** (F10) > Texture Streaming: el tamaño de cada tile ahora y el deseado.
+5. **Importadores**: glTF, FBX, OBJ y `.tlend` reconocen UDIM por el nombre del archivo (`.1001.`, `_1001.`, `<UDIM>`, `_u1_v1`) y crean el .rudim por sí solos.
+
+```diagram steps
+Pinta en tiles (1001, 1002, 1011...) | Importa la carpeta o un tile: .rudim (BC7 / BC5, mips) | Image Texture con el .rudim | Horneado por tile, sin costura | Streaming: solo los tiles vistos
+```

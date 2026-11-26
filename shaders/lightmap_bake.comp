@@ -79,6 +79,10 @@ void main() {
             Hit h = trace_closest_mask(f, pv.xyz + n * 1.0, ax / len * ((k & 1) == 0 ? 1.0 : -1.0), tmax, RT_MASK_STATIC);
             if (h.hit) walls[k] = 1.0 - (h.front ? h.t / tmax : 0.0); // a back: started inside, the wall is right here
         }
+        // (2026-11-25) the atlas's neighbor another face (gi_cache.c template_make, gi_bake.c place_chart: du's w): a wall
+        uint edges = uint(g.v[idx * GB + 2u].w + 0.5);
+        for (int k = 0; k < 4; k++)
+            if ((edges & (1u << k)) != 0u) walls[k] = 1.0;
         g.v[idx * GB + 4u] = walls;
         return;
     }

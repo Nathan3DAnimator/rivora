@@ -379,6 +379,7 @@ void ecs_component_defaults(ComponentId c, void* p) {
         g->melanin = 0.7f, g->redness = 0.2f, g->roughness = 0.35f, g->scalp = -0.15f, g->hairline = 0.35f;
         g->dye[0] = g->dye[1] = g->dye[2] = 1.0f, g->occlusion = 0.85f, g->lod = 1;
         g->dynamic = 0, g->stiffness = 0.5f, g->damping = 0.06f, g->gusts = 0.3f, g->collide = 1, g->collision_radius = 0.6f; // (2026-11-16)
+        g->visible = 1; // (2026-11-25, item 16)
         break;
     }
     case COMP_DECAL: {

@@ -1,5 +1,6 @@
 #include "mesh_build.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,8 +71,14 @@ static uint32_t order(GpuVertex* v, uint32_t nv, uint32_t* idx, uint32_t ni, uin
 // for every x0.4 of radius on screen, a sixth of the pixels), simplified with the normals and UVs weighed, the mesh's
 // open borders locked (a part cut by material or by bone keeps meeting its neighbor). Stops when it can't halve.
 // Writes the LOD indices (into wv) after out[0..], returns how many, their counts and errors (cm)
+// (2026-11-24, the viewers' LOD Settings) the LODs asked for: how many and each one's share of LOD 0's triangles
+// (mesh_build_indexed_lods; thread-local: the importers build on workers at the same time). NULL: the automatic rule
+static __declspec(thread) const MeshLodOptions* t_lod_opts;
+static __declspec(thread) bool t_free_borders; // (2026-11-24) make_lods for a skin: its borders free when locked ones keep it whole
+
 static uint32_t make_lods(const GpuVertex* wv, uint32_t wnv, const uint32_t* widx, uint32_t wni, uint32_t* out, uint32_t cap,
                           uint32_t first[], uint32_t count[], float err[]) {
+    const MeshLodOptions* o = t_lod_opts;
     float* attr = malloc(sizeof(float) * 5 * (size_t)wnv);
     uint32_t* tmp = malloc(sizeof(uint32_t) * (size_t)wni);
     if (!attr || !tmp) {
@@ -87,18 +94,37 @@ static uint32_t make_lods(const GpuVertex* wv, uint32_t wnv, const uint32_t* wid
     const uint32_t* src = widx;
     uint32_t src_n = wni, n = 0, used = 0;
     for (uint32_t l = 1; l < RMESH_MAX_LODS; l++) {
+        if (o && l >= o->lods) break;
         size_t target = (size_t)(src_n / 4u / 3u) * 3u;
+        if (o) { // (its share of LOD 0, never more than the level before)
+            float pc = o->percent[l] > 0.01f ? o->percent[l] : 100.0f / (float)(1u << (2u * l));
+            target = (size_t)((double)(wni / 3u) * pc / 100.0) * 3u;
+            if (target >= src_n) target = (size_t)(src_n / 3u) * 3u - 3u;
+        }
         if (target < 3) break;
         float e = 0.0f;
         size_t got = meshopt_simplifyWithAttributes(tmp, src, src_n, wv[0].pos, wnv, sizeof(GpuVertex), attr, sizeof(float) * 5, weights,
-                                                    5, NULL, target, 0.25f, meshopt_SimplifyLockBorder, &e);
-        if (got > (size_t)src_n / 2u) {
+                                                    5, NULL, target, o ? 1.0f : 0.25f, meshopt_SimplifyLockBorder, &e);
+        if (o && got >= (size_t)src_n) break; // (asked for: nothing more to take away)
+        if (!o && got > (size_t)src_n / 2u) {
             // many small pieces (cards: every edge a border, nothing collapses with the borders locked): the borders free
             // and the pieces under the level's error pruned (1%, 4%, 16% of the mesh): far foliage thins, as Unreal's
             got = meshopt_simplifyWithAttributes(tmp, src, src_n, wv[0].pos, wnv, sizeof(GpuVertex), attr, sizeof(float) * 5, weights, 5,
                                                  NULL, target, 0.01f * (float)(1u << (2u * (l - 1u))), meshopt_SimplifyPrune, &e);
+            // (2026-11-24, item 4) a skin (t_free_borders): its LODs share LOD 0's vertices, no other mesh meets its
+            // borders: free, the error a share of its size (the Unamed scene's capsule, its LED and UDIM parts all borders,
+            // kept its 9284 triangles at every distance: 3929 of them were 36.5 M triangles)
+            if (got > (size_t)src_n * 7u / 10u && t_free_borders)
+                got = meshopt_simplifyWithAttributes(tmp, src, src_n, wv[0].pos, wnv, sizeof(GpuVertex), attr, sizeof(float) * 5, weights, 5,
+                                                     NULL, target, 1.0f, 0, &e); // (the target leads; the error measured picks the LOD on screen)
+            // (a skin whose topology blocks the collapses, many small shells and non-manifold edges: the Unamed capsule stopped at
+            // 75% with its borders free) the sloppy simplifier, by the positions' grid: its far LODs only need the outline
+            if (got > (size_t)src_n * 7u / 10u && t_free_borders)
+                got = meshopt_simplifySloppy(tmp, src, src_n, wv[0].pos, wnv, sizeof(GpuVertex), NULL, target, 1.0f, &e);
+            if (getenv("REALENGINE_LOD_TRACE")) printf("[RealEngine] lod %u: tries ended at %zu of %u (free borders %d)\n", l, got, src_n, (int)t_free_borders);
             if (got > (size_t)src_n * 7u / 10u) break;
         }
+        if (getenv("REALENGINE_LOD_TRACE")) printf("[RealEngine] lod %u: %u -> %zu (target %zu)\n", l, src_n, got, target); // (2026-11-24)
         if (got < 3 || used + got > cap) break; // (can't reduce: the next level would be the same)
         meshopt_optimizeVertexCache(tmp, tmp, got, wnv);
         memcpy(out + used, tmp, sizeof(uint32_t) * got);
@@ -220,12 +246,15 @@ static bool build(GpuVertex* v, uint32_t nv, uint32_t* idx, uint32_t ni, bool at
     GpuVertex* lv = NULL; // (a mesh with an atlas: its LODs on welded copies of the corners, uv2 -1)
     uint32_t lnv = 0, lni = 0;
     bool own = atlas; // (the LODs on vertices of their own, after LOD 0's)
-    if (lods && ni / 3u >= 1024u && !atlas) { // many small pieces: thinned (simplification can't reduce cards)
+    const MeshLodOptions* o = t_lod_opts;
+    uint32_t min_tris = o ? (o->min_tris ? o->min_tris : 16u) : 1024u;
+    if (o && o->lods <= 1) lods = false;
+    if (lods && ni / 3u >= min_tris && !atlas && !o) { // many small pieces: thinned (simplification can't reduce cards)
         nlods = thin_lods(v, nv, idx, ni, &lv, &lnv, &lidx, lod_first, lod_count, lod_err);
         for (uint32_t l = 0; l < nlods; l++) lni = lod_first[l] + lod_count[l];
         own = nlods > 0;
     }
-    if (lods && ni / 3u >= 1024u && !nlods) {
+    if (lods && ni / 3u >= min_tris && !nlods) {
         const GpuVertex* wv = v;
         uint32_t wnv = nv, *widx = idx;
         uint32_t* remap = NULL;
@@ -400,7 +429,145 @@ static void morphs_gather(MeshBuilt* out, const uint32_t* tag, const MeshMorphs*
     out->flags |= RMESH_MORPHS;
 }
 
+// (2026-11-24, item 4: the tests' dense skin, REALENGINE_IMPORT_SUBDIV=k) each triangle into 4, k times: an edge's middle
+// the two ends' mean position and UV, the normal and the weights of the smaller end (bytes: the same on both triangles of
+// an edge, welded after), so the 236 triangles of the tests' rig become a dense skin (k 4: 60 416) for its DAG
+static GpuVertex* skin_subdiv(const GpuVertex* c, uint32_t* ntri, int k) {
+    GpuVertex* cur = malloc(sizeof(GpuVertex) * 3u * *ntri);
+    if (!cur) return NULL;
+    memcpy(cur, c, sizeof(GpuVertex) * 3u * *ntri);
+    for (int it = 0; it < k && *ntri <= 4000000u; it++) {
+        GpuVertex* nx = malloc(sizeof(GpuVertex) * 12u * *ntri);
+        if (!nx) break;
+        for (uint32_t t = 0; t < *ntri; t++) {
+            const GpuVertex* p = cur + 3u * t;
+            GpuVertex m[3];
+            for (int e = 0; e < 3; e++) {
+                const GpuVertex *a = &p[e], *b = &p[(e + 1) % 3];
+                const GpuVertex* s = memcmp(a, b, sizeof *a) <= 0 ? a : b;
+                m[e] = *s;
+                for (int q = 0; q < 3; q++) m[e].pos[q] = (a->pos[q] + b->pos[q]) * 0.5f;
+                for (int q = 0; q < 2; q++) m[e].uv[q] = (a->uv[q] + b->uv[q]) * 0.5f;
+            }
+            GpuVertex* o = nx + 12u * t;
+            o[0] = p[0], o[1] = m[0], o[2] = m[2];
+            o[3] = m[0], o[4] = p[1], o[5] = m[1];
+            o[6] = m[2], o[7] = m[1], o[8] = p[2];
+            o[9] = m[0], o[10] = m[1], o[11] = m[2];
+        }
+        free(cur);
+        cur = nx, *ntri *= 4u;
+    }
+    return cur;
+}
+
+// (2026-11-25, item 4) LOD 0's islands joined by position (a UV or normal seam doesn't split one; a loose bolt does): how
+// many, and how many under small_tris triangles
+uint32_t mesh_islands(const MeshBuilt* m, uint32_t small_tris, uint32_t* n_small) {
+    if (n_small) *n_small = 0;
+    if (!m->nv || !m->lods.count) return 0;
+    uint32_t *rm = malloc(sizeof(uint32_t) * m->nv), *par = malloc(sizeof(uint32_t) * m->nv), *cnt = calloc(m->nv, sizeof(uint32_t));
+    uint32_t isl = 0;
+    if (rm && par && cnt) {
+        struct meshopt_Stream ps = { m->v[0].pos, 12, sizeof(GpuVertex) };
+        meshopt_generateVertexRemapMulti(rm, NULL, m->nv, m->nv, &ps, 1); // (rm[k]: its place's id, 0..places-1)
+        for (uint32_t k = 0; k < m->nv; k++) par[k] = k;
+        const uint32_t* ix = m->idx + m->lods.first_index[0];
+        for (uint32_t t = 0; t + 2 < m->lods.index_count[0]; t += 3)
+            for (int e = 1; e < 3; e++) {
+                uint32_t a = rm[ix[t]], c = rm[ix[t + e]];
+                while (par[a] != a) a = par[a] = par[par[a]];
+                while (par[c] != c) c = par[c] = par[par[c]];
+                if (a != c) par[a] = c;
+            }
+        for (uint32_t t = 0; t + 2 < m->lods.index_count[0]; t += 3) {
+            uint32_t a = rm[ix[t]];
+            while (par[a] != a) a = par[a];
+            cnt[a]++;
+        }
+        for (uint32_t k = 0; k < m->nv; k++)
+            if (cnt[k]) {
+                isl++;
+                if (n_small && cnt[k] < small_tris) (*n_small)++;
+            }
+    }
+    free(rm), free(par), free(cnt);
+    return isl;
+}
+
+// (2026-11-25, item 4) the distance from p to the triangle a b c (Ericson's closest point)
+static float pt_tri_dist2(const float p[3], const float a[3], const float b[3], const float c[3]) {
+    float ab[3], ac[3], ap[3], q[3];
+    for (int k = 0; k < 3; k++) ab[k] = b[k] - a[k], ac[k] = c[k] - a[k], ap[k] = p[k] - a[k];
+#define DOT3(x, y) ((x)[0] * (y)[0] + (x)[1] * (y)[1] + (x)[2] * (y)[2])
+    float d1 = DOT3(ab, ap), d2 = DOT3(ac, ap);
+    if (d1 <= 0 && d2 <= 0) memcpy(q, a, 12);
+    else {
+        float bp[3], cp[3];
+        for (int k = 0; k < 3; k++) bp[k] = p[k] - b[k], cp[k] = p[k] - c[k];
+        float d3 = DOT3(ab, bp), d4 = DOT3(ac, bp), d5 = DOT3(ab, cp), d6 = DOT3(ac, cp);
+        float vc = d1 * d4 - d3 * d2, vb = d5 * d2 - d1 * d6, va = d3 * d6 - d5 * d4;
+        if (d3 >= 0 && d4 <= d3) memcpy(q, b, 12);
+        else if (d6 >= 0 && d5 <= d6) memcpy(q, c, 12);
+        else if (vc <= 0 && d1 >= 0 && d3 <= 0) { float v = d1 / (d1 - d3); for (int k = 0; k < 3; k++) q[k] = a[k] + v * ab[k]; }
+        else if (vb <= 0 && d2 >= 0 && d6 <= 0) { float w = d2 / (d2 - d6); for (int k = 0; k < 3; k++) q[k] = a[k] + w * ac[k]; }
+        else if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+            float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+            for (int k = 0; k < 3; k++) q[k] = b[k] + w * (c[k] - b[k]);
+        } else {
+            float den = 1.0f / (va + vb + vc), v = vb * den, w = vc * den;
+            for (int k = 0; k < 3; k++) q[k] = a[k] + ab[k] * v + ac[k] * w;
+        }
+    }
+#undef DOT3
+    float d[3] = { p[0] - q[0], p[1] - q[1], p[2] - q[2] };
+    return d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+}
+static int by_float(const void* a, const void* b) { float x = *(const float*)a, y = *(const float*)b; return x < y ? -1 : x > y; }
+// (2026-11-25, item 4) LOD l's real one-sided error: LOD 0's vertices (up to 4096 of them, evenly) to its surface, by brute
+// force (offline: --skin-lods-test). Its max and mean (cm); returns the 99th percentile
+double mesh_lod_true_error(const MeshBuilt* m, uint32_t l, float* mx, float* mean) {
+    *mx = 0.0f, *mean = 0.0f;
+    if (l >= m->lods.count || !m->nv) return 0.0;
+    uint32_t step = m->nv > 4096u ? m->nv / 4096u : 1u, ns = 0;
+    float* d = malloc(sizeof(float) * (m->nv / step + 1u));
+    if (!d) return 0.0;
+    const uint32_t* ix = m->idx + m->lods.first_index[l];
+    uint32_t nt = m->lods.index_count[l] / 3u;
+    double sum = 0.0;
+    for (uint32_t k = 0; k < m->nv; k += step) {
+        float best = FLT_MAX;
+        for (uint32_t t = 0; t < nt; t++) {
+            float q = pt_tri_dist2(m->v[k].pos, m->v[ix[3 * t]].pos, m->v[ix[3 * t + 1]].pos, m->v[ix[3 * t + 2]].pos);
+            if (q < best) best = q;
+        }
+        d[ns] = sqrtf(best), sum += d[ns];
+        if (d[ns] > *mx) *mx = d[ns];
+        ns++;
+    }
+    *mean = (float)(sum / ns);
+    qsort(d, ns, sizeof(float), by_float);
+    double p99 = d[(uint32_t)((ns - 1u) * 0.99)];
+    free(d);
+    return p99;
+}
+
+static bool mesh_build_skinned_in(const GpuVertex* corners, uint32_t ntri, const uint32_t* csrc, const MeshMorphs* morphs, MeshBuilt* out);
 bool mesh_build_skinned(const GpuVertex* corners, uint32_t ntri, const uint32_t* csrc, const MeshMorphs* morphs, MeshBuilt* out) {
+    const char* sd = getenv("REALENGINE_IMPORT_SUBDIV");
+    if (ntri && sd && atoi(sd) > 0 && !(csrc && morphs && morphs->count)) { // (tests only; a skin with morphs as it is)
+        uint32_t nt = ntri;
+        GpuVertex* d = skin_subdiv(corners, &nt, atoi(sd));
+        if (d) {
+            printf("[RealEngine] Skin subdivided for the tests: %u -> %u triangles\n", ntri, nt);
+            bool ok = mesh_build_skinned_in(d, nt, NULL, NULL, out);
+            free(d);
+            return ok;
+        }
+    }
+    return mesh_build_skinned_in(corners, ntri, csrc, morphs, out);
+}
+static bool mesh_build_skinned_in(const GpuVertex* corners, uint32_t ntri, const uint32_t* csrc, const MeshMorphs* morphs, MeshBuilt* out) {
     memset(out, 0, sizeof *out);
     if (!ntri) return false;
     uint32_t n = ntri * 3u;
@@ -437,10 +604,18 @@ bool mesh_build_skinned(const GpuVertex* corners, uint32_t ntri, const uint32_t*
 // one of the two), so the bones' weights stay right. Appended after LOD 0's indices; false: none made (small, or the
 // simplification couldn't halve it)
 #define SL_CACHE_MAGIC 0x314C5352u // "RSL1"
+static bool mesh_skinned_lods_in(MeshBuilt* mb);
 bool mesh_skinned_lods(MeshBuilt* mb) {
     if (!mb || !(mb->flags & RMESH_SKINNED) || mb->lods.count != 1u) return false;
+    t_free_borders = true; // (2026-11-24: below, make_lods: a skin's borders free when locked ones keep it whole)
+    bool r = mesh_skinned_lods_in(mb);
+    t_free_borders = false;
+    return r;
+}
+static bool mesh_skinned_lods_in(MeshBuilt* mb) {
     uint32_t ni0 = mb->lods.index_count[0], f0 = mb->lods.first_index[0];
-    if (ni0 / 3u < 4096u || f0 + ni0 > mb->ni) return false; // (a small skin: its LODs save nothing)
+    const MeshLodOptions* o = t_lod_opts; // (2026-11-24: the viewer's LOD Settings: its own count and shares, no cache)
+    if (ni0 / 3u < (o ? (o->min_tris ? o->min_tris : 16u) : 4096u) || f0 + ni0 > mb->ni) return false; // (a small skin: its LODs save nothing)
     uint32_t first[RMESH_MAX_LODS], count[RMESH_MAX_LODS], n = 0, lni = 0;
     float err[RMESH_MAX_LODS];
     uint32_t* lidx = NULL;
@@ -459,7 +634,7 @@ bool mesh_skinned_lods(MeshBuilt* mb) {
         for (; q < sizes[k]; q++) key = (key ^ bytes[k][q]) * 1099511628211ull;
     }
     char cache[600] = "";
-    if (re_cache_dir(cache, sizeof cache)) {
+    if (!o && re_cache_dir(cache, sizeof cache)) {
         size_t l = strlen(cache);
         snprintf(cache + l, sizeof cache - l, "/meshes");
         re_make_dirs(cache);
@@ -530,6 +705,21 @@ bool mesh_build_indexed(const GpuVertex* v0, uint32_t nv, const uint32_t* idx0, 
         ok = build(v, nv, idx, ni, atlas, lods, out, NULL);
     }
     free(v), free(idx);
+    return ok;
+}
+
+bool mesh_build_indexed_lods(const GpuVertex* v, uint32_t nv, const uint32_t* idx, uint32_t ni, bool atlas, const MeshLodOptions* o, MeshBuilt* out) {
+    t_lod_opts = o;
+    bool ok = mesh_build_indexed(v, nv, idx, ni, atlas, o == NULL || o->lods > 1, out);
+    t_lod_opts = NULL;
+    return ok;
+}
+
+bool mesh_skinned_lods_opts(MeshBuilt* mb, const MeshLodOptions* o) {
+    if (mb && mb->lods.count > 1u) mb->ni = mb->lods.first_index[0] + mb->lods.index_count[0], mb->lods.count = 1u; // (its LODs made again)
+    t_lod_opts = o;
+    bool ok = mesh_skinned_lods(mb);
+    t_lod_opts = NULL;
     return ok;
 }
 
@@ -815,8 +1005,11 @@ uint32_t mesh_built_dag(const MeshBuilt* mb, MeshDagCluster** out, uint32_t** pe
     if (!mb->lods.count) return 0;
     const uint32_t* src = mb->idx + mb->lods.first_index[0];
     uint32_t ni = mb->lods.index_count[0];
-    // the content's key: the vertices and LOD 0's indices (as mesh_built_clusters)
-    uint64_t key = 1469598103934665603ull ^ DAG_CACHE_MAGIC;
+    // (2026-11-25, item 4) a skin or a mesh of many shells (the Unamed capsule: 115, 52 under 64 triangles): a group stuck
+    // under regular simplification tries the permissive one, then the sloppy one (else its DAG kept every triangle)
+    uint32_t cflags = (mb->flags & RMESH_SKINNED) || mesh_islands(mb, 0u, NULL) > 32u ? MESH_CLOD_STUCK_FALLBACK : 0u;
+    // the content's key: the vertices and LOD 0's indices (as mesh_built_clusters), and how it is simplified
+    uint64_t key = (1469598103934665603ull ^ DAG_CACHE_MAGIC) + (uint64_t)cflags * 0x9E3779B97F4A7C15ull;
     const uint8_t* bytes[2] = { (const uint8_t*)mb->v, (const uint8_t*)src };
     size_t sizes[2] = { sizeof(GpuVertex) * (size_t)mb->nv, sizeof(uint32_t) * (size_t)ni };
     for (int s = 0; s < 2; s++) {
@@ -866,7 +1059,7 @@ uint32_t mesh_built_dag(const MeshBuilt* mb, MeshDagCluster** out, uint32_t** pe
     MeshDagCluster* c;
     uint32_t *ix, nix, levels;
     double t0 = re_time_seconds();
-    uint32_t n = mesh_clod_build(mb->v[0].pos, sizeof(GpuVertex), mb->nv, attr, 5, weights, (1u << 3) | (1u << 4), src, ni, &c, &ix, &nix, &levels);
+    uint32_t n = mesh_clod_build(mb->v[0].pos, sizeof(GpuVertex), mb->nv, attr, 5, weights, (1u << 3) | (1u << 4), src, ni, &c, &ix, &nix, &levels, cflags);
     free(attr);
     uint32_t* p = n ? malloc(sizeof *p * 6 * n) : NULL;
     if (!p || !view_orders(c[0].sphere, sizeof *c / sizeof(float), n, p)) {

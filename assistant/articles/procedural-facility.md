@@ -1,6 +1,6 @@
 id: procedural-facility
 kind: recipe
-title: Instalações procedurais: salas, corredores, monstros | Procedural facilities: rooms, corridors, monsters
+title: Instalações procedurais: salas, corredores, monstros | Procedural facilities: rooms, corridors, monsters | Instalaciones procedurales: salas, pasillos, monstruos
 keys: instalacao procedural, procedural facility, dungeon, masmorra, lethal company, repo, salas, rooms, corredores, corridors, portas, doors, labirinto, maze, gerar mapa, generate map, roguelike, terror, horror, scrap, itens, items, monstros, monsters
 --- pt
 ```diagram steps
@@ -16,7 +16,7 @@ No modo **Instalação**, o Mundo Procedural cresce salas a partir da **entrada*
 
 **O que vai em cada sala**
 - **Luz**: uma por sala, mais quente quanto mais funda a sala.
-- **Itens**: caixas douradas para achar (troque por um Blueprint com *Spawn Actor*).
+- **Itens**: caixas douradas para achar (troque por um Grafo com *Spawn Actor*).
 - **Monstros**: mais comuns nas salas mais fundas. Use a sua classe em *Classe da Criatura*.
 
 A mesma semente dá a mesma instalação; mude a semente e cada partida tem outra planta.
@@ -44,7 +44,7 @@ In **Facility** mode the Procedural World grows rooms from the **entrance** (the
 
 **What goes in each room**
 - **Light**: one per room, warmer the deeper the room.
-- **Items**: golden boxes to find (swap them for a Blueprint with *Spawn Actor*).
+- **Items**: golden boxes to find (swap them for a Graph with *Spawn Actor*).
 - **Monsters**: more common in the deeper rooms. Use your own class in *Creature Class*.
 
 The same seed gives the same facility; change the seed and each run gets a new layout.
@@ -58,3 +58,31 @@ class Run extends Actor
         SetActorLocation(Vector(0, -200, 100))
 ```
 See also [Procedural worlds](article:procedural-worlds).
+--- es
+```diagram steps
+Quick Add > Procedural > Procedural World > Facility | Detalles: semilla, salas, tamaño, altura, bucles | La entrada es el lugar del actor | Jugar: monstruos en las salas más profundas
+```
+## Cómo funciona
+En el modo **Facility** el Procedural World hace crecer salas desde la **entrada** (el lugar del actor), como en Lethal Company y Repo:
+
+**La distribución**
+- Cada sala nueva crece desde una existente a través de una **puerta**. Eso garantiza que se pueda llegar a todas las salas.
+- *Loops* abre puertas extra entre vecinas, para caminos alternativos.
+- Las salas son bloques de prototipado: los Characters y la IA caminan sobre ellas y colisionan con ellas de inmediato.
+
+**Qué hay en cada sala**
+- **Luz**: una por sala, más cálida cuanto más profunda es la sala.
+- **Ítems**: cajas doradas por encontrar (cámbialas por un Grafo con *Spawn Actor*).
+- **Monstruos**: más comunes en las salas más profundas. Usa tu propia clase en *Creature Class*.
+
+La misma semilla da la misma instalación; cambia la semilla y cada partida tiene una distribución nueva.
+
+```blueprint
+Event BeginPlay -> Spawn Actor from Class ( Class, Spawn Transform )
+```
+```real
+class Run extends Actor
+    event BeginPlay()
+        SetActorLocation(Vector(0, -200, 100))
+```
+Mira también [Mundos procedurales](article:procedural-worlds).

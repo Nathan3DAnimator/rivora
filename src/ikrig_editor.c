@@ -6,6 +6,7 @@
 //   - IK Rig: goals (drag one in the preview: the solvers reach it live), solvers in order, bone settings.
 //   - Physics Asset: bodies and constraints; Simulate drops the skeleton as a ragdoll in the preview (a push with the
 //     mouse), Generate makes the bodies again from the bones.
+#include "editor_docs.h"
 #include "ikrig_editor.h"
 
 #include "theme.h"
@@ -614,4 +615,18 @@ int ikrig_editor_selftest(void) {
     }
     printf("[RealEngine] ikrig editor self-test: %s\n", fails ? "FAIL" : "ok");
     return fails;
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int ikrig_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    if (!E.rig && !E.phys) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) return close_all(), E.unsaved = false, 1;
+    if (!E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, E.rig ? E.rig->name : E.phys->name), 1;
+    bool ok = E.rig ? ikrig_save(E.rig) : phys_save(E.phys);
+    if (ok) E.unsaved = false;
+    return !ok;
 }

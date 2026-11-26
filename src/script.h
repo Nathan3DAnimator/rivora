@@ -15,9 +15,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef enum ScriptLang { SL_REAL = 0, SL_CSHARP, SL_PYTHON, SL_C, SL_COUNT } ScriptLang;
-extern const char* const g_script_lang_names[SL_COUNT]; // "Real", "C#", "Python", "C"
-extern const char* const g_script_lang_ext[SL_COUNT];   // "real", "cs", "py", "c"
+typedef enum ScriptLang { SL_REAL = 0, SL_CSHARP, SL_PYTHON, SL_C, SL_CPP, SL_COUNT } ScriptLang; // (SL_CPP: 2026-11-25, item 13)
+extern const char* const g_script_lang_names[SL_COUNT]; // "Rivora Script", "C#", "Python", "C", "C++"
+extern const char* const g_script_lang_ext[SL_COUNT];   // "rvs" (Rivora Script; .real still read), "cs", "py", "c", "cpp" (.rcpp too)
 
 // A message of the compiler (an error stops the class; a warning doesn't)
 typedef struct ScriptDiag {

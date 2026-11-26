@@ -16,10 +16,14 @@
 #include <cimgui.h>
 #include <cimgui_impl.h>
 
+#include "loc_ui.h"
+#include "editor_docs.h"
+#include "ui_viewports.h" // (item 9)
 #include "delight.h"
 #include "theme.h"
 #include "editor_dock.h"
 #include "dock_test.h"
+#include "ui_sweep.h" // (item 21) --ui-sweep
 #include "picker_test.h"
 #include "asset_viewport.h"
 #include "bp_editor.h"
@@ -44,6 +48,7 @@
 #include "editor.h"
 #include "mcp.h"
 #include "rig_detect.h"
+#include "loc.h" // (2026-11-24) --loc-test
 #include "level_preload.h"
 #include "frame_budget.h"
 #include "upscale.h"
@@ -72,6 +77,7 @@
 #include "pcg_test.h"
 #include "udim_test.h" // (Q18)
 #include "emissive_test.h" // (2026-11-23)
+#include "mat_first_test.h" // (2026-11-24) the materials' color before any bake
 #include "farview.h" // (Q21)
 #include "farview_test.h" // (Q21)
 #include "ai_senses_test.h" // (Q24)
@@ -79,6 +85,8 @@
 #include "ikrig_editor.h"
 #include "vehicle_editor.h"
 #include "project.h"
+#include "assistant.h" // (2026-11-25: its base on a worker)
+#include "script.h"
 #include "gi_bake.h"
 #include "gi_cache.h"
 #include "vsm.h"
@@ -114,6 +122,14 @@ int steam_selftest(void);
 #include "bp_debug.h"
 #include "async.h"
 #include "assistant_ui.h"
+#include "mesh_build.h" // (2026-11-24: --skin-lods-test)
+void selection_test_scene(Editor* ed); // (2026-11-25, item 17: selection_test.c)
+void selection_test_tick(Editor* ed, VkCtx* vk);
+bool scal_mem_test_frame(Editor* ed, VkCtx* vk, double dt, bool* ok); // (2026-11-25, bug-fixer: scal_mem_test.c)
+bool place_hitch_test_frame(Editor* ed, const char* name, double max_ms, double dt, double now, bool* ok); // (place_hitch_test.c)
+bool selection_test_check(Editor* ed);
+void groom_skin_test_tick(Editor* ed, VkCtx* vk); // (2026-11-25, item 16: groom_skin_test.c)
+bool groom_skin_test_check(Editor* ed);
 
 static VkQueryPool ui_q; // the UI pass's two timestamps per frame slot (the HUD's GPU cost: hud.h)
 static bool ui_q_used[RE_FRAMES_IN_FLIGHT];
@@ -211,8 +227,18 @@ typedef struct Bench {
     uint64_t frames;
     double frame_sum, cpu_sum, gpu_sum, worst;
     double gpu_min, main_min, gi_min; // the least of the frames: ~the cost on a GPU shared with another program
+    double skin_sum, skin_worst; // (2026-11-24) the render's dynamic set and skins on the CPU (render_skin_stats' ms)
+    uint64_t skin_bends;         // (2026-11-24) the skins bent over the measure
     bool active, cli;
 } Bench;
+
+// (2026-11-25, bug-fixer) A self-test that returns before the editor starts: its crash leaves a report (the suite's
+// ikphys_selftest of 03:45 died after its IK lines with none: a binary built in the middle of an edit, never seen again)
+// and its lines reach the log as they're printed (a buffered pipe lost the ones before the fault)
+static void selftest_guard(void) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    crash_install(&(CrashConfig){ NULL, false, true });
+}
 
 int main(int argc, char** argv) {
     services_early_init(); // crash reports, the log file (logs/realengine.log next to the reports)
@@ -229,6 +255,14 @@ int main(int argc, char** argv) {
     double max_flicker = 0.0; // %: the flicker probe's limit (render_flicker)
     double max_pulses = 0.0;  // (Q20) %: the back-and-forth flicker's limit (render_flicker_pulses: a slow camera, --cam-move)
     double max_ghost = 0.0;   // (Q20) %: the trail's limit behind moving actors (render_ghosting)
+    double max_skin_ms = 0.0; // (2026-11-24) --max-skin-ms: the render's dynamic set and skins, CPU ms a frame on average
+    int skin_still = -1;      // (2026-11-24) --skin-still N: the scene's Skeletal Meshes stand with no animation but N (the Unamed case)
+    int skin_copies = 0;      // (2026-11-24) --skin-copies N: the level's first Skeletal Mesh Actor copied N times (after --import)
+    float cam_near_skin = 0.0f; // (2026-11-24) --cam-near-skin
+    bool no_skins = false;      // (2026-11-25) --no-skins: the level's Skeletal Mesh Actors removed (the scene's own cost, measured)
+    bool groom_skin_test = false; // (2026-11-25, item 16) --groom-skin-test: the Tlender's fur on a skin (groom_skin_test.c)
+    bool select_all = false;      // (2026-11-25, item 17) --select-all: every actor selected after the load (the outline's photos)
+    const char* select_name = NULL; // (2026-11-25, item 17) --select-name N: the actors named N (prefix) selected after the load
     bool no_spill = false;    // --no-spill: the main pass's shaders keep everything in registers (render_shader_spill)
     bool cache_all = false;   // --cache-all: fail when a mesh within the surface cache's reach got no chart
     const char* gi_mode = NULL;
@@ -260,6 +294,10 @@ int main(int argc, char** argv) {
     const char* browser_open = NULL; // --browser-open: the Project Browser shown, then this project opened as by its click
     int browser_frames = 0, hang_frames = 0;
     bool hang_test = false;
+    const char* place_hitch_name = NULL; // (2026-11-25) --place-hitch-test "<class>" <ms> (place_hitch_test.c)
+    double place_hitch_ms = 0.0;
+    bool scal_mem_test = false;
+    bool vr_preview_now = false; // (2026-11-25) --vr-preview: Play > VR Preview once the project is open (child_process_cleanup) // (2026-11-25) --scalability-mem-test: Medium <-> Cinematic, the memory kept (scal_mem_test.c)
     float splash_hold = 0.0f;
     bool list_actors = false, vehicle_mesh_test = false;
     float add_floor = 0.0f;
@@ -273,7 +311,8 @@ int main(int argc, char** argv) {
     const char* splash_file = NULL;
     const char* show_window = NULL;
     bool char_test = false, constraint_test = false, nav_test = false, morph_test = false, health_test = false, inv_test = false, save_test = false, ia_test = false, dlg_test = false, qst_test = false, rules_test = false;
-    bool abil_test = false, hud_test = false, levels_test = false, dock_test = false, picker_test = false, avp_test = false, artist_test = false;
+    const char* ui_sweep_dir = NULL; // (item 21: --ui-sweep <dir>)
+    bool abil_test = false, hud_test = false, levels_test = false, dock_test = false, picker_test = false, avp_test = false, artist_test = false, psw_test = false;
     bool mcp_flag = false, mcp_test = false; // (2026-11-24) --mcp: the MCP server on (mcp.h); --mcp-test: its test
     int mcp_port = 0;
     int pause_test = 0; // --pause-test 1, --pause-test-reload 2 (pause_test.c)
@@ -302,9 +341,13 @@ int main(int argc, char** argv) {
     const char* bp_package = NULL;
     const char* ingame_test = NULL, *ingame_package = NULL; // (Q16) --ingame-test loading|progressive [--ingame-package DIR]
     const char* open_asset = NULL;
+    const char* cli_lang = NULL; // (2026-11-25, item 12) --lang pt_BR / es_ES / en_US: the interface's language for this run
+    bool cli_project_settings = false; // --project-settings: Edit > Project Settings open (the screenshots)
     const char* import_tlend = NULL;
     bool import_folder = false; // (2026-11-23) --import-folder: a folder from Explorer, all of it (content_import_folder)
     bool mat_live_test = false; // (2026-11-24, #180) --mat-live-test
+    bool mat_param_test = false; // (2026-11-24) --mat-param-test (the affine fold)
+    bool class_split_check = false; // (2026-11-24) --class-split-check: the bench's main pass has plain and RE_EXT runs
     bool rig_fit_test = false; // (2026-11-23) --rig-fit-test: after --import, the rig found and the physics fitted to the skin
     bool mesh_socket_test = false; // (2026-11-23) --mesh-socket-test: after --import, a Static Mesh's sockets and material
     double import_budget_ms = 0.0; // (Q19) --import-budget: the import's time limit (the test fails past it)
@@ -350,6 +393,14 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--max-flicker") && i + 1 < argc) max_flicker = atof(argv[++i]);
         else if (!strcmp(argv[i], "--max-pulses") && i + 1 < argc) max_pulses = atof(argv[++i]);
         else if (!strcmp(argv[i], "--max-ghost") && i + 1 < argc) max_ghost = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--max-skin-ms") && i + 1 < argc) max_skin_ms = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--skin-still") && i + 1 < argc) skin_still = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--skin-copies") && i + 1 < argc) skin_copies = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-skins")) no_skins = true;
+        else if (!strcmp(argv[i], "--groom-skin-test")) groom_skin_test = true;
+        else if (!strcmp(argv[i], "--select-all")) select_all = true;
+        else if (!strcmp(argv[i], "--select-name") && i + 1 < argc) select_name = argv[++i];
+        else if (!strcmp(argv[i], "--cam-near-skin") && i + 1 < argc) cam_near_skin = (float)atof(argv[++i]); // (2026-11-24) the camera D cm from the first Skeletal Mesh Actor
         else if (!strcmp(argv[i], "--cache-all")) cache_all = true; // every mesh within the surface cache's reach has a chart
         else if (!strcmp(argv[i], "--gi") && i + 1 < argc) gi_mode = argv[++i]; // off | probes | full (measures)
         // the baked lighting's tests: build it first (the measure waits for it), open / save a level, no ray tracing
@@ -396,7 +447,9 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--mcp")) mcp_flag = true; // (2026-11-24) the MCP server on (rivora_mcp.exe opens the editor with it)
         else if (!strcmp(argv[i], "--mcp-port") && i + 1 < argc) mcp_port = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--mcp-test")) mcp_test = mcp_flag = true, mcp_port = mcp_port ? mcp_port : 47871; // (mcp_test.c: a port of its own)
+        else if (!strcmp(argv[i], "--project-switch-test")) psw_test = true; // (2026-11-25) editors open across a project switch: closed, the prompt (project_switch_test.c)
         else if (!strcmp(argv[i], "--asset-viewport-test")) avp_test = true; // (Q7) every asset editor's viewport in every view mode, a socket, the cost (asset_viewport_test.c)
+        else if (!strcmp(argv[i], "--ui-sweep") && i + 1 < argc) ui_sweep_dir = argv[++i]; // (item 21) every menu, button and window by injected input (ui_sweep.c)
         else if (!strcmp(argv[i], "--dock-test")) dock_test = true; // the modular windows: every docking target, a maximized window closed (dock_test.c)
         else if (!strcmp(argv[i], "--picker-test")) picker_test = true; // (Q6) the asset picker and Create from the selection (picker_test.c)
         else if (!strcmp(argv[i], "--levels-test")) levels_test = true; // sublevels and Lighting Levels (levels_test.c)
@@ -430,10 +483,14 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--ingame-test") && i + 1 < argc) ingame_test = argv[++i]; // (Q16, ingame_test.c)
         else if (!strcmp(argv[i], "--ingame-package") && i + 1 < argc) ingame_package = argv[++i];
         else if (!strcmp(argv[i], "--open-asset") && i + 1 < argc) open_asset = argv[++i]; // a Blueprint's editor ("/Content/...")
+        else if (!strcmp(argv[i], "--lang") && i + 1 < argc) cli_lang = argv[++i];
+        else if (!strcmp(argv[i], "--project-settings")) cli_project_settings = true;
         else if (!strcmp(argv[i], "--import-folder") && i + 1 < argc) import_tlend = argv[++i], import_folder = true;
         else if (!strcmp(argv[i], "--mesh-socket-test")) mesh_socket_test = true;
         else if (!strcmp(argv[i], "--rig-fit-test")) rig_fit_test = true;
         else if (!strcmp(argv[i], "--mat-live-test")) mat_live_test = true;
+        else if (!strcmp(argv[i], "--mat-param-test")) mat_param_test = true;
+        else if (!strcmp(argv[i], "--class-split-check")) class_split_check = true;
         else if ((!strcmp(argv[i], "--import-tlend") || !strcmp(argv[i], "--import")) && i + 1 < argc) import_tlend = argv[++i]; // a Tlender scene (or an OBJ, a glTF) into /Content/Imported
         else if (!strcmp(argv[i], "--import-budget") && i + 1 < argc) import_budget_ms = atof(argv[++i]); // (Q19) ms
         else if (!strcmp(argv[i], "--open-viewport") && i + 1 < argc) open_asset = argv[++i], open_viewport = true; // ... on its Viewport
@@ -477,8 +534,41 @@ int main(int argc, char** argv) {
         } else if (!strcmp(argv[i], "--udim-import-test")) { // (Q18) an OBJ naming a UDIM tile: the material reads one .rudim
             extern int udim_import_selftest(void);
             return udim_import_selftest() ? 1 : 0;
-        } else if (!strcmp(argv[i], "--mat-pins-test")) return mat_pins_selftest() ? 1 : 0; // the inputs greyed "no effect yet" are the ones not compiled
+        } else if (!strcmp(argv[i], "--skin-lods-test") && i + 1 < argc) { // (2026-11-24, item 4) a skin's LODs made from its file, no GPU
+            MeshBuilt mb;
+            if (!rmesh_read(argv[i + 1], &mb, 1u << 26, 1u << 28)) return printf("[RealEngine] FAIL: skin lods: %s unreadable\n", argv[i + 1]), 1;
+            uint32_t t0 = mb.lods.index_count[0] / 3u;
+            uint32_t small_isl = 0, isl = mesh_islands(&mb, 64u, &small_isl); // (2026-11-25: loose pieces lock its simplification)
+            printf("[RealEngine] skin lods: %u vertices, %u triangles, %u islands by position (%u under 64 triangles)\n", mb.nv, t0, isl, small_isl);
+            { // (2026-11-25) its cluster LOD DAG: the cut's triangles at a few errors (cm), what the GPU would draw
+                MeshDagCluster* dc;
+                uint32_t *dp, *di, dni;
+                uint32_t nd = mesh_built_dag(&mb, &dc, &dp, &di, &dni);
+                static const float cut_err[8] = { 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 30.0f, 100.0f, 1000.0f };
+                printf("[RealEngine] skin lods: DAG %u clusters, its cut:", nd);
+                for (int q = 0; q < 8 && nd; q++) {
+                    uint64_t tri = 0;
+                    for (uint32_t c = 0; c < nd; c++)
+                        if (dc[c].self_err <= cut_err[q] && dc[c].parent_err > cut_err[q]) tri += dc[c].count / 3u;
+                    printf(" %.1f cm %llu,", cut_err[q], (unsigned long long)tri);
+                }
+                printf("\n");
+                if (nd) free(dc), free(dp), free(di);
+            }
+            bool made = mesh_skinned_lods(&mb);
+            printf("[RealEngine] skin lods: %s: %s, %u LODs:", argv[i + 1], made ? "made" : "NOT made", mb.lods.count);
+            for (uint32_t l = 0; l < mb.lods.count; l++) printf(" %u (err %.2f cm)", mb.lods.index_count[l] / 3u, mb.lods.error[l]);
+            printf(" from %u triangles\n", t0);
+            for (uint32_t l = 1; l < mb.lods.count; l++) { // (2026-11-25) the real one-sided error: LOD 0's vertices to the LOD's surface
+                float mx = 0.0f, sum = 0.0f;
+                double d = mesh_lod_true_error(&mb, l, &mx, &sum);
+                printf("[RealEngine] skin lods: LOD %u measured: max %.2f cm, mean %.2f cm, 99%% under %.2f cm\n", l, mx, sum, (float)d);
+            }
+            mesh_built_free(&mb);
+            return made ? 0 : 1;
+} else if (!strcmp(argv[i], "--mat-pins-test")) return mat_pins_selftest() ? 1 : 0; // the inputs greyed "no effect yet" are the ones not compiled
         else if (!strcmp(argv[i], "--vehicle-mesh-test")) vehicle_mesh_test = true; // a vehicle from an "imported" car's meshes (vehicle_build.inc)
+        else if (!strcmp(argv[i], "--update-parse-test")) return update_parse_selftest(); // (2026-11-25) the list and the feed, offline
         else if (!strcmp(argv[i], "--update-test")) return update_selftest(); // the real latest release: API path, retries, signature (updater.c)
         else if (!strcmp(argv[i], "--net-test")) return net_selftest(); // the network protocol under emulated lag and loss (net_test.c)
         else if (!strcmp(argv[i], "--steam-test")) return steam_selftest(); // Steam read-only with the App ID 480 (net_session_test.c)
@@ -499,6 +589,9 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--template") && i + 1 < argc) template_id = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--project-browser")) show_project_browser = true;
         else if (!strcmp(argv[i], "--browser-open") && i + 1 < argc) browser_open = argv[++i], show_project_browser = true;
+        else if (!strcmp(argv[i], "--scalability-mem-test")) scal_mem_test = true;
+        else if (!strcmp(argv[i], "--vr-preview")) vr_preview_now = true;
+        else if (!strcmp(argv[i], "--place-hitch-test") && i + 2 < argc) place_hitch_name = argv[++i], place_hitch_ms = atof(argv[++i]);
         else if (!strcmp(argv[i], "--hang-test")) hang_test = true; // a frame frozen 7.5 s: the watchdog's report (crashlog.h)
         else if (!strcmp(argv[i], "--no-intro")) g_brand_intro_on = false; // straight to the loading screen
         else if (!strcmp(argv[i], "--intro")) force_intro = true;
@@ -527,12 +620,17 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--mobile-test")) return mobile_selftest() ? 1 : 0; // the device tiers, the dynamic resolution // the touch controls with fingers made up
         else if (!strcmp(argv[i], "--vehicle-test")) return vehicle_selftest() ? 1 : 0; // a car, a boat, an airplane, a helicopter and a train on a flat floor
         else if (!strcmp(argv[i], "--weather-field-test")) return wfield_selftest() ? 1 : 0; // (Q27.6)
-        else if (!strcmp(argv[i], "--ik-test") && i + 1 < argc && argv[i + 1][0] != '-') return ikphys_selftest_named(argv[i + 1]) ? 1 : 0; // (Q10) ragdoll_limits, ragdoll_active, dyn_bones
+        else if (!strcmp(argv[i], "--ik-test") && i + 1 < argc && argv[i + 1][0] != '-') return selftest_guard(), ikphys_selftest_named(argv[i + 1]) ? 1 : 0; // (Q10) ragdoll_limits, ragdoll_active, dyn_bones
         else if (!strcmp(argv[i], "--spline-test") && i + 1 < argc && argv[i + 1][0] != '-') return spline_selftest_named(argv[i + 1]) ? 0 : 1; // (Q14) spline_eval, spline_rail_river, cable_hang
         else if (!strcmp(argv[i], "--fpcam-test") && i + 1 < argc && argv[i + 1][0] != '-') return fpcam_selftest_named(argv[i + 1]) ? 0 : 1; // (Q12) fp_bob_sync, camshake_determinism, fp_autofocus, fp_land_recoil
         else if (!strcmp(argv[i], "--rig-test")) return rig_detect_selftest() ? 0 : 1; // (2026-11-23) Mixamo, Rigify, UE, no names, CC
         else if (!strcmp(argv[i], "--preload-test") && i + 1 < argc) return level_preload_selftest(argv[i + 1]) ? 0 : 1; // (2026-11-23)
-        else if (!strcmp(argv[i], "--ik-test")) return (ikphys_selftest() + ikrig_editor_selftest()) ? 1 : 0; // IK chains, limits, a ragdoll falling
+        else if (!strcmp(argv[i], "--loc-test") && i + 1 < argc) return loc_selftest(argv[i + 1]) ? 0 : 1; // (2026-11-24, loc.h)
+        else if (!strcmp(argv[i], "--i18n-dump") && i + 1 < argc) { // (2026-11-25, item 12) the tables' texts, for tools/i18n_audit.py
+            extern int i18n_dump(const char* path);
+            return i18n_dump(argv[i + 1]);
+        }
+        else if (!strcmp(argv[i], "--ik-test")) return selftest_guard(), (ikphys_selftest() + ikrig_editor_selftest()) ? 1 : 0; // IK chains, limits, a ragdoll falling
         else if (!strcmp(argv[i], "--graph-menu-test")) return gm_selftest() ? 1 : 0; // the graph menus' recents and recommendations
         else if (!strcmp(argv[i], "--pcg-test")) return pcg_selftest() ? 1 : 0; // (Q15) PCG: determinism, cells, 100k points, the files (pcg_test.c)
         else if (!strcmp(argv[i], "--reimport") && i + 1 < argc) reimport = argv[++i]; // "/Content/.../SK_x.rskm": Reimport (in the background)
@@ -584,7 +682,7 @@ int main(int argc, char** argv) {
     if (pie_client && !background) bw = 1280, bh = 720; // (B13: another player's window, beside the editor)
     // (2026-11-23, the user: "the opening like Blender's, a transparent background") the intro plays from here in a
     // window of its own over the desktop (brand.c) while the engine starts; the main window is shown once it ends
-    bool automated = bench.cli || pause_test || bp_test || char_test || constraint_test || nav_test || morph_test || health_test || inv_test || save_test || ia_test || dlg_test || qst_test || rules_test || abil_test || hud_test || levels_test || dock_test || picker_test || avp_test || artist_test || bp_dbg_test || char_test || constraint_test || nav_test || morph_test || health_test || inv_test || save_test || ia_test || dlg_test || umg_test || seq_test || cine_test || pie_client || audio_test || script_test || trace_test || vr_hand_test || async_test || assistant_test || mcp_test || package_dir || import_tlend || crash_kind_env();
+    bool automated = bench.cli || pause_test || bp_test || char_test || constraint_test || nav_test || morph_test || health_test || inv_test || save_test || ia_test || dlg_test || qst_test || rules_test || abil_test || hud_test || levels_test || dock_test || ui_sweep_dir || picker_test || avp_test || psw_test || artist_test || bp_dbg_test || char_test || constraint_test || nav_test || morph_test || health_test || inv_test || save_test || ia_test || dlg_test || umg_test || seq_test || cine_test || pie_client || audio_test || script_test || trace_test || vr_hand_test || async_test || assistant_test || mcp_test || package_dir || import_tlend || crash_kind_env();
     if (automated && !force_intro) g_brand_intro_on = false;
     int imx = 0, imy = 0, imw = 0, imh = 0;
     if (on_monitor) re_test_monitor(&imx, &imy, &imw, &imh);
@@ -636,6 +734,11 @@ int main(int argc, char** argv) {
         extern struct ImFont* g_code_font;
         theme_init(); // (the themes: the preferences pick one later, editor_load_prefs)
         ui_tips_editor(tip_icon, &g_font_bold); // (Q5: the standard tooltip's icon, bold name and F1 line)
+        { // (2026-11-25, item 12) the descriptions in Spanish
+            extern const UiTipEs g_ui_tips_es[];
+            extern const int g_ui_tip_es_count;
+            ui_tips_set_es(g_ui_tips_es, g_ui_tip_es_count);
+        }
         theme_load_fonts(15.0f); // (compact, like a production tool's 9 pt)
         g_code_font = g_font_mono;
     }
@@ -667,6 +770,9 @@ int main(int argc, char** argv) {
     init.PipelineInfoForViewports.PipelineRenderingCreateInfo.pColorAttachmentFormats = &color_format;
     init.CheckVkResultFn = check_vk_result;
     ImGui_ImplVulkan_Init(&init);
+    // (2026-11-25, item 9) the windows dragged out of the editor: owned by this one (above it, no taskbar button of their
+    // own, closed with it), presented in mailbox (measured: FIFO held the whole editor at the refresh rate), in SDR (ui_viewports.h)
+    ui_viewports_install(window, vk.instance, vk.gpu, vk.device, vk.queue_family, init.MinImageCount, UIVP_PRESENT_MAILBOX);
     vkctx_pipeline_cache_save(&vk); // what the driver compiled for this start (a crash later keeps it)
     uint32_t imgui_min_images = init.MinImageCount;
 
@@ -719,13 +825,34 @@ int main(int argc, char** argv) {
         ed.show_package = !strcmp(show_window, "package");
         if (!strcmp(show_window, "games")) ed.show_browser = true, project_ui_show_games();
         if (!strncmp(show_window, "assistant:", 10)) assistant_ui_show_article(show_window + 10);
+        // (2026-11-25, the tester's photos) loc: Tools > Localization Dashboard; plugins: Edit > Plugins (bp-pin / bp-var:
+        // after the project opens, below)
+        if (!strcmp(show_window, "loc")) *loc_ui_show_flag() = true;
+        if (!strcmp(show_window, "plugins")) editor_show_plugins();
     }
     if (project_path && !editor_open_project(&ed, project_path, -1)) {
         printf("[RealEngine] FAIL: could not open the project %s\n", project_path);
         exit_code = 1;
     }
+    // (2026-11-25, the tester's photos) --show bp-pin:<vpath>[:<pin>]: the Blueprint's Event Graph with a struct pin's menu
+    // open (Split Struct Pin); bp-var:<vpath>:<var>: the variable in the Details with its value's asset picker open (a
+    // Level variable: the levels). After the project opened (its switch closes the editors); with --bench and --shot
+    if (show_window && (!strncmp(show_window, "bp-pin:", 7) || !strncmp(show_window, "bp-var:", 7))) {
+        char vp[600], subb[200], *sub;
+        snprintf(vp, sizeof vp, "%s", show_window + 7);
+        sub = strlen(vp) > 9 ? strchr(vp + 9, ':') : NULL; // (after "/Content/")
+        if (sub) *sub++ = 0, snprintf(subb, sizeof subb, "%s", sub), sub = subb; // (its own: ".rbp" may go where it was)
+        size_t vn = strlen(vp); // (the vpath with or without its ".rbp": /Content/BP_Hero or /Content/BP_Hero.rbp)
+        const char* dot = strrchr(vp, '.');
+        if ((!dot || strchr(dot, '/')) && vn + 4 < sizeof vp) memcpy(vp + vn, ".rbp", 5);
+        if (show_window[3] == 'p') bp_editor_show(vp, sub ? sub : "", NULL); // ("": its first splittable pin)
+        else bp_editor_show(vp, NULL, sub ? sub : "");
+    }
     if (!ed.show_browser) plugins_init(NULL, true); // (B14c) no project opened: the engine's plugins (a project opened later adds its own)
     if (!ed.show_browser) wait_shaders_splash(&vk, 0.6f); // (the Project Browser: they go on compiling behind it)
+    // (2026-11-25, bug-fixer) the gamepads asked once here, behind the splash: GLFW starts its joysticks (DirectInput, XInput)
+    // on the first ask, ~110 ms, which was the Play's first frame (the pause menu's Start button: play_hitch 188 ms)
+    glfwJoystickPresent(GLFW_JOYSTICK_1);
     brand_splash_end(&vk);
     if (new_project) {
         char folder[600];
@@ -747,6 +874,7 @@ int main(int argc, char** argv) {
         heavy = heavy || (scene_name && !strncmp(scene_name, "udim", 4)); // (Q18: its assets into the project)
         heavy = heavy || (scene_name && !strncmp(scene_name, "vista", 5)); // (Q21: its assets into the project)
         heavy = heavy || (scene_name && !strncmp(scene_name, "emit", 4)); // (2026-11-23: its material into the project)
+    heavy = heavy || (scene_name && !strcmp(scene_name, "firstframe")); // (2026-11-24: its materials into the project)
         if ((import_tlend || save_path || package_dir || stress_textures || heavy || morph_test || inv_test || save_test || ia_test || dlg_test || qst_test || rules_test || abil_test || hud_test || levels_test || picker_test || vr_hand_test) && ed.pending_project[0]) {
             char path[600];
             snprintf(path, sizeof path, "%s", ed.pending_project);
@@ -791,7 +919,9 @@ int main(int argc, char** argv) {
     }
     if (aerial_scale >= 0.0f) ed.aerial_scale = aerial_scale;
     if (game_view_cli) ed.game_view = true;
-    if (scene_name) editor_test_scene(&ed, scene_name);
+    if (scene_name && !strcmp(scene_name, "firstframe")) mat_first_scene(&ed); // (2026-11-24: mat_first_test.c)
+    else if (scene_name && !strcmp(scene_name, "selection")) selection_test_scene(&ed); // (2026-11-25, item 17: selection_test.c)
+    else if (scene_name) editor_test_scene(&ed, scene_name);
     if (sky_preset >= 0) editor_sky_preset(&ed, sky_preset, 0.0);
     if (cam_pitch > -999.0f) ed.cam.pitch = cam_pitch;
     if (add_floor > 0.0f) editor_add_test_floor(&ed, add_floor);
@@ -845,9 +975,107 @@ int main(int argc, char** argv) {
         printf("[RealEngine] Import took %.1f ms (the assets written, the materials compiled and baked, the meshes loaded)\n", ms);
         if (import_budget_ms > 0.0 && ms > import_budget_ms) printf("[RealEngine] FAIL: the import took %.1f ms, over its budget of %.0f ms\n", ms, import_budget_ms), exit_code = 1;
     }
+    if (no_skins) { // (2026-11-25, item 4) the level without its Skeletal Mesh Actors: what the scene costs alone
+        uint32_t gone = 0;
+        for (uint32_t s2 = 1; s2 < ed.world.slot_count; s2++) {
+            Entity e = ecs_entity_at(&ed.world, s2);
+            if (e && ecs_get(&ed.world, e, COMP_SKELETAL_MESH)) bp_destroy_actor(&ed.world, e, false), gone++;
+        }
+        printf("[RealEngine] No skins: %u Skeletal Mesh Actors removed\n", gone);
+    }    if (skin_copies > 0) { // (2026-11-24, the Unamed scene's case) the level's first Skeletal Mesh Actor copied on a grid
+        CSkeletalMesh src = { 0 };
+        CTransform at = { 0 };
+        for (uint32_t s2 = 1; s2 < ed.world.slot_count && !src.mesh; s2++) {
+            Entity e = ecs_entity_at(&ed.world, s2);
+            const CSkeletalMesh* c = e ? ecs_get(&ed.world, e, COMP_SKELETAL_MESH) : NULL;
+            const CTransform* t = c && c->mesh ? ecs_get(&ed.world, e, COMP_TRANSFORM) : NULL;
+            if (t) src = *c, at = *t;
+        }
+        // (2026-11-25) spaced as the level's own: the median distance to the nearest neighbor among its Skeletal Mesh Actors
+        // (one alone, the tests' rig: 80 cm), the grid beside them (at 80 cm the Unamed's capsules, a few m wide, overlapped)
+        float sp = 80.0f, ymax = at.location[1];
+        {
+            enum { NS = 2048 };
+            static float px[NS], py[NS];
+            uint32_t np = 0;
+            for (uint32_t s2 = 1; s2 < ed.world.slot_count && np < NS; s2++) {
+                Entity e = ecs_entity_at(&ed.world, s2);
+                const CSkeletalMesh* c = e ? ecs_get(&ed.world, e, COMP_SKELETAL_MESH) : NULL;
+                const CTransform* t = c && c->mesh ? ecs_get(&ed.world, e, COMP_TRANSFORM) : NULL;
+                if (!t) continue;
+                px[np] = t->location[0], py[np] = t->location[1], np++;
+                if (t->location[1] > ymax) ymax = t->location[1];
+            }
+            float nn[64];
+            uint32_t nnn = 0;
+            for (uint32_t a = 0; a < np && nnn < 64; a += np / 64u + 1u) {
+                float best = 1e30f;
+                for (uint32_t b = 0; b < np; b++) {
+                    float dx = px[a] - px[b], dy = py[a] - py[b], d = dx * dx + dy * dy;
+                    if (b != a && d > 1.0f && d < best) best = d;
+                }
+                if (best < 1e29f) nn[nnn++] = sqrtf(best);
+            }
+            for (uint32_t a = 1; a < nnn; a++) // (insertion sort: 64 at most)
+                for (uint32_t b = a; b > 0 && nn[b] < nn[b - 1]; b--) { float x = nn[b]; nn[b] = nn[b - 1], nn[b - 1] = x; }
+            if (nnn) sp = fmaxf(80.0f, nn[nnn / 2]);
+        }
+        uint32_t side = (uint32_t)ceilf(sqrtf((float)skin_copies));
+        printf("[RealEngine] Skin copies spaced %.0f cm\n", sp);
+        for (int i = 0; i < skin_copies && src.mesh; i++) {
+            Entity e = ecs_create(&ed.world, COMP_BIT(COMP_NAME) | COMP_BIT(COMP_TRANSFORM) | COMP_BIT(COMP_SKELETAL_MESH));
+            if (e == ENTITY_NONE) break;
+            snprintf(((CName*)ecs_get(&ed.world, e, COMP_NAME))->text, RE_NAME_MAX, "SkinCopy%d", i);
+            CTransform* t = ecs_get(&ed.world, e, COMP_TRANSFORM);
+            *t = at;
+            t->location[0] = at.location[0] + ((float)((uint32_t)i % side) - (float)side * 0.5f) * sp;
+            t->location[1] = (sp > 80.0f ? ymax + sp : at.location[1] + 300.0f) + (float)((uint32_t)i / side) * sp;
+            t->flags = (t->flags & ~TRANSFORM_MOBILITY_MASK) | MOBILITY_MOVABLE;
+            CSkeletalMesh* c = ecs_get(&ed.world, e, COMP_SKELETAL_MESH);
+            *c = src;
+            c->inst = 0; // (its own animation instance)
+        }
+        printf("[RealEngine] Skin copies: %d of the first Skeletal Mesh Actor\n", src.mesh ? skin_copies : 0);
+    }
+    if (cam_near_skin > 0.0f) { // (2026-11-24, item 4: its LODs seen near and far) the camera D cm out from the crowd's edge:
+        // the Skeletal Mesh Actor farthest from their mean, looked at from outside (out of the level's walls around it)
+        double cx = 0.0, cy = 0.0;
+        uint32_t nsk = 0, best = 0;
+        float bd = -1.0f;
+        for (int pass = 0; pass < 2; pass++)
+            for (uint32_t s2 = 1; s2 < ed.world.slot_count; s2++) {
+                Entity e = ecs_entity_at(&ed.world, s2);
+                const CSkeletalMesh* c = e ? ecs_get(&ed.world, e, COMP_SKELETAL_MESH) : NULL;
+                const CTransform* t = c && c->mesh ? ecs_get(&ed.world, e, COMP_TRANSFORM) : NULL;
+                if (!t) continue;
+                if (pass == 0) { cx += t->location[0], cy += t->location[1], nsk++; continue; }
+                float dx = t->location[0] - (float)(cx / nsk), dy = t->location[1] - (float)(cy / nsk), d = dx * dx + dy * dy;
+                if (d > bd) bd = d, best = s2;
+            }
+        const CTransform* t = best ? ecs_get(&ed.world, ecs_entity_at(&ed.world, best), COMP_TRANSFORM) : NULL;
+        if (t) {
+            float dx = t->location[0] - (float)(cx / nsk), dy = t->location[1] - (float)(cy / nsk), l = sqrtf(dx * dx + dy * dy);
+            if (l < 1.0f) dx = -1.0f, dy = 0.0f, l = 1.0f;
+            ed.cam.pos[0] = t->location[0] + dx / l * cam_near_skin, ed.cam.pos[1] = t->location[1] + dy / l * cam_near_skin;
+            ed.cam.pos[2] = t->location[2] + 60.0f;
+            ed.cam.yaw = atan2f(-dy, -dx) * 57.29578f, ed.cam.pitch = -5.0f;
+            printf("[RealEngine] Camera %.0f cm from the Skeletal Mesh Actor at %.0f %.0f %.0f (the crowd's edge, %u of them)\n", cam_near_skin,
+                   t->location[0], t->location[1], t->location[2], nsk);
+        }
+    }    if (skin_still >= 0) { // (2026-11-24, the Unamed scene's case: Skeletal Mesh Actors standing, no animation, no Anim Blueprint;
+        // the first skin_still animated ones keep theirs: a pose that isn't the bind's still bent)
+        int kept = 0;
+        for (uint32_t s2 = 1; s2 < ed.world.slot_count; s2++) {
+            Entity e = ecs_entity_at(&ed.world, s2);
+            CSkeletalMesh* c = e ? ecs_get(&ed.world, e, COMP_SKELETAL_MESH) : NULL;
+            if (c && kept < skin_still && (c->anim || c->anim_class)) kept++;
+            else if (c) c->anim = 0, c->anim_class = 0;
+        }
+    }
     if (mesh_socket_test && !editor_mesh_socket_test(&ed)) exit_code = 1; // (2026-11-23)
     if (rig_fit_test && !editor_rig_fit_test(&ed)) exit_code = 1; // (2026-11-23)
     if (mat_live_test && !mat_live_selftest()) exit_code = 1; // (2026-11-24, #180)
+    if (mat_param_test && !mat_param_selftest()) exit_code = 1; // (2026-11-24)
     if (reimport && !content_reimport(reimport)) exit_code = 1;
     // --save without --bake: the level as it is after --open / --stress / --import (the game's tests write their level so)
     if (save_path && !bake_mode && !editor_save_level(&ed, save_path, re_time_seconds())) exit_code = 1;
@@ -879,19 +1107,22 @@ int main(int argc, char** argv) {
                 printf("[RealEngine]   light: type %u, intensity %g, cast shadows %u, source radius %g\n", (unsigned)li->type, li->intensity,
                        li->cast_shadows, li->source_radius);
         }
-    const char* oext = open_asset ? strrchr(open_asset, '.') : NULL;
-    if (oext && (!strcmp(oext, ".rskm") || !strcmp(oext, ".ranim") || !strcmp(oext, ".rmontage"))) anim_editor_open(open_asset);
-    else if (oext && (!strcmp(oext, ".rbt") || !strcmp(oext, ".rbrain"))) ai_editor_open(open_asset);
-    else if (oext && (!strcmp(oext, ".rmat") || !strcmp(oext, ".rmi"))) mat_editor_open(open_asset);
-    else if (oext && !strcmp(oext, ".rseq")) seq_editor_open(open_asset); // (the Sequencer)
-    else if (oext && !strcmp(oext, ".rdlg")) dlg_editor_open(open_asset); // (the Dialogue editor)
-    else if (oext && !strcmp(oext, ".rquest")) quest_editor_open(open_asset); // (the Quest editor)
-    else if (oext && !strcmp(oext, ".rparticle")) particle_editor_open(open_asset); // (the Particle System editor)
-    else if (open_asset && asset_viewer_handles(open_asset)) asset_viewer_open(open_asset); // (a texture, a Static Mesh)
-    else if (open_asset && ikrig_editor_handles(open_asset)) ikrig_editor_open(open_asset); // (Q7: an IK Rig, a Physics Asset)
-    else if (oext && !strcmp(oext, ".rvehicle")) vehicle_editor_open(open_asset); // (Q7: a Vehicle)
-    else if (oext && !strcmp(oext, ".rpcg")) pcg_editor_open(open_asset); // (Q15: a PCG Graph)
-    else if (open_asset) open_viewport ? bp_editor_open_viewport(open_asset) : bp_editor_open(open_asset);
+    // (2026-11-25, the tester's block of item 8) the Content Browser's table (content_open_asset): every kind in its own
+    // editor, as a double-click opens it. This list had its own, a few kinds short: a Sound Wave (and every audio asset), a
+    // script, an Input Action, a Physical Material, a Camera Shake fell to the Blueprint editor, nothing opened
+    if (cli_lang) { // (an unknown code is said, not ignored: the tester's block of item 12)
+        int l = i18n_language_from_code(cli_lang);
+        if (l >= 0) i18n_set_language(l);
+        else printf("[RealEngine] --lang: unknown language code \"%s\" (use en, pt or es; en_US, pt_BR, es_ES)\n", cli_lang);
+    }
+    if (cli_project_settings) ed.show_project_settings = true;
+    if (getenv("REALENGINE_I18N_MISSING")) i18n_record_missing(getenv("REALENGINE_I18N_MISSING")); // (the audit's runtime half)
+    if (open_asset && open_viewport) bp_editor_open_viewport(open_asset);
+    else if (open_asset) { // (item 9) several, separated by ';': tabs of the Editors window (the screenshots)
+        char list[2048];
+        snprintf(list, sizeof list, "%s", open_asset);
+        for (char* a = strtok(list, ";"); a; a = strtok(NULL, ";")) content_open_asset(a);
+    }
     if (browse) content_browse_to(browse), ed.content_docked = true; // docked: it stays open without the focus
     if (browse && browse_hover) content_test_hover(browse);
     if (mm_editor) anim_mm_editor_open_asset(mm_editor, true);
@@ -931,7 +1162,9 @@ int main(int argc, char** argv) {
     if (levels_test && !levels_test_setup(&ed)) exit_code = 1;
     if (picker_test && !picker_test_setup(&ed)) exit_code = 1;
     if (dock_test) dock_test_start(window, (io->ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0);
+    if (ui_sweep_dir) ui_sweep_start(ui_sweep_dir);
     if (avp_test) avp_test_start();
+    if (psw_test) psw_test_start();
     if (artist_test) artist_test_start();
     if (pause_test && !pause_test_setup(&ed, pause_test == 2)) exit_code = 1;
     if (ingame_test && !ingame_test_setup(&ed, ingame_test, ingame_package)) exit_code = 1; // (Q16)
@@ -1030,6 +1263,7 @@ int main(int argc, char** argv) {
     if (wd || !automated || hang_test) crash_watchdog_start(hang_test ? 3.0 : wd ? atof(wd) : 6.0);
     double prev = re_time_seconds();
     double win_t0 = prev, win_frame = 0, win_cpu = 0, win_gpu = 0;
+    bool bench_offscreen = false; // (the visible suites' fps measure, off the screens while it measures)
     uint64_t win_n = 0;
     if (bench.cli) {
         bench.active = true;
@@ -1044,6 +1278,12 @@ int main(int argc, char** argv) {
         trace_window_load(trace_open);
     }
     while (!ed.quit && !(glfwWindowShouldClose(window) && !dock_route_main_close(window) && editor_request_quit(&ed))) {
+        { // (2026-11-25, bug-fixer) REALENGINE_SLOW_FRAME_MS=ms: every frame at least that long (a test's busy machine, made
+          // the same every run: the blueprints_slow test, 4 fps)
+            static double slow_ms = -1.0;
+            if (slow_ms < 0.0) slow_ms = getenv("REALENGINE_SLOW_FRAME_MS") ? atof(getenv("REALENGINE_SLOW_FRAME_MS")) : 0.0;
+            if (slow_ms > 0.0) re_sleep_seconds(slow_ms / 1000.0);
+        }
         double t0 = re_time_seconds();
         dd_frame_begin(t0), sq_frame_end(); // (2026-11-19) this frame's debug lines from empty; last frame's async traces joined, their counts
         crash_heartbeat(); // (the hang watchdog)
@@ -1071,6 +1311,10 @@ int main(int argc, char** argv) {
             brand_splash_end(&vk);
             if (play_after_open) play_after_open = false, editor_play(&ed, re_time_seconds()); // (--play with --new-project)
             t0 = re_time_seconds(); // (the open's time isn't a frame's)
+            // (2026-11-23) the measure waits the open's first second as it waits the editor's: --new-project --play's open
+            // (5 s) outlived the start's warm-up, so the window began at the first frame after it and counted the level's
+            // first frames (528 + 53 ms: the uploads, the first BLAS and the RE_EXT pipelines), 0.58 of demo_fighting's 6 s
+            if (bench.active && bench.frames == 0) bench.warm_until = t0 + 1.0, bench.until = bench.warm_until + bench.seconds;
         }
         double dt = t0 - prev;
         prev = t0;
@@ -1106,11 +1350,41 @@ int main(int argc, char** argv) {
 
         re_arena_reset(&g_frame_arena);
         ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        dock_between_frames(&ed); // (Q2: a layout loaded, the last one on open: ImGui's docking between frames)
+        TRACE("ImGui: new frame (input)", ImGui_ImplGlfw_NewFrame());
+        TRACE("Dock layout (between frames)", dock_between_frames(&ed)); // (Q2: a layout loaded, the last one on open: ImGui's docking between frames)
         if (dock_test) dock_test_input(&ed); // (the test's mouse: ImGui's input queue, before the frame)
+        if (ui_sweep_dir) { // (item 21) the sweep's mouse and keys, before the frame
+            bool sweep_ok = true;
+            TRACE("UI sweep (the robot)", ui_sweep_input(&ed));
+            if (ui_sweep_finished(&sweep_ok)) ed.quit = true; // (its findings are a report, not the test's result: the run itself must end)
+        }
         if (theme_style_dirty()) apply_theme(g_theme_dpi); // (a theme picked or edited: ImGui's style from the new tokens, before the frame)
         igNewFrame();
+        if (scene_name && !strcmp(scene_name, "firstframe")) mat_first_tick(&vk); // (2026-11-24)
+        if (scene_name && !strcmp(scene_name, "selection")) selection_test_tick(&ed, &vk); // (2026-11-25, item 17)
+        if (vr_preview_now && project_file()[0] && !ed.pending_project[0]) { // (2026-11-25) once the project is open: the
+            vr_preview_now = false;                                          // game's executable as a child, ended with the editor
+            editor_vr_preview(&ed, t0);
+        }
+        { // (2026-11-25, bug-fixer) the Assistant's base built on a worker once the editor settled (the project open, its
+          // plugins in: the scripts' API table they change is built here first, on this thread)
+            static uint32_t as_frames;
+            if (as_frames < 31 && !ed.pending_project[0] && !ed.show_browser && ++as_frames == 30) script_api_count(), assistant_init_async();
+        }
+        if (place_hitch_name) { // (2026-11-25, bug-fixer) a class placed, its longest frame after
+            static bool phdone;
+            bool ph_ok = true;
+            if (!phdone && place_hitch_test_frame(&ed, place_hitch_name, place_hitch_ms, dt, t0, &ph_ok)) phdone = true, ed.quit = true, exit_code = ph_ok ? exit_code : 1;
+        }
+        if (scal_mem_test) { // (2026-11-25, bug-fixer) Medium first, then the rounds
+            static bool started;
+            bool smt_ok = true;
+            if (!started) started = true, editor_set_scalability(&ed, 1, 0.0);
+            else if (scal_mem_test_frame(&ed, &vk, dt, &smt_ok)) ed.quit = true, exit_code = smt_ok ? exit_code : 1;
+        }
+        if (groom_skin_test) groom_skin_test_tick(&ed, &vk); // (2026-11-25, item 16)
+        if (select_all) { static uint32_t sa_frames; if (++sa_frames == 30) editor_select_all(&ed); } // (2026-11-25, item 17: --select-all, after the level's load)
+        if (select_name) { static uint32_t sn_frames; if (++sn_frames == 30) for (uint32_t s2 = 1; s2 < ed.world.slot_count; s2++) { Entity e = ecs_entity_at(&ed.world, s2); const CName* nm = e ? ecs_get(&ed.world, e, COMP_NAME) : NULL; if (nm && !strncmp(nm->text, select_name, strlen(select_name)) && !ecs_get(&ed.world, e, COMP_ATTACH)) { editor_select(&ed, e, SEL_ADD); printf("[RealEngine] Selected %s\n", nm->text); } } }
         if (scene_name && (!strncmp(scene_name, "mm_", 3))) editor_mm_startstop_tick(&ed, dt); // (the tests' script)
         if (scene_name && !strcmp(scene_name, "vehicles")) editor_vehicles_tick(&ed, dt);
         if (scene_name && !strcmp(scene_name, "vehicle_crash")) editor_vehicle_crash_tick(&ed, dt); // (Q27.4)
@@ -1134,9 +1408,11 @@ int main(int argc, char** argv) {
         if (scene_name && !strcmp(scene_name, "splines")) editor_splines_tick(&ed, dt); // (Q14)
         if (scene_name && !strcmp(scene_name, "hair_dynamic")) editor_hair_tick(&ed, dt);
         if (scene_name && !strcmp(scene_name, "skin_churn")) editor_skin_churn_tick(&ed);
+        if (scene_name && !strcmp(scene_name, "emit_intensity")) emissive_test_tick(&ed, dt); // (2026-11-25: the Emission Intensity)
         if (scene_name && (!strcmp(scene_name, "snow") || !strcmp(scene_name, "rain") || !strcmp(scene_name, "cloth_mesh"))) editor_snow_tick(&ed, dt);
         if (scene_name && (!strcmp(scene_name, "sofa") || !strcmp(scene_name, "softbody") || !strcmp(scene_name, "softbody_rigid"))) editor_soft_tick(&ed, dt); // (Q9)
         if (scene_name && !strcmp(scene_name, "procgen")) editor_procgen_tick(&ed, dt);
+        if (scene_name && !strcmp(scene_name, "facility_leak")) editor_facility_leak_tick(&ed); // (2026-11-25, item 19)
         if (scene_name && (!strcmp(scene_name, "wp") || !strcmp(scene_name, "wp_fast"))) editor_wp_tick(&ed, dt);
         if (scene_name && !strcmp(scene_name, "landscape_paint")) editor_landscape_paint_tick(&ed, dt);
         TRACE("Editor Frame (UI, game)", editor_frame(&ed, dt, shot_every > 0 ? sim_t : t0));
@@ -1151,6 +1427,10 @@ int main(int argc, char** argv) {
         }
         if (icon_sheet) ui_icon_sheet_draw(); // (Q5: the icon sheet over everything)
         mcp_server_frame(&ed, t0); // (2026-11-24) the AI's queued calls (mcp.h)
+        if (psw_test) {
+            bool psw_ok;
+            if (psw_test_frame(&ed, &psw_ok)) ed.quit = true, exit_code = psw_ok ? exit_code : 1;
+        }
         if (mcp_test) {
             bool mcp_ok;
             if (mcp_test_frame(&ed, &mcp_ok)) ed.quit = true, exit_code = mcp_ok ? exit_code : 1;
@@ -1350,6 +1630,15 @@ int main(int argc, char** argv) {
             float sc = ps->dyn_res ? upscale_dynamic(&dyn, vk.gpu_ms, (float)(ps->dyn_res_fps > 0 ? ps->dyn_res_fps : 100), upscale_dynamic_floor(top, ps->dyn_res_min), top) : top;
             ed.gi.tsr_scale = written = sc;
         }
+        // (2026-11-23) the visible suites (REALENGINE_MONITOR): the fps measure taken hidden. A window shown on a monitor
+        // costs 9-12% of the GPU in Windows' composition, the same in mailbox and immediate and in a window inside the
+        // display (rain Epic 173 vs 199 fps, many_lights 69 vs 78), and the targets were set hidden: the test runs on the
+        // monitor, its measure off the screens (the same size: the same swapchain), a quarter second to settle first
+        if (on_monitor && min_fps > 0.0 && bench.active && bench.frames == 0 && t0 >= bench.warm_until && !bench_offscreen) {
+            re_test_window_offscreen(window, true), bench_offscreen = true;
+            printf("[RealEngine] Visible suite: the fps measure off the screens\n"), fflush(stdout);
+            bench.warm_until = t0 + 0.25, bench.until = bench.warm_until + bench.seconds;
+        }
         if (bench.active && t0 >= bench.warm_until) {
             if (bench.frames == 0) { // starts counting here: the whole window, however late the first frame (a pipeline compiled, a
                 // busy GPU: a warm-up past the deadline measured one frame, and --bp-test checked a game 0.1 s old)
@@ -1359,6 +1648,13 @@ int main(int argc, char** argv) {
             bench.frames++;
             bench.cpu_sum += cpu_ms;
             bench.gpu_sum += vk.gpu_ms;
+            {
+                uint32_t sk_n, sk_b, sk_v;
+                double sk_ms;
+                render_skin_stats(&sk_n, &sk_b, &sk_v, &sk_ms);
+                bench.skin_sum += sk_ms, bench.skin_bends += sk_b;
+                if (sk_ms > bench.skin_worst) bench.skin_worst = sk_ms;
+            }
             if (budget_ms > 0.0) fb_add_frame(cpu_ms, vk.gpu_ms);
             { // (the passes' times are the frame before last's: their minimum still is one frame's)
                 const RenderStats* rm = render_stats();
@@ -1367,7 +1663,15 @@ int main(int argc, char** argv) {
                 if (rm->gpu_gi_ms > 0.0 && (bench.gi_min <= 0.0 || rm->gpu_gi_ms < bench.gi_min)) bench.gi_min = rm->gpu_gi_ms;
             }
             if (dt * 1000.0 > bench.worst && bench.frames > 1) bench.worst = dt * 1000.0;
-            if (t1 >= bench.until) {
+            // (2026-11-25, bug-fixer) --bp-test checks a game that ran its bench's seconds of game time, not of the wall's: a
+            // frame's dt counts at most 0.1 s, so under 10 fps (a busy suite) 2 s of wall were 0.4 s of game and its 1 s
+            // Timeline hadn't reached its Ping ("the Timeline didn't play", Pings 0, Done 0). At most 60 s more waited
+            const bool bp_clock_short = bp_test && !net_host_test && !net_join_test && ed.playing && bp_game_time() < bench.seconds &&
+                                        t1 < bench.until + 60.0;
+            // (2026-11-25, bug-fixer) --pause-test: its steps (by the game's seconds) finished before the check, at most 30 s
+            // more; under load (a 850 ms Options frame, another program's cores) the bench ended at step 5
+            const bool pause_short = pause_test == 1 && !pause_test_done() && t1 < bench.until + 30.0;
+            if (t1 >= bench.until && !bp_clock_short && !pause_short) {
                 double secs = t1 - bench.warm_until;
                 double fps = (double)bench.frames / secs;
                 const char* pm = vk.present_mode == VK_PRESENT_MODE_MAILBOX_KHR     ? "mailbox"
@@ -1406,6 +1710,16 @@ int main(int argc, char** argv) {
                        rs->auto_exposure > 0.0f ? log2f(exp2f(ed.exposure_comp) / (1.2f * rs->auto_exposure)) : 0.0f, exp2f(rs->avg_log_lum));
                 printf("[RealEngine] GPU minimum: %.3f ms a frame (main %.3f, GI %.3f): the least frame, ~its cost alone on the GPU\n",
                        bench.gpu_min, bench.main_min, bench.gi_min);
+                { // (2026-11-24) the main pass's runs: plain, and the RE_EXT ones (only the meshes an RE_EXT material draws)
+                    uint32_t rp = 0, rx = 0, mx = 0;
+                    render_ext_runs(&rp, &rx, &mx);
+                    printf("[RealEngine] Main pass runs: %u plain, %u RE_EXT (%u meshes with an RE_EXT material)\n", rp, rx, mx);
+                    if (class_split_check) {
+                        bool cs_ok = rx > 0 && rp > 0;
+                        if (!cs_ok) printf("[RealEngine] FAIL: class split: %u plain runs, %u RE_EXT (wanted both: the other meshes stay plain)\n", rp, rx), exit_code = 1;
+                        else printf("[RealEngine] class split: ok\n");
+                    }
+                }
                 if (vkctx_pass_timing_on()) { // (--gpu-passes) each marked pass's mean over the measure, the slowest first
                     const GpuPassStat* ps;
                     uint32_t nf = 0, np = vkctx_pass_stats(&ps, &nf), ord[160];
@@ -1451,9 +1765,27 @@ int main(int argc, char** argv) {
                         uint32_t sk_n, sk_b, sk_v;
                         double sk_ms;
                         render_skin_stats(&sk_n, &sk_b, &sk_v, &sk_ms);
+                        uint32_t sk_bind, sk_noroom;
+                        render_skin_bind_stats(&sk_bind, &sk_noroom);
                         if (sk_n)
                             printf("[RealEngine] Skins: %u, bent last frame %u (%u vertices), CPU %.3f ms, GPU %.4f ms\n", sk_n, sk_b, sk_v, sk_ms,
                                    rs->gpu_skin_ms);
+                        uint32_t sk_rigid = render_skin_rigid_count(); // (2026-11-24, item 4)
+                        if (sk_n || sk_bind || sk_rigid) // (2026-11-24) the dynamic set's CPU on the render's thread over the measure
+                            printf("[RealEngine] Skins at their bind: %u (%u without room), with their own vertices %u (%llu bends over the "
+                                   "measure); dynamic set CPU %.3f ms a frame (worst %.3f ms)\n", sk_bind, sk_noroom, sk_n,
+                                   (unsigned long long)bench.skin_bends, bench.skin_sum / (double)bench.frames, bench.skin_worst);
+                        if (sk_rigid) printf("[RealEngine] Rigid skins: %u (one bone holds every vertex: drawn as the mesh moved by it)\n", sk_rigid);
+                        if (max_skin_ms > 0.0 && bench.skin_sum / (double)bench.frames > max_skin_ms) {
+                            printf("[RealEngine] FAIL: the dynamic set and skins took %.3f ms of CPU a frame > %.3f ms\n", bench.skin_sum / (double)bench.frames,
+                                   max_skin_ms);
+                            exit_code = 1;
+                        }
+                        { // (2026-11-24, item 4) the dormant dynamic instances
+                            uint32_t dn, ds, dw;
+                            render_dormant_stats(&dn, &ds, &dw);
+                            if (dn || ds) printf("[RealEngine] Dormant dynamic instances: %u (slept %u, woke %u since the start)\n", dn, ds, dw);
+                        }
                         uint32_t mo_m, mo_j, mo_v;
                         render_morph_stats(&mo_m, &mo_j, &mo_v);
                         if (mo_m) printf("[RealEngine] Morph targets: %u meshes, %u skins bent with weights last frame (%u vertices)\n", mo_m, mo_j, mo_v);
@@ -1492,6 +1824,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 bench.active = false;
+                if (bench_offscreen) re_test_window_offscreen(window, false), bench_offscreen = false; // (measured: back on the monitor)
                 ed.bench_request = 0.0;
                 if (bench.cli) {
                     if (bp_test && !net_host_test && !net_join_test && !bp_test_check(&ed)) exit_code = 1;
@@ -1563,6 +1896,13 @@ int main(int argc, char** argv) {
                     if (scene_name && !strncmp(scene_name, "pcg_", 4) && !pcg_test_check(&ed)) exit_code = 1; // (Q15)
                     if (scene_name && !strncmp(scene_name, "udim", 4) && !udim_test_check(&ed, shot_path)) exit_code = 1; // (Q18)
                     if (scene_name && !strncmp(scene_name, "emit", 4) && !emissive_test_check(&ed, shot_path)) exit_code = 1; // (2026-11-23)
+                    if (scene_name && !strcmp(scene_name, "facility_leak") && // (2026-11-25, item 19)
+                        !facility_leak_check(&ed, shot_path, getenv("REALENGINE_FACILITY_BLOTCH_MAX") ? atof(getenv("REALENGINE_FACILITY_BLOTCH_MAX")) : 0.0,
+                                             getenv("REALENGINE_FACILITY_MEAN_MIN") ? atof(getenv("REALENGINE_FACILITY_MEAN_MIN")) : 0.0))
+                        exit_code = 1;
+    if (scene_name && !strcmp(scene_name, "firstframe") && !mat_first_check(&ed)) exit_code = 1; // (2026-11-24)
+                    if (scene_name && !strcmp(scene_name, "selection") && !selection_test_check(&ed)) exit_code = 1; // (2026-11-25, item 17)
+                    if (groom_skin_test && !groom_skin_test_check(&ed)) exit_code = 1; // (2026-11-25, item 16)
                     if (scene_name && !strncmp(scene_name, "vista", 5) && !farview_test_check(&ed)) exit_code = 1; // (Q21)
                     if (scene_name && !strcmp(scene_name, "ai_senses") && !ai_senses_test_check(&ed)) exit_code = 1; // (Q24)
                     if (scene_name && !strcmp(scene_name, "river") && !editor_river_check(&ed)) exit_code = 1;
@@ -1643,9 +1983,12 @@ int main(int argc, char** argv) {
                         render_probe_lum(&lmax, &lmean);
                         printf("[RealEngine] Scene luminance (probe 64x32): brightest %.4g, mean %.4g\n", lmax, lmean);
                         const GiFallbackStats* gfs = gi_fallback_stats(); // (Q27.12)
-                        if (gfs->ready)
+                        if (gfs->ready) {
                             printf("[RealEngine] GI fallback: built %u times, %u boxes, mean sky visibility %.3f, %.2f ms a build on its thread\n", gfs->builds,
                                    gfs->boxes, gfs->mean_vis, gfs->build_ms);
+                            printf("[RealEngine] GI fallback bounce: %u local lights, %u wall faces lit, %u sweeps, %.2f ms, light mean %.4g, brightest %.4g\n",
+                                   gfs->fine_lights, gfs->fine_faces, gfs->fine_iters, gfs->fine_ms, gfs->fine_mean, gfs->fine_max);
+                        }
                         if (max_scene_lum >= 0.0 && lmax > max_scene_lum) {
                             printf("[RealEngine] FAIL: the scene's brightest point %.4g > %.4g\n", lmax, max_scene_lum);
                             exit_code = 1;
@@ -1691,10 +2034,12 @@ int main(int argc, char** argv) {
     services_on_exit(&ed);
     vkDeviceWaitIdle(vk.device);
     dock_layout_autosave(&ed); // (2026-11-20, crashes #143-146: the layout is ImGui's settings: saved before its context goes)
+    editor_docs_finish_quit(&ed); // (2026-11-25) the asset editors closed while ImGui and the assets live (editor_docs.h)
     brand_shutdown(&vk); // (its textures are the UI's: before the UI goes)
     asset_viewer_shutdown(&vk);
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
+    if (dock_test && !dock_test_after_shutdown()) exit_code = 1; // (item 9) no window of its own outlives the editor
     igDestroyContext(NULL);
     mcp_server_stop();
     editor_shutdown(&ed);

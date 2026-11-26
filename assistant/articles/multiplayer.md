@@ -1,6 +1,6 @@
 id: multiplayer
 kind: howto
-title: Multiplayer (LAN e Steam) | Multiplayer (LAN and Steam)
+title: Multiplayer (LAN e Steam) | Multiplayer (LAN and Steam) | Multijugador (LAN y Steam)
 keys: multiplayer, online, rede, coop, lan, steam, servidor, sessao, jogar com amigos, replicar, host, entrar
 --- pt
 ```diagram steps
@@ -18,3 +18,11 @@ Create Session (the host) | Find Sessions | Join Session | Replication: Set Repl
 - What moves by itself (Characters, physics) is replicated already; the rest with **Set Replicates**, replicated variables and RPCs (server, multicast, owner).
 - Password, filters, properties, private slots, bans: [Advanced sessions](article:advanced-sessions).
 - Steam: turn it on in Project Settings and put the Steamworks SDK's `steam_api64.dll` next to the `.rproject`. [Open Project Settings](open:project)
+--- es
+```diagram steps
+Create Session (el anfitrión) | Find Sessions | Join Session | Replicación: Set Replicates, RPCs
+```
+- Sesiones: **Create Session**, **Find Sessions** y **Join Session** (LAN o Steam).
+- Lo que se mueve por sí solo (Characters, física) ya está replicado; el resto con **Set Replicates**, variables replicadas y RPCs (servidor, multicast, dueño).
+- Contraseña, filtros, propiedades, ranuras privadas, bloqueos: [Sesiones avanzadas](article:advanced-sessions).
+- Steam: actívalo en Project Settings y pon el `steam_api64.dll` del SDK de Steamworks junto al `.rproject`. [Abrir Project Settings](open:project)

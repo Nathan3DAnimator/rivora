@@ -2,6 +2,7 @@
 // on the left with the parts' list, the vehicle in the asset viewport in the middle (asset_viewport.h, Q7: its body
 // model or box, its wheels, floats, wings and rotors drawn by the GPU, every part's handle over them; click one to
 // pick it), the picked part's numbers on the right.
+#include "editor_docs.h"
 #include "vehicle_editor.h"
 
 #include "theme.h"
@@ -338,3 +339,17 @@ void vehicle_editor_draw(Editor* ed) {
 }
 
 void vehicle_editor_close(void) { E.a = NULL, E.part = -1; }
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int vehicle_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    if (!E.a) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) return vehicle_editor_close(), E.unsaved = false, 1;
+    if (!E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, E.a->name), 1;
+    bool ok = veh_save(E.a);
+    if (ok) E.unsaved = false;
+    return !ok;
+}

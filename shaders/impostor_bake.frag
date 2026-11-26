@@ -28,6 +28,10 @@ void main() {
         tb = texture(u_mat_tex[nonuniformEXT(gm.tex_base)], uv);
         tn = texture(u_mat_tex[nonuniformEXT(gm.tex_nrm)], uv);
         if ((gm.flags & MATF_MASKED) != 0u && tb.a < float(gm.flags >> 24u) / 255.0) discard;
+        if ((gm.flags & MATF_AFFINE) != 0u) { // (2026-11-24: the affine fold; the base kept sRGB-encoded, as it is written)
+            vec3 l = mat_affine_base(B.materials, slot, srgb_to_linear(tb.rgb));
+            tb.rgb = mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), l));
+        }
         vec3 dp1 = dFdx(i_pos), dp2 = dFdy(i_pos);
         vec2 duv1 = dFdx(uv), duv2 = dFdy(uv);
         vec3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);

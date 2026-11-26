@@ -13,6 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "editor_docs.h"
+#include "loc.h" // (2026-11-24) the game's localization
+#include "blueprint.h"
 #include "blueprint.h"
 #include "theme.h"
 #include "brand.h"
@@ -506,7 +509,7 @@ static int combo_count(const char* text) {
     return n;
 }
 
-typedef struct UiState { int hot, held, focus, open_combo; bool designer; double now; int nav, capture; Entity owner; } UiState;
+typedef struct UiState { int hot, held, focus, open_combo; bool designer; double now; int nav, capture; Entity owner; const struct BpAsset* cls; } UiState; // (cls: the widget's class, its texts' localization keys)
 struct UiLive;
 static void draw_touch(ImDrawList* dl, const struct UiLive* l, const UiTree* t, const UiLayout* L, int i, float k, float al, bool designer);
 
@@ -525,6 +528,12 @@ static void draw_tree(ImDrawList* dl, const UiTree* t, const UiLayout* L, float 
         bool hot = (int)i == st->hot || (int)i == st->nav, held = (int)i == st->held;
         // (the game's widgets in the game's language: a text the engine translates shows translated; bound ones as they are)
         const char* wtext = st->designer || w->bind_text[0] || w->bind_setting[0] ? w->text : gus_tr(w->text);
+        // (2026-11-24, loc.h) the project's localization: the text as its class authored it (not one Set Text wrote) in the
+        // current culture, by its key (W:<class>, <element>.Text); live: a culture change shows the next frame
+        if (!st->designer) {
+            const char* lt = loc_widget_text(st->cls, w, (int)i);
+            if (lt) wtext = lt;
+        }
         switch (w->kind) {
         case UIW_BUTTON: {
             float bg[4];
@@ -1326,7 +1335,7 @@ void ui_draw_viewport(World* w, ImDrawList* dl, float x0, float y0, float x1, fl
             }
         }
         touch_widgets(w, l, t, &L, k, all_mouse, down);
-        UiState st = { hot, l->pressed ? l->pressed - 1 : -1, l->focus, l->open_combo, false, t0, g_nav_shown && (int)i == navtree ? l->nav : -1, l->capture, l->e };
+        UiState st = { hot, l->pressed ? l->pressed - 1 : -1, l->focus, l->open_combo, false, t0, g_nav_shown && (int)i == navtree ? l->nav : -1, l->capture, l->e, l->cls };
         draw_tree(dl, t, &L, k, &st);
         for (uint32_t ti = 0; ti < t->n; ti++)
             if (L.drawn[ti] && (t->w[ti].kind == UIW_JOYSTICK || t->w[ti].kind == UIW_TOUCH_BUTTON || t->w[ti].kind == UIW_TOUCH_AREA))
@@ -2109,3 +2118,12 @@ void ui_draw_damage_numbers(ImDrawList* dl, const float pos[3], const float fwd[
     hud_set_view(pos, fwd, right, up, fov_deg);
     hud_draw_numbers_default(dl, x0, y0, x1, y1);
 }
+
+// (2026-11-25, bug-fixer) editor_docs.h: the Designer's Blueprint forgotten with the editors (a project switch freed it;
+// a new one at its address kept the old selection, animation and key)
+int ui_designer_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed, (void)names, (void)cap;
+    if (op == DOCS_CLOSE) D.a = NULL, D.sel = -1, D.anim = -1, D.anim_play = false, D.key_tr = D.key_k = -1, D.key_drag = false;
+    return 0; // (not a document of its own: the Widget Blueprint's window is the Blueprint editor's)
+}
+const void* ui_designer_bound(void) { return D.a; }

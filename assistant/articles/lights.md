@@ -1,6 +1,6 @@
 id: lights
 kind: howto
-title: Luzes e Build Lighting | Lights and Build Lighting
+title: Luzes e Build Lighting | Lights and Build Lighting | Añadir y elegir luces
 keys: luz, iluminacao, lampada, sol, sombra, build lighting, assar luz, bake, lux, point light, spot light, directional, sky light
 --- pt
 ```diagram compare
@@ -36,3 +36,20 @@ Sky | the whole sky | ambient light
 - Meshes with Mobility **Static** can have their indirect light baked: **Build > Build Lighting Only**. [Show me where](show:Build>Build Lighting Only)
 - The quality is in **Build > Lighting Quality** (Preview / Production).
 - The bake runs with a card at the bottom right, where it can be cancelled.
+--- es
+```diagram compare
+ | Parece | Bueno para
+Directional | el sol | día, exteriores
+Point | una bombilla | lámparas, antorchas
+Spot | una linterna | focos, faros
+Rect | una ventana, un panel | interiores
+Sky | todo el cielo | luz ambiental
+```
+## Añadir una luz
+- **Actor > Añadir** tiene Directional (el sol), Point, Spot, Rect y Sky Light. [Añadir una Point Light](add:Point Light) [Muéstrame dónde](show:Actor>Add)
+- La intensidad usa unidades físicas (lux, candela); el panel Detalles muestra cada campo.
+
+## Luz precalculada (opcional)
+- Las mallas con Mobility **Static** pueden tener su luz indirecta precalculada: **Build > Build Lighting Only**. [Muéstrame dónde](show:Build>Build Lighting Only)
+- La calidad está en **Build > Lighting Quality** (Preview / Production).
+- El cálculo se ejecuta con una tarjeta abajo a la derecha, donde se puede cancelar.

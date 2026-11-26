@@ -1,6 +1,6 @@
 id: light-function
 kind: howto
-title: Função de Luz: projetor, persiana, nuvens, lâmpada piscando (Light Function) | Light Function: projector, blinds, clouds, flickering bulb
+title: Função de Luz: projetor, persiana, nuvens, lâmpada piscando (Light Function) | Light Function: projector, blinds, clouds, flickering bulb | Función de luz: proyector, persiana, nubes, bombilla parpadeante (Light Function)
 keys: funcao de luz, light function, funcion de luz, función de luz, projetor, projector, proyector, slide, gobo, cookie, persiana, blinds, persianas, nuvem passando, clouds passing, nubes, sombra de nuvem, cloud shadow, piscar, flicker, parpadeo, lampada piscando, flickering bulb, bombilla, padrao de luz, light pattern, patron de luz, dominio do material, material domain, dominio del material, LF_Blinds, LF_Clouds, LF_Flicker, LF_Projector, REALENGINE_NO_LIGHTFN
 --- pt
 ```diagram steps
@@ -33,4 +33,17 @@ A **Light Function** (Unreal's) is a material multiplying a light: a projector's
 - It also lights the **volumetric fog** (shafts through clouds, a projector's slide in the air) and the **GI** (the bounced light follows the pattern). Only the static light bake doesn't record it (it animates).
 - See also: [Lights](article:lights), [Materials](article:materials).
 --- es
-Una **Función de Luz** (la Light Function de Unreal) es un material que multiplica una luz: la diapositiva de un proyector, la sombra de una persiana, nubes pasando sobre el sol, una bombilla que parpadea. En el material: **Details > Dominio del Material = Función de Luz** (el patrón es la Emisión, o el Color Base; el nodo **Time** lo anima). En la luz **Spot**, **Point** o **Directional**: **Details > Función de Luz** (Directional: **Escala** en cm). Ejemplos: LF_Projector, LF_Blinds, LF_Clouds, LF_Flicker.
+```diagram steps
+Material: Detalles > Material Domain = Light Function
+Emission (o Base Color) = el patrón; un nodo Time lo anima
+Luz Spot, Point o Directional: Detalles > Light Function
+Directional: Light Function Scale (cm)
+```
+Una **Light Function** (la de Unreal) es un material que multiplica una luz: la diapositiva de un proyector, la sombra de una persiana, nubes que pasan sobre el sol, una bombilla que parpadea.
+1. Crea un material y en **Detalles > Material Domain** elige **Light Function**. El patrón es su **Emission** (o su **Base Color** cuando no emite nada); el blanco deja pasar la luz, el negro la bloquea. Con color, tiñe la luz (una diapositiva de color).
+2. Para **animarlo**, usa el nodo **Time** (el bucle se hornea en fotogramas): nubes que se desplazan (la fase de una Wave Texture), un parpadeo (ruido blanco por paso de tiempo).
+3. Selecciona la luz **Spot**, **Point** o **Directional** y elige el material en **Detalles > Light Function** (o arrástralo desde el Explorador de contenidos). Spot: el patrón llena el cono. Point: todas las direcciones. Directional: se repite sobre el mundo cada **Light Function Scale** cm.
+- Ejemplos listos en Materials/Examples/LightFunctions: **LF_Projector**, **LF_Blinds**, **LF_Clouds**, **LF_Flicker**. Escena de prueba: `lightfn`.
+- Coste (RTX 3060, 1440p Épico, la escena `lightfn` con 4 luces con funciones): +0.30 ms (2.84 → 3.14 ms). `REALENGINE_NO_LIGHTFN=1` para comparar.
+- También ilumina la **niebla volumétrica** (haces a través de nubes, la diapositiva de un proyector en el aire) y la **GI** (la luz rebotada sigue el patrón). Solo el horneado de luces estáticas no lo registra (se anima).
+- Mira también: [Luces](article:lights), [Materiales](article:materials).

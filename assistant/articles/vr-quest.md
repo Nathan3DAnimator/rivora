@@ -1,6 +1,6 @@
 id: vr-quest
 kind: howto
-title: Jogos em VR: Quest 3S, teleporte, mãos, pegar e arremessar | VR games: Quest 3S, teleport, hands, grab and throw
+title: Jogos em VR: Quest 3S, teleporte, mãos, pegar e arremessar | VR games: Quest 3S, teleport, hands, grab and throw | Juegos en VR: Quest 3S, teletransporte, manos, agarrar y lanzar
 keys: vr, maos fisicas, mãos físicas, physical hands, manos fisicas, colisao das maos, colisão das mãos, hand collision, empurrar com a mao, push with hand, gesto de pegar, grab gesture, set vr hand collision, realidade virtual, virtual reality, realidad virtual, quest, quest 3, quest 3s, meta quest, oculus, headset, oculos vr, gafas vr, standalone, autonomo, autônomo, quest link, air link, steamvr, openxr, vr preview, previa em vr, prévia em vr, iniciar em vr, start in vr, empacotar para meta quest, package for meta quest, apk quest, teleporte, teleport, teletransporte, arco de teleporte, teleport arc, giro por passos, snap turn, giro suave, smooth turn, locomocao, locomoção, locomotion, vinheta de conforto, comfort vignette, enjoo, motion sickness, mareo, maos, mãos, hands, manos, hand tracking, rastreamento das maos, rastreamento das mãos, pinca, pinça, pinch, pegar objeto, grab, agarrar, arremessar, throw, lanzar, pegavel, pegável, grabbable, encaixe, socket, grab socket, laser, ponteiro laser, laser pointer, menu em vr, vr menu, widget em vr, foveated, foveacao, foveação, foveated rendering, renderizacao foveada, ffr, spacewarp, application spacewarp, 72 hz, 90 hz, 120 hz, taxa de atualizacao, refresh rate, vr template, template vr, pawn vr, vr pawn, event on vr grabbed, vr teleport, vr grab
 --- pt
 ```diagram steps
@@ -62,27 +62,30 @@ Event BeginPlay -> Set VR Locomotion ( 2, 0 ) -> Set VR Comfort Vignette ( 0.4 )
 ```
 --- es
 ```diagram steps
-Nuevo Proyecto > Realidad Virtual (o Project Settings > VR > Iniciar en VR) | Play > Vista previa en VR: el nivel en el visor por Quest Link / Air Link | Ajusta locomoción, giro, manos y calidad en Project Settings > VR | Compilar > Empaquetar para Meta Quest: el APK corre en el Quest solo
+New Project > Virtual Reality (o Project Settings > VR > Start in VR) | Jugar > VR Preview: el nivel en el visor por Quest Link / Air Link | Define locomoción, giro, manos y calidad en Project Settings > VR | Compilar > Empaquetar para Meta Quest: el APK corre en el Quest solo
 ```
-## Empezar
-- **Nuevo Proyecto > Realidad Virtual**: una sala lista como el VR Template de Unreal: teletransporte, giro por pasos, manos, un láser que usa la puerta y la palanca, cubos para agarrar y lanzar, una pelota sujeta por su mango y un **Encaje de Agarre** en la mesa.
-- **Play > Vista previa en VR** juega el nivel abierto en el visor (Quest Link por cable, Air Link o SteamVR), con los cambios sin guardar. Sin visor, se abre en el monitor.
-- El juego empaquetado se abre en el visor con **Project Settings > VR > Iniciar en VR**. Para el **Quest autónomo** (sin PC): **Compilar > Empaquetar para Meta Quest**. En el visor: modo desarrollador activo y la depuración USB autorizada; instala con `adb install -r Juego_Quest.apk`.
+## Primeros pasos
+- **New Project > Virtual Reality**: una sala lista como la VR Template de Unreal: teletransporte, giros por pasos, manos, un láser que usa la puerta y la palanca, cubos para agarrar y lanzar, una pelota sostenida por su empuñadura y un **Grab Socket** en la mesa.
+- **Jugar > VR Preview** reproduce el nivel abierto en el visor (Quest Link por cable, Air Link o SteamVR), incluidos los cambios sin guardar. Sin visor: se abre en el monitor.
+- El juego empaquetado se abre en el visor cuando **Project Settings > VR > Start in VR** está activado. Para el **Quest independiente** (sin PC): **Compilar > Empaquetar para Meta Quest**. En el visor: modo desarrollador activado y depuración USB permitida; instala con `adb install -r Game_Quest.apk`.
 
-## Controles del jugador (el pawn VR)
-- **Stick izquierdo**: empújalo hacia adelante y aparece el **arco de teletransporte** (azul en un suelo, rojo en una pared); suéltalo para ir.
-- **Stick derecho**: **giro por pasos** (45° alrededor de la cabeza) o **giro suave**.
-- **Grip**: agarra lo que tiene un **Interactuable** marcado como **Agarrable**; al soltarlo, se **lanza con la velocidad de la mano** o **encaja** en un Encaje de Agarre a menos de 20 cm.
-- **Gatillo**: usa el Interactuable al que apunta el **láser** (puertas, palancas, botones) y hace clic en los menús, que aparecen en un **panel** a 1,2 m.
-- **Manos rastreadas**: la pinza es el gatillo, el puño cerrado el grip. **Gesto de Agarrar** y **de Arrastrar**: Puño, Pinza, Cualquier Dedo en el Índice o Puño o Cualquier Dedo. **Manos Físicas** (opcional): se detienen en paredes y mesas; con **Colisión con Objetos**, también en cuerpos con física e Interactuables. **Las Manos Empujan Cuerpos**: tocar un cuerpo con física lo empuja, aunque sea despacio. **Set VR Hand Collision** cambia las tres en el juego. **Viñeta de Confort**: oscurece el borde al moverse (menos mareo).
+## Los controles del jugador (el pawn VR)
+- **Stick izquierdo**: empuja hacia delante y aparece el **arco de teletransporte** (azul sobre un suelo, rojo sobre una pared); suelta para ir. La cabeza aterriza sobre el punto.
+- **Stick derecho**: **giro por pasos** (45° alrededor de la cabeza) o **giro suave**. Con Teleport y Smooth, el stick izquierdo camina y el derecho, empujado hacia delante, se teletransporta.
+- **Grip**: toma lo que tiene un **Interactable** marcado como **Grabbable**; al soltar, se **lanza con la velocidad de la mano** (recupera su física) o **encaja** en un Grab Socket a menos de 20 cm (Required Tag: solo lo que tenga ese Gameplay Tag). **Snap to Hand**: sostenido como fue hecho (un arma por su empuñadura).
+- **Gatillo**: usa el Interactable al que apunta el **láser** (puertas, palancas, botones: lo mismo que en el juego plano) y pulsa menús. Un menú (pausa, opciones) aparece en un **panel** a 1.2 m delante; el láser es el ratón.
+- **Manos rastreadas** (Project Settings > VR > Hand Tracking): un pellizco es el gatillo, un puño el grip. **Grab Gesture** y **Drag Gesture**: Fist, Pinch, Any Finger to Index (el pulgar o el corazón sobre la mitad superior del índice) o Fist or Any Finger (el predeterminado). Cada dedo por separado y la forma de la mano: Get VR Finger Curls, Get VR Finger Touch, Get VR Hand Gesture.
+- **Physical Hands** (opcional): las manos dibujadas se detienen en paredes, suelos y mesas; con **Hands Collide with Objects**, también en cuerpos con física e Interactables, dedos incluidos. **Hands Push Bodies**: tocar un cuerpo con física lo empuja, tan hondo como entra la mano real, incluso apoyada despacio sobre él. **Set VR Hand Collision** cambia los tres en el juego.
+- **Comfort Vignette**: oscurece el borde de la vista al caminar y girar (menos mareo).
 
 ## Calidad y rendimiento en el Quest
-- **Calidad en VR > Quest (autónomo)**: luz indirecta por **lightmaps y el volumen horneado**, MSAA 4x, nada por rayos. Los dos ojos comparten el trabajo del cuadro.
-- **Renderizado Foveado** (Baja, Media, Alta): los bordes de cada ojo sombreados más gruesos; la Alta quitó un tercio del tiempo de GPU en la escena de la casa.
-- **Frecuencia** 72/90/120 Hz: a 120 Hz hay 8,3 ms para los dos ojos.
+- **VR Quality > Quest (standalone)**: luz indirecta de los **lightmaps y del volumen horneado** (Compilar > Build Lighting antes de empaquetar), MSAA 4x, nada trazado, sin efectos en espacio de pantalla. Los dos ojos comparten el trabajo del fotograma (simulaciones, GI y sombras una sola vez).
+- **Foveated Rendering** (Low, Medium, High): los bordes de cada ojo se sombrean más grueso. High recortó un tercio del tiempo de GPU en la escena de la casa. **Dynamic Foveation**: más profundo solo cuando el tiempo se agota.
+- **Refresh Rate** 72/90/120 Hz: a 120 Hz el juego tiene 8.3 ms para los dos ojos. Empieza en 90 y mide (F10, Debug Viewer).
 
 ```blueprint
 Event On VR Grabbed ( Hand ) -> Play Haptic Effect ( Hand, 0.5, 0.05 )
 Event BeginPlay -> Set VR Hand Collision ( true, false, true )
+Event On VR Released ( Hand, Velocity, Socket ) -> Is Valid ( Socket ) -> Branch -> Print String ( "Snapped!" )
 Event BeginPlay -> Set VR Locomotion ( 2, 0 ) -> Set VR Comfort Vignette ( 0.4 )
 ```

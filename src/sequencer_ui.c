@@ -29,6 +29,7 @@
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #include <cimgui.h>
 
+#include "editor_docs.h"
 #include "anim.h"
 #include "theme.h"
 #include "audio.h"
@@ -1640,4 +1641,22 @@ bool seq_editor_selftest(void) {
     if (keep) UD.last = snap_take(keep);
     printf("[RealEngine] seq-test: Sequencer undo %s / %s / redo %s\n", a ? "ok" : "FAIL", b ? "ok" : "FAIL", c ? "ok" : "FAIL");
     return a && b && c;
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int seq_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    if (!U.s) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) { // (as its window's x: the actors it moved back where they were)
+        if (ed) seq_editor_restore(ed);
+        undo_clear();
+        U.s = NULL, U.playing = false, U.unsaved = false, UD.focused = false;
+        return 1;
+    }
+    if (!U.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, U.s->name), 1;
+    bool ok = seq_save(U.s);
+    if (ok) U.unsaved = false;
+    return !ok;
 }

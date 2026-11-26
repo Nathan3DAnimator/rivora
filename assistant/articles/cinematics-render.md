@@ -1,6 +1,6 @@
 id: cinematics-render
 kind: howto
-title: Renderizar um vídeo e gravar takes (Movie Render Queue, Take Recorder) | Render a video and record takes (Movie Render Queue, Take Recorder)
+title: Renderizar um vídeo e gravar takes (Movie Render Queue, Take Recorder) | Render a video and record takes (Movie Render Queue, Take Recorder) | Renderizar un video y grabar tomas (Movie Render Queue, Take Recorder)
 keys: movie render queue, render queue, renderizar video, render video, exportar video, export video, exportar cinematica, export cinematic, gravar cinematica, render a cutscene, png sequence, sequencia de png, frames, quadros, motion blur, desfoque de movimento, temporal samples, amostras temporais, take recorder, gravar take, record take, gravar o jogo, record gameplay, gravar movimento, fade, fade in, fade out, escurecer a tela, fade to black, tela preta, cinematics, cinematica
 --- pt
 ```diagram steps
@@ -26,3 +26,15 @@ The **Cinematics** window (**Window** menu) brings two of Unreal's cinematic too
 - **Movie Render Queue:** pick the **Sequence**, the **Frame Rate**, the **Temporal Samples** and click **Render (PNG)**. The engine enters Play, waits the **Warm Up Frames** (the exposure and lighting settle) and plays the sequence on a fixed clock: each frame is the mean of its samples spread over its time, which gives motion blur and smooth edges, however slow the PC. The frames go to `Saved/MovieRenders/<sequence>/frame_0000.png` (or the **Output Folder**); the picture is the viewport's, so size it first.
 - **Fade:** in the Sequencer, the **Fade** track darkens the screen to the key's color (black by default): 1 is the whole screen in the color, 0 none, linear between keys.
 - **Cost:** the test (32 frames of 2560 x 1360 with 4 samples) renders in ~3 s.
+--- es
+```diagram steps
+Ventana > Cinematics
+Take Recorder: en Jugar, Record graba al jugador y los actores seleccionados
+Sequencer: la pista Fade (oscurecer / aclarar), cortes de cámara
+Movie Render Queue: elige la secuencia y Render: cuadros PNG
+```
+La ventana **Cinematics** (menú **Ventana**) trae dos de las herramientas cinemáticas de Unreal.
+- **Take Recorder:** pulsa Jugar (Alt+P), selecciona los actores y haz clic en **Record**; el peón del jugador entra por sí solo. **Stop Recording** guarda un nuevo Level Sequence en `Content/Cinematics/Takes` (Take, Take_1...) con una clave de Transform en cada cuadro de la toma (**Take Frame Rate**, 30). Ábrelo en el Sequencer para recortarlo y añadir cámaras y eventos.
+- **Movie Render Queue:** elige la **Sequence**, el **Frame Rate**, los **Temporal Samples** y haz clic en **Render (PNG)**. El motor entra en Jugar, espera los **Warm Up Frames** (la exposición y la iluminación se estabilizan) y reproduce la secuencia con un reloj fijo: cada cuadro es el promedio de sus muestras repartidas en su tiempo, lo que da desenfoque de movimiento y bordes suaves, por lenta que sea la PC. Los cuadros van a `Saved/MovieRenders/<sequence>/frame_0000.png` (o a la **Output Folder**); la imagen es la de la ventana gráfica, así que dale tamaño primero.
+- **Fade:** en el Sequencer, la pista **Fade** oscurece la pantalla hasta el color de la clave (negro por defecto): 1 es toda la pantalla en el color, 0 ninguna, lineal entre claves.
+- **Costo:** la prueba (32 cuadros de 2560 x 1360 con 4 muestras) se renderiza en ~3 s.

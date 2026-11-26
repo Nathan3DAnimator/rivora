@@ -336,7 +336,7 @@ static bool stylized_settings(ProjectSettings* p) {
     ch |= igSliderFloat(TR("Outline Sensitivity"), &p->stylized_outline_depth, 0.005f, 0.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
     igSetItemTooltip("%s", TR("How far apart in depth two surfaces must be for a line between them (a share of the distance: smaller draws more lines)."));
     igTextDisabled("%s", TR("Animation"));
-    ch |= igSliderInt(TR("Animation Frame Rate"), &p->stylized_anim_fps, 0, 30, p->stylized_anim_fps ? "%d fps" : "smooth", 0);
+    ch |= igSliderInt(TR("Animation Frame Rate"), &p->stylized_anim_fps, 0, 30, p->stylized_anim_fps ? "%d fps" : TR("smooth"), 0);
     igSetItemTooltip("%s", TR("The characters' poses held for 1/N s (12: stop-motion, animation on twos); 0 smooth. The game itself keeps its frame rate."));
     igPopID();
     igUnindent(igGetFontSize());
@@ -465,6 +465,7 @@ bool project_create(Editor* ed, const char* folder, const char* name, int tpl) {
     snprintf(content, sizeof content, "%s\\Content", dir);
     if (!re_make_dirs(content)) return false;
     ProjectSettings* p = project();
+    ProjectSettings keep = *p; // (2026-11-25) the open project's settings kept: the save prompt may cancel the switch
     project_defaults(p);
     snprintf(p->name, sizeof p->name, "%s", name);
     snprintf(p->window_title, sizeof p->window_title, "%s", name);
@@ -476,7 +477,9 @@ bool project_create(Editor* ed, const char* folder, const char* name, int tpl) {
         if (g_new_mode >= 0 && ed->saved_scalability < 0) ed->saved_scalability = ed->scalability; // (a test's: not kept in editor.ini)
         editor_set_scalability(ed, 4, re_time_seconds());
     }
-    if (!project_save(file)) return false;
+    bool saved = project_save_copy(file); // (the new one's file written; the open project's file and settings unchanged)
+    *p = keep;
+    if (!saved) return false;
     editor_open_project_later(ed, file, tpl);
     return true;
 }
@@ -575,7 +578,7 @@ static void browser(Editor* ed, double now) {
     igPopStyleColor(1);
     igPopFont();
     igSetCursorScreenPos((ImVec2){ o.x + ms + fs * 0.9f, o.y + fs * 2.05f });
-    igTextDisabled("%s", TR(B.page == 0 ? "Open a recent project, or start one from a template." : "Pick a template, name the project and create it."));
+    igTextDisabled("%s", (B.page == 0 ? TR("Open a recent project, or start one from a template.") : TR("Pick a template, name the project and create it.")));
     igSetCursorScreenPos((ImVec2){ o.x, wp.y + band + fs * 0.6f });
 
     ImVec2 avail = igGetContentRegionAvail();
@@ -657,8 +660,8 @@ static void browser(Editor* ed, double now) {
         igSetNextItemWidth(right_w * 0.5f);
         if (igCombo_Str_arr(TR("Rendering Mode"), &B.render_mode, mt, 2, -1)) // (Quality: Cinematic; Performance: Epic)
             B.scalability = B.render_mode == PROJECT_RENDER_QUALITY ? 4 : B.scalability > 3 ? 3 : B.scalability;
-        igTextDisabled("%s", TR(B.render_mode == PROJECT_RENDER_QUALITY ? "Cinema GI and reflections, ~90-120 fps; path tracing in the game"
-                                                                    : "250+ fps: the base for VR and weaker PCs"));
+        igTextDisabled("%s", (B.render_mode == PROJECT_RENDER_QUALITY ? TR("Cinema GI and reflections, ~90-120 fps; path tracing in the game")
+                                                                    : TR("250+ fps: the base for VR and weaker PCs")));
         const char* qt[RENDER_SCALABILITY_LEVELS];
         for (int i = 0; i < RENDER_SCALABILITY_LEVELS; i++) qt[i] = TR(render_scalability_name(i));
         igSetNextItemWidth(right_w * 0.5f);
@@ -1318,7 +1321,7 @@ static bool graph_style_gallery(void) {
     bool ch = false;
     float fs = igGetFontSize(), tw = fs * 11.0f, th = fs * 6.0f;
     for (int row = 0; row < 2; row++) {
-        igSeparatorText(TR(row == 0 ? "Node Style" : "Wire Style"));
+        igSeparatorText((row == 0 ? TR("Node Style") : TR("Wire Style")));
         int count = row == 0 ? GS_NODE_COUNT : GS_LINK_COUNT;
         int cur = row == 0 ? graph_node_style() : graph_link_style();
         int per_row = (int)((igGetContentRegionAvail().x + 10.0f) / (tw + 10.0f));
@@ -1602,7 +1605,7 @@ static void package_window(Editor* ed, double now) {
     int cfg = p->shipping ? 1 : 0;
     const char* cfgs[2] = { TR("Development"), TR("Shipping") };
     if (igCombo_Str_arr(TR("Build Configuration"), &cfg, cfgs, 2, -1)) p->shipping = cfg == 1, ch = true;
-    igTextDisabled("%s", TR(p->shipping ? "Shipping: what players get (no Debug Viewer on F10)." : "Development: the Debug Viewer (F10) stays in the game."));
+    igTextDisabled("%s", (p->shipping ? TR("Shipping: what players get (no Debug Viewer on F10).") : TR("Development: the Debug Viewer (F10) stays in the game.")));
     igSetNextItemWidth(fs * 20.0f);
     ch |= igInputTextWithHint(TR("Output Folder"), TR("(choose one)"), p->package_dir, sizeof p->package_dir, 0, NULL, NULL);
     igSameLine(0, -1);

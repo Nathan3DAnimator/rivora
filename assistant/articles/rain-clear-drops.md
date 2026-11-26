@@ -1,6 +1,6 @@
 id: rain-clear-drops
 kind: concept
-title: Gotas de chuva transparentes (refração, Fresnel, brilho) | Clear rain drops (refraction, Fresnel, highlight)
+title: Gotas de chuva transparentes (refração, Fresnel, brilho) | Clear rain drops (refraction, Fresnel, highlight) | Gotas de lluvia transparentes (refracción, Fresnel, brillo)
 keys: gotas transparentes, clear drops, gotas transparentes es, gotas brancas, white drops, gotas blancas, chuva branca, white rain, lluvia blanca, refracao da chuva, rain refraction, refraccion de la lluvia, filetes, streams, chorros, goteiras, drips, goteras, gotas caindo, falling drops, gotas cayendo, chuva realista, realistic rain, lluvia realista, REALENGINE_RAIN_FLAT
 --- pt
 ```diagram steps
@@ -31,4 +31,16 @@ The **falling drops**, the **drips** and the **streams** off the edges use the s
 - Cost (RTX 3060, 1440p Epic, the `rain` scene): ~0 ms (2.19 → 2.20 ms; the scene's copy was already made with SSR on).
 - See also: [Rain shading](article:rain-shading), [Rain and water](article:rain-water).
 --- es
-Las **gotas que caen**, las **goteras** y los **chorros** de los bordes usan el mismo shading que las gotas quietas en paredes y ventanas: agua transparente, nunca una raya blanca. Cada gota es una lente pequeña que muestra lo que hay detrás invertido (el fotograma anterior), con **Fresnel** en el borde (refleja el cielo) y un **brillo** pequeño del sol y las farolas. El estilo Estilizado mantiene las líneas claras. Comparar: `REALENGINE_RAIN_FLAT=1`.
+```diagram steps
+Último fotograma (la copia del SSR / del cristal)
+Cada gota, una lente diminuta: lee lo que hay detrás, al revés
+Fresnel en el borde: el cielo y la habitación reflejados
+Un pequeño brillo: el sol y las farolas dispersados por la gota
+```
+Las **gotas que caen**, los **goteos** y los **chorros** de los bordes usan el mismo sombreado que las gotas quietas en paredes y ventanas: agua clara, nunca una raya blanca plana.
+- **Refracción**: cada gota es una pequeña lente que muestra lo que hay detrás, al revés (la escena del último fotograma, la misma copia del SSR y del cristal, hecha en cada fotograma mientras llueve).
+- **Fresnel**: en el borde una gota refleja el cielo (o la habitación, bajo un techo); en el centro es casi toda transparente.
+- **Brillo**: el sol y las lámparas cercanas, dispersados hacia delante, hacen un pequeño brillo descentrado (a contraluz la lluvia brilla, contra un cielo luminoso casi desaparece, como en la vida real).
+- El estilo **Stylized** de la lluvia conserva las líneas brillantes de antes. Para comparar con el sombreado antiguo: `REALENGINE_RAIN_FLAT=1`.
+- Coste (RTX 3060, 1440p Épico, la escena `rain`): ~0 ms (2.19 → 2.20 ms; la copia de la escena ya se hacía con el SSR activado).
+- Mira también: [Sombreado de la lluvia](article:rain-shading), [Lluvia y agua](article:rain-water).

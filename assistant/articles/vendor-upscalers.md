@@ -1,6 +1,6 @@
 id: vendor-upscalers
 kind: concept
-title: DLSS, FSR e XeSS no lugar do TSR | DLSS, FSR and XeSS in TSR's place
+title: DLSS, FSR e XeSS no lugar do TSR | DLSS, FSR and XeSS in TSR's place | DLSS, FSR y XeSS
 keys: dlss, nvidia dlss, ligar o dlss, ativar dlss, usar dlss, turn on dlss, enable dlss, fsr, amd fsr, fidelityfx, xess, intel xess, upscaler, escolher upscaler, choose upscaler, rtx, transformer, dlaa, native aa, nvngx_dlss.dll, amd_fidelityfx_vk.dll, libxess.dll, em cinza, greyed, nao aparece, upscaler indisponivel, unavailable upscaler, custo do upscaler, upscaler cost
 --- pt
 ```diagram bars ms
@@ -34,3 +34,19 @@ Besides the engine's **TSR**, the upscale can be done by **NVIDIA DLSS**, **AMD 
 - To compare: `--upscaler tsr|fsr|dlss|xess` on the command line. [Command line](article:command-line)
 - The cost shows under Reconstruction, in the Debug Viewer's frame budget (F10). [Open](open:debug)
 - See also [TSR: a lower resolution, a sharp image](article:tsr-upscaling).
+--- es
+```diagram bars ms
+TSR: 0.44
+AMD FSR 3.1: 1.6
+NVIDIA DLSS (preset K): 2.2
+Intel XeSS (DP4a): 2.6
+```
+Además del **TSR** del motor, el escalado puede hacerlo **NVIDIA DLSS**, **AMD FSR 3.1** o **Intel XeSS**. Reciben la misma imagen (la escena a menor resolución, la profundidad y el movimiento de cada píxel) y devuelven la imagen a la resolución de la pantalla. El gráfico muestra el costo de cada uno en una RTX 3060, de 1294×798 a 2156×1330.
+- **Dónde elegir**: Project Settings > Rendering > **Upscaler**. El **Upscaling Mode** (Quality, Balanced, Performance...) y la **Dynamic Resolution** se aplican a todos. [Abrir Project Settings](open:project)
+- **¿Gris, con un motivo?** DLSS necesita una tarjeta NVIDIA RTX. FSR y XeSS funcionan en cualquier tarjeta con Vulkan 1.3. Los tres necesitan la DLL del fabricante junto al ejecutable: `nvngx_dlss.dll`, `amd_fidelityfx_vk.dll` o `libxess.dll`.
+- **Cuál elegir**: el TSR es el más barato y el más estable en reposo. DLSS reconstruye mejor el detalle fino a bajas resoluciones: en modo Performance (50 %) es más nítido que el TSR en Quality (67 %) y aun así más rápido en la escena heavy (82 contra 69 fps). FSR es el más ligero de los tres. XeSS es más ligero en las tarjetas Intel Arc.
+- Si uno falla en tu tarjeta, el TSR toma el relevo por sí solo y el Registro de salida dice por qué.
+- **Package Game** incluye la DLL del upscaler elegido y su licencia. Un jugador sin la tarjeta adecuada recibe el TSR.
+- Para comparar: `--upscaler tsr|fsr|dlss|xess` en la línea de comandos. [Línea de comandos](article:command-line)
+- El costo aparece en Reconstruction, en el presupuesto de fotograma del Debug Viewer (F10). [Abrir](open:debug)
+- Consulta también [TSR: menor resolución, imagen nítida](article:tsr-upscaling).

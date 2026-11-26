@@ -14,8 +14,8 @@
 #include "platform_files.h"
 #include "script_internal.h"
 
-const char* const g_script_lang_names[SL_COUNT] = { "Real", "C#", "Python", "C" };
-const char* const g_script_lang_ext[SL_COUNT] = { "real", "cs", "py", "c" };
+const char* const g_script_lang_names[SL_COUNT] = { "Rivora Script", "C#", "Python", "C", "C++" }; // (2026-11-25: "Real" until item 13)
+const char* const g_script_lang_ext[SL_COUNT] = { "rvs", "cs", "py", "c", "cpp" }; // (a new Rivora Script is .rvs; .real still opens)
 
 #define MAX_SCRIPTS 512
 static struct {
@@ -180,10 +180,14 @@ const char* const* script_keywords(ScriptLang lang, uint32_t* n) {
                                       "continue", "return", "match", "case", "pass", "and", "or", "not", "is", "True", "False", "None" };
     static const char* const c[] = { "void", "static", "const", "if", "else", "while", "for", "break", "continue", "return", "struct",
                                      "typedef", "switch", "case", "default", "true", "false", "NULL" };
+    static const char* const cpp[] = { "class", "struct", "public", "private", "protected", "virtual", "override", "final", "const", "static",
+                                       "auto", "void", "namespace", "using", "if", "else", "while", "for", "do", "break", "continue", "return",
+                                       "switch", "case", "default", "true", "false", "nullptr", "this", "static_cast", "enum" };
     switch (lang) {
     case SL_REAL: *n = sizeof real / sizeof real[0]; return real;
     case SL_CSHARP: *n = sizeof cs / sizeof cs[0]; return cs;
     case SL_PYTHON: *n = sizeof py / sizeof py[0]; return py;
+    case SL_CPP: *n = sizeof cpp / sizeof cpp[0]; return cpp;
     default: *n = sizeof c / sizeof c[0]; return c;
     }
 }
@@ -193,10 +197,13 @@ const char* const* script_builtin_types(ScriptLang lang, uint32_t* n) {
                                       "Actor", "List", "Character", "Pawn" };
     static const char* const py[] = { "bool", "int", "float", "str", "list", "Vector", "Rotator", "Color", "Transform", "Actor" };
     static const char* const c[] = { "bool", "int", "int64_t", "float", "double", "char", "Vector", "Rotator", "Color", "Actor" };
+    static const char* const cpp[] = { "bool", "int", "int32", "int64_t", "float", "double", "string", "vector", "FVector", "FRotator",
+                                       "FString", "FLinearColor", "TArray", "Vector", "Rotator", "Color", "Actor", "Character", "Pawn" };
     switch (lang) {
     case SL_REAL: *n = sizeof real / sizeof real[0]; return real;
     case SL_CSHARP: *n = sizeof cs / sizeof cs[0]; return cs;
     case SL_PYTHON: *n = sizeof py / sizeof py[0]; return py;
+    case SL_CPP: *n = sizeof cpp / sizeof cpp[0]; return cpp;
     default: *n = sizeof c / sizeof c[0]; return c;
     }
 }
@@ -212,6 +219,10 @@ const char* script_template(ScriptLang lang) {
         return "from realengine import *\n\nclass NewScript(Actor):\n    speed: float = 100.0\n\n"
                "    def begin_play(self):\n        print(f\"Hello from {get_display_name()}!\")\n\n"
                "    def tick(self, dt: float):\n        pass\n";
+    case SL_CPP:
+        return "#include \"rivora.hpp\"\n\nclass NewScript : public Actor {\npublic:\n    float Speed = 100.0f; // (a field: the Details shows it)\n\n"
+               "    void BeginPlay() override {\n        Print(\"Hello from \" + GetDisplayName() + \"!\");\n    }\n\n"
+               "    void Tick(float dt) override {\n    }\n};\n";
     case SL_C:
         return "// parent: Actor\n#include \"realengine.h\"\n\nfloat speed = 100.0f;\n\n"
                "void BeginPlay(void)\n{\n    Print(\"Hello from C!\");\n}\n\n"
@@ -228,6 +239,8 @@ ScriptLang script_lang_of(const char* path) {
     const char* dot = path ? strrchr(path, '.') : NULL;
     for (int k = 0; dot && k < SL_COUNT; k++)
         if (!_stricmp(dot + 1, g_script_lang_ext[k])) return (ScriptLang)k;
+    if (dot && !_stricmp(dot + 1, "real")) return SL_REAL; // (2026-11-25, item 13: Rivora Script's old extension)
+    if (dot && !_stricmp(dot + 1, "rcpp")) return SL_CPP;  // (a C++ script kept apart from a plugin's native .cpp)
     return SL_COUNT;
 }
 bool script_is_path(const char* path) { return script_lang_of(path) != SL_COUNT; }

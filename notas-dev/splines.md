@@ -110,7 +110,7 @@ algumas rodadas: essas ficaram de fora):
 - **Debug Viewer**: `DV_MAX_LISTS` era 16 e 25 listas se registram: as do fim (HUD, Horror Kit, Frame Budget, a das
   splines) sumiam em silêncio. Agora 32.
 - `dock_targets` falha às vezes com janelas de outras sessões na tela (o clique do teste não começa o arraste); a mesma
-  build passa 4/4 com a tela livre. Não é deste item.
+  build passa 4/4 com a tela livre. Não é deste item (causa e conserto em 20/11: notas-dev/temas-e-janelas.md, "Testes").
 
 ## Pendências
 - Os jobs do skin.comp são um dispatch cada: juntar os de um quadro num dispatch só baixaria o custo dos cabos em

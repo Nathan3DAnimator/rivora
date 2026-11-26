@@ -16,6 +16,10 @@ bool groom_init(struct VkCtx* vk, VkPipelineLayout layout); // (the layout: the 
 // (2026-11-15) a groom moved since last frame (its actor or the bone it follows): the velocity pass draws the hair's motion
 bool groom_moving(void);
 uint32_t groom_draw_velocity(VkCommandBuffer cmd, const Push* push, VkPipelineLayout layout, VkPipeline pipe);
+// (2026-11-25, item 17) the selected actors' hair into the selection's mask (sel: a bit per entity slot), and whether any
+uint32_t groom_draw_mask(VkCommandBuffer cmd, const Push* push, VkPipelineLayout layout, VkPipeline pipe, World* w, const uint8_t* sel, uint32_t nbits);
+bool groom_any_selected(World* w, const uint8_t* sel, uint32_t nbits);
+struct CGroom* groom_of(World* w, Entity e); // (2026-11-25, item 16) an actor's Groom (on it or a component of it; NULL: none)
 void groom_shutdown(struct VkCtx* vk);
 // The frame: the grooms of the world (a new one or one whose numbers changed grown again), their table into this
 // frame's buffer; the camera for the LOD (cm, the horizontal field of view in degrees, the view's width in pixels)
@@ -44,5 +48,7 @@ typedef struct GroomStats {
     double grow_ms;
     uint32_t segments, simulated; // (Q27.3) the strand segments drawn this frame (under the budget), the grooms simulated
     float budget_k;               // (Q27.3) the factor the wishes were scaled by (1: under the budget)
+    uint32_t skinned;             // (2026-11-25, item 16) the grooms drawn bent by their skin's bones this frame
+    uint32_t mask_draws;          // (2026-11-25, item 17) the selected actors' grooms drawn into the selection's mask (last frame)
 } GroomStats;
 const GroomStats* groom_stats(void);

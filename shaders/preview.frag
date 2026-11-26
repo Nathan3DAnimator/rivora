@@ -142,6 +142,7 @@ void main() {
         nts.z = sqrt(max(1.0 - dot(nts.xy, nts.xy), 0.0));
         rough = clamp(tn.z, 0.045, 1.0), metal = tn.w;
         emissive = (gm.flags & MATF_EMISSIVE) != 0u ? texture(u_mat_tex[nonuniformEXT(gm.tex_emis)], i_uv).rgb : vec3(0.0);
+        if ((gm.flags & MATF_AFFINE) != 0u) mat_affine(f.materials, floatBitsToUint(inst.emissive_rough.x), base, metal, rough, emissive), rough = max(rough, 0.045); // (2026-11-24: the affine fold)
         if ((gm.flags & MATF_WORLD_GRID) != 0u) { // the engine's grid material (mesh.frag)
             vec3 an = abs(n);
             vec2 wp = an.z >= an.x && an.z >= an.y ? i_world.xy : an.x >= an.y ? i_world.yz : i_world.xz;

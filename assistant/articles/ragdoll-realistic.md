@@ -1,6 +1,6 @@
 id: ragdoll-realistic
 kind: recipe
-title: Ragdoll realista: limites anatômicos, tônus, proteção e levantar | Realistic ragdoll: anatomical limits, tone, bracing and getting up
+title: Ragdoll realista: limites anatômicos, tônus, proteção e levantar | Realistic ragdoll: anatomical limits, tone, bracing and getting up | Ragdoll realista
 keys: ragdoll realista, realistic ragdoll, limites das juntas, joint limits, limite anatomico, anatomical limits, joelho, knee, cotovelo, elbow, dobradica, hinge, coluna, spine, pescoco, neck, ombro, shoulder, quadril, hip, torcao, twist, tonus, tone, boneco de pano, rag doll, mole, floppy, massa pelo volume, mass by volume, densidade, density, autocolisao, self collision, pernas atravessando, legs crossing, se proteger, brace, maos no chao, hands on the ground, cair de bruços, face down, de costas, on its back, montagem de levantar, get up montage, so o braco, arm alone, peso da fisica por osso, physics blend weight below, set all bodies below physics blend weight, is lying face down
 --- pt
 O ragdoll do **Physics Asset** cai como um corpo, não como um trapo: cada junta tem **limites anatômicos** medidos da pose de bind (iguais em qualquer pose em que ele comece), a **massa** de cada corpo vem do volume da forma, as partes que não são vizinhas **colidem entre si** (as pernas não se atravessam) e o **amortecimento** e o **tônus** das juntas o fazem assentar em vez de tremer.
@@ -27,6 +27,21 @@ The **Physics Asset**'s ragdoll falls as a body, not a rag: each joint has **ana
 
 ```diagram steps
 Physics Asset | Generate Bodies (joint kinds) | Play | falls as a body | Active Ragdoll: braces and gets up
+```
+```blueprint
+Event Begin Play -> Set Active Ragdoll ( Target = self, Enabled = true )
+Event Key G -> Set All Bodies Below Physics Blend Weight ( Target = self, Bone Name = "upperarm_l", Weight = 0, Blend Time = 0.3 )
+```
+--- es
+El ragdoll del **Physics Asset** cae como un cuerpo, no como un trapo: cada articulación tiene **límites anatómicos** medidos a partir de la bind pose (los mismos sea cual sea la pose con que empiece), la **masa** de cada cuerpo sale del volumen de su forma, las partes que no son vecinas **colisionan entre sí** (las piernas nunca se atraviesan), y el **amortiguamiento** y el **tono** de las articulaciones lo dejan asentarse en lugar de temblar.
+- **Joint Kind** (editor del Physics Asset > una articulación): Hinge (una rodilla solo se dobla hacia atrás, un codo solo hacia adelante, apenas hacia los lados), Spine, Neck, Shoulder, Hip, Wrist / Ankle, Tail, Ball. Elegir uno fija los límites; **Bend**, **Sides** y **Twist** (mín. y máx., asimétricos) los ajustan; **Anatomical Defaults** vuelve a los del tipo.
+- **Ragdoll Settings**: **Density** y **Masses from Volume** (un cuerpo humano: 1,0 g/cm³), **Ragdoll Tone** (cuánto conserva de su pose al caer; la suelta cuando ya está en el suelo).
+- **Active Ragdoll**: al tropezar y caer, **sus brazos se estiran hacia adelante y hacia abajo** y las manos llegan al suelo antes que la cabeza. En el suelo, sabe si está **boca abajo** o **de espaldas** (**Is Lying Face Down**); con los montages **Get Up Face Down** / **Get Up On Its Back**, la primera pose del montage se ajusta al cuerpo (lugar y orientación) y se mezcla con ella.
+- **Por hueso**: **Set All Bodies Below Simulate Physics** suelta un brazo; **Set All Bodies Below Physics Blend Weight** devuelve partes del cuerpo a la animación durante un tiempo de mezcla.
+- **Costo**: ~0,11 ms de CPU por ragdoll de 19 cuerpos en caída; ~0,05 ms por Active Ragdoll de pie; 50 Active Ragdolls: 2,5 ms de CPU por cuadro (385 fps).
+
+```diagram steps
+Physics Asset | Generate Bodies (tipos de articulación) | Jugar | cae como un cuerpo | Active Ragdoll: se protege y se levanta
 ```
 ```blueprint
 Event Begin Play -> Set Active Ragdoll ( Target = self, Enabled = true )

@@ -1,6 +1,6 @@
 id: audio-pro
 kind: concept
-title: Áudio a fundo: atenuação, classes, mixes, surround | Audio in depth: attenuation, classes, mixes, surround
+title: Áudio a fundo: atenuação, classes, mixes, surround | Audio in depth: attenuation, classes, mixes, surround | Audio en profundidad: atenuación, clases, mezclas, surround
 keys: audio avancado, atenuacao, attenuation, sound class, sound mix, concurrency, submix, reverb, audio volume, surround, 5.1, 7.1, binaural, sound cue
 --- pt
 - Mixer próprio (WASAPI) com vozes reais e virtuais e streaming das Sound Waves.
@@ -14,3 +14,9 @@ keys: audio avancado, atenuacao, attenuation, sound class, sound mix, concurrenc
 - **Sound Class / Sound Mix:** volume groups (music, effects) and mixes (lower the music during dialogue).
 - **Concurrency** limits how many play together; **Submixes** with effects; **Sound Cues** combine sounds.
 - Stereo with binaural; native **5.1 / 7.1** when the device has it.
+--- es
+- Un mezclador propio (WASAPI) con voces reales y virtuales y Sound Waves en streaming.
+- **Attenuation:** cómo cae el sonido con la distancia; **Audio Volume:** reverberación y zonas.
+- **Sound Class / Sound Mix:** grupos de volumen (música, efectos) y mezclas (bajar la música durante un diálogo).
+- **Concurrency** limita cuántos suenan a la vez; **Submixes** con efectos; los **Sound Cues** combinan sonidos.
+- Estéreo con binaural; **5.1 / 7.1** nativo cuando el dispositivo lo tiene.

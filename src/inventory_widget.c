@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "loc.h" // (2026-11-24) the items' names in the culture
 #include "blueprint.h"
 #include "brand.h"
 #include "components.h"
@@ -302,19 +303,19 @@ void inv_widget_overlay(ImDrawList* dl) {
     int o = snprintf(info, sizeof info, "%s %.1f kg  -  %s %d", TR("Weight"), d->weight, TR("Value"), d->value);
     if (d->equip >= 0 && o > 0 && o < (int)sizeof info) snprintf(info + o, sizeof info - (size_t)o, "  -  %s", TR(g_inv_equip_labels[d->equip]));
     float fs = 19.0f * k, wrap = 380.0f * k;
-    ImVec2 t1 = ImFont_CalcTextSizeA(font, fs * 1.1f, 1e9f, wrap, d->display, NULL, NULL);
-    ImVec2 t2 = d->description[0] ? ImFont_CalcTextSizeA(font, fs, 1e9f, wrap, d->description, NULL, NULL) : (ImVec2){ 0, 0 };
+    ImVec2 t1 = ImFont_CalcTextSizeA(font, fs * 1.1f, 1e9f, wrap, loc_item(d, false), NULL, NULL);
+    ImVec2 t2 = loc_item(d, true)[0] ? ImFont_CalcTextSizeA(font, fs, 1e9f, wrap, loc_item(d, true), NULL, NULL) : (ImVec2){ 0, 0 };
     ImVec2 t3 = ImFont_CalcTextSizeA(font, fs * 0.85f, 1e9f, wrap, info, NULL, NULL);
     float wd = fmaxf(fmaxf(t1.x, t2.x), t3.x) + 20.0f * k, ht = t1.y + t2.y + t3.y + 26.0f * k;
     ImVec2 a = { W.mouse[0] + 18.0f * k, W.mouse[1] + 18.0f * k }, b = { a.x + wd, a.y + ht };
     ImDrawList_AddRectFilled(dl, a, b, COL(18, 18, 22, 240), 6.0f * k, 0);
     ImDrawList_AddRect(dl, a, b, COL(255, 255, 255, 50), 6.0f * k, 1.0f, 0);
     float y = a.y + 8.0f * k;
-    ImDrawList_AddText_FontPtr(dl, font, fs * 1.1f, (ImVec2){ a.x + 10.0f * k, y }, COL(245, 245, 245, 255), d->display, NULL, wrap, NULL);
-    ImDrawList_AddText_FontPtr(dl, font, fs * 1.1f, (ImVec2){ a.x + 10.7f * k, y }, COL(245, 245, 245, 255), d->display, NULL, wrap, NULL);
+    ImDrawList_AddText_FontPtr(dl, font, fs * 1.1f, (ImVec2){ a.x + 10.0f * k, y }, COL(245, 245, 245, 255), loc_item(d, false), NULL, wrap, NULL);
+    ImDrawList_AddText_FontPtr(dl, font, fs * 1.1f, (ImVec2){ a.x + 10.7f * k, y }, COL(245, 245, 245, 255), loc_item(d, false), NULL, wrap, NULL);
     y += t1.y + 4.0f * k;
-    if (d->description[0]) {
-        ImDrawList_AddText_FontPtr(dl, font, fs, (ImVec2){ a.x + 10.0f * k, y }, COL(205, 205, 210, 255), d->description, NULL, wrap, NULL);
+    if (loc_item(d, true)[0]) {
+        ImDrawList_AddText_FontPtr(dl, font, fs, (ImVec2){ a.x + 10.0f * k, y }, COL(205, 205, 210, 255), loc_item(d, true), NULL, wrap, NULL);
         y += t2.y + 4.0f * k;
     }
     ImDrawList_AddText_FontPtr(dl, font, fs * 0.85f, (ImVec2){ a.x + 10.0f * k, y }, COL(150, 175, 220, 255), info, NULL, wrap, NULL);

@@ -1,6 +1,6 @@
 id: ai-pro
 kind: concept
-title: IA a fundo: Behavior Tree, Blackboard, Real Brain | AI in depth: Behavior Tree, Blackboard, Real Brain
+title: IA a fundo: Behavior Tree, Blackboard, Real Brain | AI in depth: Behavior Tree, Blackboard, Real Brain | IA a fondo: Behavior Tree, Blackboard, Real Brain
 keys: ia, ai, behavior tree, arvore de comportamento, blackboard, real brain, utility ai, percepcao, ver o jogador, ouvir, navegacao, esquadrao, inimigo inteligente
 --- pt
 ```diagram compare
@@ -24,3 +24,14 @@ Edited in | the tree editor | the actions editor
 - **Real Brain**: utility AI (each action gets a score; the best wins), good for blended behaviors.
 - **Perception:** sight and hearing (**Report Noise Event**); predicting and intercepting targets.
 - **Squads** encircle the player; difficulty tunes reaction and aim; there's visual debugging.
+--- es
+```diagram compare
+ | Behavior Tree | Real Brain
+Cómo decide | un árbol de reglas | una puntuación por acción
+Bueno para | comportamientos claros | comportamientos mezclados
+Se edita en | el editor de árbol | el editor de acciones
+```
+- **Behavior Tree + Blackboard** (como en Unreal): secuencias, selectores, decoradores y tareas; el Blackboard guarda el objetivo, una posición, un estado. **Run Behavior Tree** lo inicia en un Pawn.
+- **Real Brain**: IA por utilidad (cada acción recibe una puntuación; gana la mejor), buena para comportamientos mezclados.
+- **Percepción:** vista y oído (**Report Noise Event**); predecir e interceptar objetivos.
+- Los **escuadrones** rodean al jugador; la dificultad ajusta la reacción y la puntería; hay depuración visual.

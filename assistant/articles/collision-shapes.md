@@ -1,6 +1,6 @@
 id: collision-shapes
 kind: howto
-title: Formas de colisão: caixa, esfera, cápsula, convexo, malha complexa | Collision shapes: box, sphere, capsule, convex, complex mesh
+title: Formas de colisão: caixa, esfera, cápsula, convexo, malha complexa | Collision shapes: box, sphere, capsule, convex, complex mesh | Formas de colisión: caja, esfera, cápsula, convexa, malla compleja
 keys: forma de colisao, collision shape, colisao convexa, convex hull, casco convexo, capsula, capsule, cilindro rola, cylinder, cone, malha complexa, use complex collision, usar malha complexa, escada, stairs, rampa, ramp, atravessa o chao, cai de lado, colide como caixa, gjk, epa, simple collision, complex collision, triangulos, triangles
 --- pt
 Cada ator com **Física** colide com uma forma, escolhida em **Details > Física > Forma de Colisão** (como a colisão simples da Unreal):
@@ -38,3 +38,21 @@ Select the actor | Details > Add > Physics | Collision Shape: Automatic, Box, Sp
 ```
 - Something goes through the stairs or "floats" on a ramp? The stairs have their simple shape (their convex hull is a ramp): check **Use Complex Collision**.
 - The Debug Viewer (F10) shows the physics' cost; GJK and EPA (the shapes' detection) appear in the test's measure.
+--- es
+Cada actor con **Physics** colisiona con una forma, elegida en **Detalles > Physics > Collision Shape** (como la colisión simple de Unreal):
+- **Automatic** (predeterminado): el cubo es una caja, la esfera una esfera, el cilindro un **cilindro real** (rueda y se queda de pie), el cono y las **mallas importadas** el **casco convexo** de la malla (hasta 64 vértices, creado la primera vez y conservado).
+- **Box**, **Sphere**, **Capsule** (a lo largo del eje más largo de la malla, tan ancha como los otros dos) o **Convex Hull** (el casco de cualquier malla).
+- Para el **escenario** (un actor que no simula): marca **Use Complex Collision** y los triángulos propios de la malla colisionan: escaleras, rampas, arcos, cualquier forma cóncava. Solo para lo que se queda quieto; lo que se mueve usa su forma simple.
+
+```diagram compare
+ | Caja | Esfera / Cápsula | Casco convexo | Malla compleja
+Costo | el más bajo | bajo | medio | por triángulo
+Rueda | no | sí | según su forma | no se mueve
+Cóncava (escalera, arco) | no | no | no | sí
+Para | cajas, paredes | pelotas, personajes | rocas, botellas, muebles | escenario fijo
+```
+```diagram steps
+Selecciona el actor | Detalles > Añadir > Physics | Collision Shape: Automatic, Box, Sphere, Capsule o Convex Hull | Escenario: desactiva Simulate Physics y marca Use Complex Collision | Jugar (Alt+P)
+```
+- ¿Algo atraviesa la escalera o "flota" sobre una rampa? La escalera tiene su forma simple (su casco convexo es una rampa): marca **Use Complex Collision**.
+- El Debug Viewer (F10) muestra el costo de la física; GJK y EPA (la detección de las formas) aparecen en la medida de la prueba.

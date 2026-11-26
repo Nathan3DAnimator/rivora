@@ -3,6 +3,7 @@
 // node from the menu), the selected node's Details on the right (texts in the three languages, conditions, actions) and
 // a preview that runs the conversation inside the editor on a made-up player (its tags, items, health), showing the
 // node it is on. Also the Dialogue Speaker component's Details.
+#include "editor_docs.h"
 #include "dialogue.h"
 
 #include "theme.h"
@@ -337,7 +338,7 @@ static bool canvas(Dialogue* d, float w, float h) {
         ch |= organize_dialogue(d); // (2026-11-23)
     ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + 10, o.y + sz.y - igGetFontSize() - 6 }, TH(TK_N12),
                             TR("Drag from a node's right pin to wire it (on nothing: a new node) | right click: add / delete | right or middle drag: pan | wheel: zoom"), NULL);
-    ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + 12, o.y + 8 }, TH(TK_N13), "DIALOGUE", NULL);
+    ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + 12, o.y + 8 }, TH(TK_N13), TR("DIALOGUE"), NULL);
     igEndChild();
     return ch;
 }
@@ -603,7 +604,7 @@ static void preview(Dialogue* d, float h) {
                 break;
             }
     igSetNextItemWidth(igGetContentRegionAvail().x * 0.6f);
-    igInputTextWithHint("##nitem", "DA_Coin", E.new_item, sizeof E.new_item, 0, NULL, NULL);
+    igInputTextWithHint("##nitem", "DA_Coin", E.new_item, sizeof E.new_item, 0, NULL, NULL); // i18n: none (an asset name)
     igSameLine(0, 4);
     if (igSmallButton(TR("+ Item")) && E.new_item[0]) {
         for (int i = 0; i < 8; i++)
@@ -718,10 +719,24 @@ bool dlg_ui_speaker(CDialogueSpeaker* s) {
         snprintf(wname, sizeof wname, "%s", wb ? wb->name : "");
         shown = s->widget, shown_for = s;
     }
-    if (igInputTextWithHint(PL(TR("Widget")), "WBP_Dialogue", wname, sizeof wname, ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL)) {
+    if (igInputTextWithHint(PL(TR("Widget")), "WBP_Dialogue", wname, sizeof wname, ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL)) { // i18n: none (an asset name)
         BpAsset* f = wname[0] ? bp_find_name(BPA_CLASS, wname) : NULL;
         s->widget = f ? f->hash : 0u, ch = true;
     }
     igSetItemTooltip("%s", TR("A Widget Blueprint of yours with the same widgets' names (Speaker, Line, Option1..6, Continue); empty: WBP_Dialogue."));
     return ch;
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int dlg_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    if (!E.d) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) return E.d = NULL, E.previewing = false, E.unsaved = false, 1;
+    if (!E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, E.d->name), 1;
+    bool ok = dlg_save(E.d);
+    if (ok) E.unsaved = false;
+    return !ok;
 }

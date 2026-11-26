@@ -1,6 +1,6 @@
 id: landscape-paint
 kind: howto
-title: Pintar camadas no Landscape (grama, terra, pedra) | Paint layers on the Landscape (grass, dirt, rock)
+title: Pintar camadas no Landscape (grama, terra, pedra) | Paint layers on the Landscape (grass, dirt, rock) | Pintar el Landscape con varios materiales
 keys: pintar landscape, paint landscape, pintar terreno, paint terrain, camadas do terreno, landscape layers, weightmap, weight map, landscape layer blend, layer blend, terra e grama, grass and dirt, caminho no terreno, path on terrain, textura do terreno, terrain texture, misturar materiais, blend materials, desfazer escultura, undo sculpt, exportar heightmap, export heightmap, r16
 --- pt
 ```diagram steps
@@ -30,3 +30,17 @@ The Landscape blends up to **four materials** painted by hand (like Unreal's Lan
 - **Export:** **Export Heightmap (.r16)** in the Details writes the heights to `Content/Landscapes/<name>.r16` (16 bits: the lowest point black, the highest white), to open in World Machine, Gaea or another Landscape.
 - **Cost:** the layers read their textures only where there is paint; the test (200 m, three patches) spends +0.4 ms of GPU.
 - **Where it lives:** the weights are in `Content/Landscapes/<name>.rlw` and go into the chunks' vertex colors.
+--- es
+```diagram steps
+El material del Landscape: Detalles > Landscape Layers: 3 materiales y el Tile
+Modo Landscape (Shift+2): Paint, elige la Layer
+Pinta en la ventana gráfica (Shift: borrar); Ctrl+Z deshace el trazo
+Export Heightmap (.r16): las alturas para otro programa
+```
+El Landscape mezcla hasta **cuatro materiales** pintados a mano (como el Landscape Layer Blend de Unreal): el material del Landscape es la base, y otros tres entran donde pintas.
+- **Las capas:** abre el material del Landscape y, en **Detalles > Landscape Layers**, arrastra tres materiales (**Layer 1, 2, 3**) y el **Tile** de cada uno (cm por repetición, sobre el suelo del mundo: sin estirarse en las pendientes).
+- **Pintar:** en el modo **Landscape** (Shift+2), pulsa **Paint**, elige la **Layer** (1 a 3) y pinta en la ventana gráfica; **Shift** cambia a **Erase**. **Brush Radius** y **Brush Strength** como al esculpir. Una capa pintada desplaza a las otras: los porcentajes suman 100% como máximo, el resto es la base.
+- **Deshacer:** **Ctrl+Z** en el modo Landscape deshace el último trazo (de escultura o de pintura; se guardan 8).
+- **Exportar:** **Export Heightmap (.r16)** en Detalles escribe las alturas en `Content/Landscapes/<nombre>.r16` (16 bits: el punto más bajo en negro, el más alto en blanco), para abrir en World Machine, Gaea u otro Landscape.
+- **Costo:** las capas leen sus texturas solo donde hay pintura; la prueba (200 m, tres manchas) gasta +0.4 ms de GPU.
+- **Dónde se guarda:** los pesos están en `Content/Landscapes/<nombre>.rlw` y pasan a los colores de vértice de los chunks.

@@ -1,6 +1,6 @@
 id: android-performance
 kind: howto
-title: Jogo liso no celular (Android) | A smooth game on phones (Android)
+title: Jogo liso no celular (Android) | A smooth game on phones (Android) | Un juego fluido en el celular (Android)
 keys: android liso, celular travando, phone lag, mobile performance, desempenho celular, fps celular, resolucao dinamica, dynamic resolution, content scale, escala da tela, aquecendo, overheating, thermal, termica, bateria, battery, economia de bateria, battery saver, 30 fps, 60 fps, 120 fps, adpf, frame pacing, ritmo de quadros, qualidade mobile, mobile quality, segundo plano, background, minimizar, voltar ao jogo, memoria baixa, low memory
 --- pt
 ```diagram steps
@@ -46,3 +46,25 @@ In logcat (`adb logcat -s RealEngine`), every 5 s: fps, CPU, GPU, resolution and
 - `adb shell setprop debug.realengine.mobile 0` turns the profile off (to compare).
 
 On the PC, the same profile runs with `REALENGINE_MOBILE=1`. See also [Export to Android](article:android-export).
+--- es
+```diagram steps
+Project Settings > Android > Performance | Mobile Quality: Automatic (o Low, Medium, High) | Target Frame Rate: 30, 60, 90 o 120 | Dynamic Resolution activada | Compilar > Empaquetar para Android y jugar
+```
+## Qué hace el motor por sí solo en un celular
+- **Perfil del dispositivo**: Low, Medium o High según la GPU (Adreno, Mali, Immortalis, Xclipse) y la memoria. Sin efectos trazados, sombras y nubes más ligeras, niebla solo en High.
+- **Escala de pantalla** (como el `r.MobileContentScaleFactor` de Unreal): la ventana se dibuja al 70, 80 o 90 % de la pantalla y el sistema la amplía gratis. Los toques y la interfaz quedan en el lugar correcto.
+- **Resolución dinámica**: cuando un cuadro llega tarde, la resolución 3D baja en pasos del 5 % y vuelve a subir cuando hay margen. Se estabiliza en lugar de subir y bajar sin parar.
+- **Ritmo de cuadros (frame pacing)**: se le informa a la pantalla la tasa del juego y cada cuadro sale a tiempo. Ningún cuadro se dibuja en vano (batería y calor).
+- **Calor**: el motor lee el margen térmico de Android. Antes de que el celular se limite solo, baja la resolución, y si se calienta más baja a la mitad de la tasa.
+- **Ahorro de batería** activado: 30 fps.
+- **ADPF** (Android 13 o posterior): el sistema recibe el tiempo de CPU de cada cuadro y ajusta los relojes al trabajo.
+- **Segundo plano**: al salir del juego se libera el dispositivo de audio y no se dibuja nada. Al volver se reconstruye la pantalla y el juego continúa donde estaba.
+- **Memoria**: las texturas reciben un presupuesto según la calidad y devuelven una cuarta parte cuando Android avisa que la memoria se está acabando.
+
+## Medir
+En logcat (`adb logcat -s RealEngine`), cada 5 s: fps, CPU, GPU, resolución y temperatura. Para probar en un dispositivo:
+- `adb shell setprop debug.realengine.tier 1` fuerza la calidad Low (2 Medium, 3 High);
+- `adb shell setprop debug.realengine.fps 30` cambia la tasa de cuadros;
+- `adb shell setprop debug.realengine.mobile 0` desactiva el perfil (para comparar).
+
+En la PC, el mismo perfil se ejecuta con `REALENGINE_MOBILE=1`. Mira también [Exportar a Android](article:android-export).

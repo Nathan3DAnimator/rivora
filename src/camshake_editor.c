@@ -2,6 +2,7 @@
 // asset: a preset to start from, its timing (duration, blend in / out, scale), each channel's oscillation (amplitude,
 // frequency, waveform, a curve's keys) and a plot of the seven channels over its life (envelope included); Play shakes
 // the player's view while the editor plays. Save: Ctrl+S.
+#include "editor_docs.h"
 #include "camshake.h"
 
 #include <math.h>
@@ -161,4 +162,19 @@ bool camshake_editor_add_menu(const char* folder_vpath) {
     }
     igEndMenu();
     return made;
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+static const char* camshake_editor_docs_base(const char* vpath) { const char* b = strrchr(vpath, '/'); return b ? b + 1 : vpath; }
+int camshake_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    if (!E.open) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) return E.open = false, E.unsaved = false, 1;
+    if (!E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, camshake_editor_docs_base(E.vpath)), 1;
+    bool ok = camshake_save(E.vpath, &E.s);
+    if (ok) E.unsaved = false;
+    return !ok;
 }

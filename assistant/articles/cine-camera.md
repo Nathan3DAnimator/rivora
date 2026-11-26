@@ -1,6 +1,6 @@
 id: cine-camera
 kind: howto
-title: Câmera de cinema: lente, ISO, obturador e bokeh | Cine camera: lens, ISO, shutter and bokeh
+title: Câmera de cinema: lente, ISO, obturador e bokeh | Cine camera: lens, ISO, shutter and bokeh | Cámara de cine: lente, ISO, obturador y bokeh
 keys: cine camera, camera de cinema, camera fisica, physical camera, iso, obturador, shutter speed, velocidade do obturador, abertura, aperture, f-stop, distancia focal, focal length, lente, lens, sensor, filmback, super 35, full frame, bokeh, laminas do diafragma, diaphragm blades, exposicao manual, manual exposure, sunny 16, profundidade de campo fisica, physical depth of field, 180 graus, 180 degree shutter
 --- pt
 ```diagram steps
@@ -24,3 +24,14 @@ The camera becomes a **cinema camera**, like Unreal's Cine Camera Actor, while i
 - **Manual Exposure:** the exposure comes from **ISO**, **Shutter Speed** and aperture: EV100 = log2(N²/t) − log2(ISO/100). "Sunny 16" (ISO 100, f/16, 1/125) gives 14.97, sunlight. The volumes' Exposure Compensation still adds on top, as in Unreal.
 - **Motion Blur from Shutter:** the motion blur comes from the shutter time (1/48 at 24 fps is cinema's 180° shutter).
 - **Presets:** Filmback (Full Frame, Super 35, APS-C, Micro 4/3, Super 16, IMAX), Lens (12 to 200 mm) and Exposure (Sunny 16, Overcast, Indoor, Night Street, Cinema 180°).
+--- es
+```diagram steps
+Selecciona el Camera Actor (o el componente Camera del personaje)
+Detalles > Camera: activa Physical Lens, Manual Exposure y/o Motion Blur from Shutter
+Elige los presets (Filmback, Lens, Exposure) o escribe los valores
+```
+La cámara se convierte en una **cámara de cine**, como el Cine Camera Actor de Unreal, mientras es la vista del jugador (Jugar o el juego):
+- **Physical Lens:** la **distancia focal** y el **ancho del sensor** dan el campo de visión (50 mm en Super 35: 28°). **Aperture** y **Focus Distance** dan una profundidad de campo física, con el círculo de confusión f²/(N·(S − f)) en el sensor, en píxeles. **Diaphragm Blades** de 5 a 9 hace que el bokeh sea un polígono, como con una lente real; 0 lo mantiene redondo.
+- **Manual Exposure:** la exposición sale de **ISO**, **Shutter Speed** y la apertura: EV100 = log2(N²/t) − log2(ISO/100). "Sunny 16" (ISO 100, f/16, 1/125) da 14,97, luz solar. La Exposure Compensation de los volúmenes se sigue sumando encima, como en Unreal.
+- **Motion Blur from Shutter:** el desenfoque de movimiento sale del tiempo del obturador (1/48 a 24 fps es el obturador de 180° del cine).
+- **Presets:** Filmback (Full Frame, Super 35, APS-C, Micro 4/3, Super 16, IMAX), Lens (12 a 200 mm) y Exposure (Sunny 16, Overcast, Indoor, Night Street, Cinema 180°).

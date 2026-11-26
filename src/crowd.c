@@ -420,7 +420,9 @@ static void sync_runs(World* w) {
                 r->c = cc[i], r->cfg_hash = h;
                 continue;
             }
-            uint32_t n = cc[i].count > 200000u ? 200000u : cc[i].count;
+            uint32_t n = cc[i].count > 200000u ? 200000u : cc[i].count; // (a spawner's budget: its agents' buffers)
+            if (cc[i].count > n) // (2026-11-25, item 20: a number past the budget is said, not dropped in silence)
+                printf("[RealEngine] Crowd: %u agents asked, %u made: a spawner holds 200 000 at most (more spawners for more)\n", cc[i].count, n);
             CCrowd old = r->c;
             r->c = cc[i], r->cfg_hash = h;
             SkelMesh* m = cc[i].mesh ? anim_mesh(cc[i].mesh) : anim_mesh_name("SK_Mannequin");

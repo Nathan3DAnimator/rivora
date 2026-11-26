@@ -456,6 +456,35 @@ void gi_dyn_blas_record(VkCommandBuffer cmd, GiDynBlas* b, VkDeviceAddress verti
     b->updates++;
 }
 
+// (2026-11-24, item 4) many skins' BLAS in one vkCmdBuildAccelerationStructuresKHR (each its own scratch: one call, n infos;
+// 5000 animated skins were 5000 calls a frame). The same refit / build rule as gi_dyn_blas_record
+void gi_dyn_blas_record_batch(VkCommandBuffer cmd, const GiDynBlasJob* jobs, uint32_t n) {
+    enum { CHUNK = 256 };
+    VkAccelerationStructureGeometryKHR geo[CHUNK];
+    VkAccelerationStructureBuildGeometryInfoKHR bi[CHUNK];
+    VkAccelerationStructureBuildRangeInfoKHR range[CHUNK];
+    const VkAccelerationStructureBuildRangeInfoKHR* pr[CHUNK];
+    uint32_t m = 0;
+    for (uint32_t i = 0; i <= n; i++) {
+        if (m && (i == n || m == CHUNK)) G.cmd_build(cmd, m, bi, pr), m = 0;
+        if (i == n) break;
+        GiDynBlas* b = jobs[i].blas;
+        if (!b->as) continue;
+        dyn_geometry(&geo[m], &bi[m], jobs[i].vertices, jobs[i].maxv, jobs[i].indices);
+        bi[m].pGeometries = &geo[m];
+        if (b->stride) geo[m].geometry.triangles.vertexStride = b->stride;
+        bool refit = !b->always_build && b->updates % 64u != 0u;
+        bi[m].mode = refit ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        bi[m].srcAccelerationStructure = refit ? b->as : VK_NULL_HANDLE;
+        bi[m].dstAccelerationStructure = b->as;
+        bi[m].scratchData.deviceAddress = (b->scratch.addr + G.scratch_align - 1) & ~(VkDeviceAddress)(G.scratch_align - 1);
+        range[m] = (VkAccelerationStructureBuildRangeInfoKHR){ b->prims, 0, 0, 0 };
+        pr[m] = &range[m];
+        b->updates++;
+        m++;
+    }
+}
+
 void gi_dyn_blas_free(VkCtx* vk, GiDynBlas* b) {
     if (b->as) G.destroy_as(vk->device, b->as, NULL);
     gpu_buf_destroy(vk, &b->buf);

@@ -1,6 +1,6 @@
 id: volumes-vdb
 kind: concept
-title: Fumaça e explosões de arquivo (OpenVDB) | Smoke and explosions from files (OpenVDB)
+title: Fumaça e explosões de arquivo (OpenVDB) | Smoke and explosions from files (OpenVDB) | Humo y explosiones desde archivos (OpenVDB)
 keys: vdb, openvdb, .vdb, volume, volume heterogeneo, heterogeneous volume, fumaca simulada, importar fumaca, fumaca vdb, explosao, explosion, embergen, houdini, blender smoke, fumaca do blender, cache de fumaca, smoke cache, sequencia vdb, vdb sequence, fogo do blender, fire from blender
 --- pt
 ```diagram steps
@@ -30,3 +30,17 @@ A **Heterogeneous Volume** (like Unreal's) plays **smoke, fire and explosions** 
 - **Look:** **Density** (how dark and thick), **Brightness** (the flame), **Smoke Albedo** (soot ... steam). The sun casts its shadow inside the smoke.
 - **Quality:** **Resolution** (cells along the longest side). Everything loads when it opens.
 - **Example:** `Volumes/Example_Puff_0001.vdb` (24 frames; test scene `volume`).
+--- es
+```diagram steps
+Simula en Tlender, Blender, EmberGen o Houdini
+Exporta .vdb (una secuencia: smoke_0001.vdb, 0002...)
+Añadir > Visual Effects > Heterogeneous Volume, apunta File y Frames
+El motor reproduce la secuencia y la dibuja como su propio fuego
+```
+Un **Heterogeneous Volume** (como el de Unreal) reproduce **humo, fuego y explosiones** simulados fuera del motor, desde archivos **OpenVDB**.
+- **Cómo usarlo:** pon los archivos `.vdb` en `Content/Volumes/`, **Añadir > Visual Effects > Heterogeneous Volume**, escribe el primer archivo en **File** y la cantidad de cuadros en **Frames** (1: un solo archivo). **Frame Rate** y **Loop** controlan la reproducción.
+- **Grids:** `density` se vuelve humo; `temperature` (en kelvin, o ×**Temperature Scale**) o `flame` (×**Flame Temperature**) se vuelve la luz del fuego.
+- **Ejes:** **Up Axis** Z (Blender, Tlender) o Y (Houdini, EmberGen); **Unit** en cm por unidad (100: metros).
+- **Aspecto:** **Density** (qué tan oscuro y espeso), **Brightness** (la llama), **Smoke Albedo** (hollín ... vapor). El sol proyecta su sombra dentro del humo.
+- **Calidad:** **Resolution** (celdas a lo largo del lado más largo). Todo se carga al abrir.
+- **Ejemplo:** `Volumes/Example_Puff_0001.vdb` (24 cuadros; escena de prueba `volume`).

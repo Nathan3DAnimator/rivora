@@ -1,10 +1,10 @@
 id: quests
 kind: recipe
-title: Missões e objetivos: quest log, ir até, coletar, matar, falar, marcador no HUD | Quests and objectives: quest log, go to, collect, kill, talk, HUD marker
+title: Missões e objetivos: quest log, ir até, coletar, matar, falar, marcador no HUD | Quests and objectives: quest log, go to, collect, kill, talk, HUD marker | Misiones y objetivos: registro de misiones, ir a, recoger, matar, hablar, marcador en el HUD
 keys: missao, missão, missoes, missões, quest, quests, mission, missions, objetivo, objetivos, objective, objectives, tarefa, task, quest log, diario de missoes, diário de missões, journal, etapa, etapas, stage, stages, recompensa, recompensas, reward, rewards, proxima missao, próxima missão, next quest, quest line, linha de missoes, missao secundaria, side quest, missao principal, main quest, ir ate, ir até, go to, chegar, reach, volume, trigger box, coletar, collect, juntar, gather, matar, kill, matar inimigos, kill enemies, contagem, count, falar com npc, talk to npc, entregar itens, hand in, opcional, optional, condicao, condição, condition, tempo limite, time limit, falhar, fail, rastreador, tracker, quest tracker, marcador, marker, waypoint, seta na borda, distancia, distância, distance, hud, start quest, complete quest, fail quest, advance objective, set objective progress, is quest active, is quest completed, get quest state, get objective progress, track quest, get tracked quest, on quest started, on objective updated, on objective completed, on quest completed, on quest failed, wbp_questtracker, rquest, salvar missao, save quest
 --- pt
 Uma **Missão** é um asset (Content Browser > Adicionar > **Missão**; o **Exemplo do Amuleto Perdido** já vem com todos os tipos de objetivo) com o título e a descrição em inglês, português e espanhol, **etapas** (uma depois da outra, ou **Etapas ao Mesmo Tempo**) e os **objetivos** de cada etapa:
-- **Ir Até** (o nome de um ator ou uma Gameplay Tag nele: entrar na Colisão de um **Trigger Box**, ou chegar ao **Raio**), **Interagir** (um ator com **Interagível**: porta, baú, alavanca), **Coletar** N itens (o **Inventário** do jogador; **Entregar os Itens** os tira ao terminar), **Matar** N (o **On Death** da Vida, pela Gameplay Tag: `Enemy.Wolf` conta `Enemy.Wolf.Grey`), **Falar** (a conversa de um **Diálogo** com o NPC termina) e **Manual** (o seu Blueprint o move).
+- **Ir Até** (o nome de um ator ou uma Gameplay Tag nele: entrar na Colisão de um **Trigger Box**, ou chegar ao **Raio**), **Interagir** (um ator com **Interagível**: porta, baú, alavanca), **Coletar** N itens (o **Inventário** do jogador; **Entregar os Itens** os tira ao terminar), **Matar** N (o **On Death** da Vida, pela Gameplay Tag: `Enemy.Wolf` conta `Enemy.Wolf.Grey`), **Falar** (a conversa de um **Diálogo** com o NPC termina) e **Manual** (o seu Grafo o move).
 - Cada objetivo pode ser **Opcional**, ter uma **Tag da Condição** (só conta com a tag no jogador) e um **Ator do Marcador**. A etapa pode ter os **Objetivos em Ordem**.
 - **Recompensas**: itens, Gameplay Tags, um **Custom Event** (no ator do Quest Log e no **Alvo do Evento**) e a **Próxima Missão**. **Falha Depois de** X segundos faz a missão falhar sozinha.
 - No jogador (ou num Game State): **Details > Adicionar > Diário de Missões (Quest Log)**: as **Missões Iniciais**, **Mostrar o Rastreador** (o **WBP_QuestTracker** em Content/UI: título, etapa e objetivos com a contagem) e **Mostrar Marcadores** (o losango sobre o alvo, ou na borda da tela com uma seta, com a distância).
@@ -33,7 +33,7 @@ class QuestGiver extends Actor
 ```
 --- en
 A **Quest** is an asset (Content Browser > Add > **Quest**; the **Lost Amulet Example** comes with every kind of objective) holding its title and description in English, Portuguese and Spanish, **stages** (one after another, or **Stages at Once**) and each stage's **objectives**:
-- **Go To** (an actor's name or a Gameplay Tag on it: walk into a **Trigger Box**'s Collision, or within the **Radius**), **Interact** (an actor with an **Interactable**: door, chest, lever), **Collect** N items (the player's **Inventory**; **Hand In the Items** takes them when it completes), **Kill** N (Health's **On Death**, by Gameplay Tag: `Enemy.Wolf` counts `Enemy.Wolf.Grey`), **Talk** (a **Dialogue** with the NPC ends) and **Manual** (your Blueprint moves it).
+- **Go To** (an actor's name or a Gameplay Tag on it: walk into a **Trigger Box**'s Collision, or within the **Radius**), **Interact** (an actor with an **Interactable**: door, chest, lever), **Collect** N items (the player's **Inventory**; **Hand In the Items** takes them when it completes), **Kill** N (Health's **On Death**, by Gameplay Tag: `Enemy.Wolf` counts `Enemy.Wolf.Grey`), **Talk** (a **Dialogue** with the NPC ends) and **Manual** (your Graph moves it).
 - Every objective may be **Optional**, need a **Condition Tag** (it counts only with the tag on the player) and have a **Marker Actor**. A stage may have its **Objectives in Order**.
 - **Rewards**: items, Gameplay Tags, a **Custom Event** (on the Quest Log's actor and on the **Event Target**) and the **Next Quest**. **Fail After** X seconds fails the quest by itself.
 - On the player (or a Game State): **Details > Add > Quest Log**: the **Starting Quests**, **Show Quest Tracker** (**WBP_QuestTracker** in Content/UI: the title, the stage and the objectives with their counts) and **Show Markers** (a diamond over the target, or at the screen's edge with an arrow, with the distance).
@@ -42,6 +42,35 @@ A **Quest** is an asset (Content Browser > Add > **Quest**; the **Lost Amulet Ex
 
 ```diagram steps
 Start Quest (or the Quest Log's Starting Quest) | Stage 1: the objectives count (go to, collect...) | Stage done: the next one starts | Rewards: items, tags, an event | Next Quest
+```
+```blueprint
+Event BeginPlay -> Start Quest ( Quest = "Q_LostAmulet" )
+Event On Objective Completed ( Quest, Objective, Index ) -> Print String ( Objective )
+Event Custom PullLever -> Advance Objective ( Quest = "Q_LostAmulet", Objective = "lever", Amount = 1 )
+Event On Quest Completed ( Quest, Quest Log ) -> Add Gameplay Tag ( Tag = "Quest.Done" )
+```
+```real
+class QuestGiver extends Actor
+    event BeginPlay()
+        StartQuest("Q_LostAmulet")
+
+    event OnObjectiveCompleted(quest: string, objective: string, index: int)
+        print("objective done: " + objective)
+
+    event OnQuestCompleted(quest: string, log: Actor)
+        print("quest done: " + quest)
+```
+--- es
+Una **Quest** es un asset (Explorador de contenidos > Añadir > **Quest**; el **Lost Amulet Example** viene con todos los tipos de objetivo) que guarda su título y descripción en inglés, portugués y español, **etapas** (una tras otra, o **Stages at Once**) y los **objetivos** de cada etapa:
+- **Go To** (el nombre de un actor o un Gameplay Tag en él: entrar en la Collision de un **Trigger Box**, o dentro del **Radius**), **Interact** (un actor con un **Interactable**: puerta, cofre, palanca), **Collect** N ítems (el **Inventory** del jugador; **Hand In the Items** los quita al completarse), **Kill** N (el **On Death** de la Health, por Gameplay Tag: `Enemy.Wolf` cuenta `Enemy.Wolf.Grey`), **Talk** (termina un **Dialogue** con el NPC) y **Manual** (tu Grafo lo mueve).
+- Todo objetivo puede ser **Optional**, necesitar un **Condition Tag** (cuenta solo con el tag en el jugador) y tener un **Marker Actor**. Una etapa puede tener sus **Objectives in Order**.
+- **Recompensas**: ítems, Gameplay Tags, un **Custom Event** (en el actor del Quest Log y en el **Event Target**) y la **Next Quest**. **Fail After** X segundos hace fallar la misión sola.
+- En el jugador (o en un Game State): **Detalles > Añadir > Quest Log**: las **Starting Quests**, **Show Quest Tracker** (**WBP_QuestTracker** en Content/UI: el título, la etapa y los objetivos con sus cuentas) y **Show Markers** (un rombo sobre el objetivo, o en el borde de la pantalla con una flecha, con la distancia).
+- Nodos (categoría **Quest**): **Start Quest**, **Complete Quest**, **Fail Quest**, **Advance Objective**, **Set Objective Progress**, **Is Quest Active**, **Is Quest Completed**, **Get Quest State**, **Get Objective Progress**, **Track Quest**, **Get Tracked Quest**; eventos **On Quest Started**, **On Objective Updated**, **On Objective Completed**, **On Quest Completed**, **On Quest Failed**.
+- El progreso va con **Save Progress** (y **Save Game to Slot**) y pasa de un nivel al siguiente.
+
+```diagram steps
+Start Quest (o la Starting Quest del Quest Log) | Etapa 1: los objetivos cuentan (ir a, recoger...) | Etapa lista: empieza la siguiente | Recompensas: ítems, tags, un evento | Next Quest
 ```
 ```blueprint
 Event BeginPlay -> Start Quest ( Quest = "Q_LostAmulet" )

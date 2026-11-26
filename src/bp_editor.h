@@ -44,3 +44,10 @@ bool assistant_test_done(void);
 bool assistant_test_check(struct Editor* ed);
 void seq_test_frame(struct Editor* ed);
 bool seq_test_check(struct Editor* ed);
+// (2026-11-24) the graph's undo (Ctrl+Z / Ctrl+Y over a Blueprint graph): a step before a change of its structure (Split /
+// Recombine Struct Pin, Delete, Organize Nodes); undo / redo the asset's last one (false: none)
+struct BpAsset;
+void bp_graph_undo_push(struct BpAsset* a, int graph);
+bool bp_graph_undo(struct BpAsset* a, bool redo);
+
+void bp_editor_show(const char* vpath, const char* pin, const char* var); // (2026-11-25, --show bp-pin / bp-var: the tester's photos)

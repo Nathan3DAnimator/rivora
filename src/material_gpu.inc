@@ -460,10 +460,33 @@ static bool emit_program(Ir* ir, const bool* take, bool runtime, int regs, Prog*
     return true;
 }
 
+static bool g_aff_off; // (2026-11-24) the fold off for one compile (the mat_live_param test's reference bake)
+#include "material_affine.inc"
+// (2026-11-24) the bake's new result: per closure value a MOP_GATHER of the channels' roots (gv -1: a uniform channel, 0),
+// then a Material Output of them; its instruction (-1: too large). Its own function: inlined into compile_material, MSVC
+// 17.x's optimizer crashed (C1001)
+static __declspec(noinline) int aff_gather_output(Ir* ir, const int gv[12], const int gc[12]) {
+    int zero = ir_const1(ir, 0.0f), g3[3] = { -1, -1, -1 };
+    for (int o = 0; o < 3 && !ir->fail; o++) {
+        int in[4];
+        uint32_t p[4];
+        for (int k = 0; k < 4; k++) {
+            int src = gv[o * 4 + k];
+            in[k] = src >= 0 ? src : zero;
+            p[k] = src >= 0 ? (uint32_t)gc[o * 4 + k] : 0u;
+        }
+        ir_emit(ir, MOP_GATHER, p, in, 4, 1, &g3[o]);
+    }
+    return ir->fail ? -1 : ir_emit(ir, MOP_OUTPUT, NULL, g3, 3, 0, NULL);
+}
+
 typedef struct Built {
     Prog bake, run;
     int nslots;
     bool dynamic, emissive;
+    AffProg aff;    // (2026-11-24) the affine fold (material_affine.inc)
+    int emis_param; // the Emission Intensity's parameter (-1: not emissive)
+    bool folded;    // a channel's parameters folded (the bake writes the roots)
     float pom_depth;   // M7: the parallax's depth (uv units; 0: no Displacement, no parallax)
     int ninstr, nstatic, ndyn;
 } Built;
@@ -501,6 +524,45 @@ static bool compile_material(Material* m, Ir* ir, Built* b) {
     if (out_ins < 0) return false;
     b->emissive = ir->vals[cl[1]].emissive;
     b->dynamic = ir->ins[out_ins].dyn;
+    // (2026-11-24) the affine fold: the Emission Intensity a parameter of every glowing material (an instance, a Blueprint
+    // set it), the channels a parameter only scales or offsets baked as their roots (material_affine.inc)
+    b->emis_param = -1;
+    if (b->emissive) {
+        MatNode en;
+        memset(&en, 0, sizeof en);
+        snprintf(en.param, sizeof en.param, "%s", MAT_EMISSION_INTENSITY);
+        en.value[0] = m->emission_intensity;
+        b->emis_param = param_index(ir, &en, 0);
+    }
+    {
+        int gv[12], gc[12];
+        static bool no_fold = false, said = false;
+        if (!said) no_fold = getenv("REALENGINE_NO_AFFINE") != NULL, said = true; // (the measures' and the tests' "before")
+        // the parameters a channel can't fold are baked; then the values made of only those are static too (a noise whose Scale
+        // is baked is a root): again without them, until no more fall out
+        uint32_t live = 0xFFFFFFFFu;
+        for (int it = 0; it < 33; it++) {
+            uint32_t bad = 0;
+            aff_analyze(ir, out_ins, cl, b->emis_param, live, &b->aff, gv, gc, &b->folded, &bad);
+            uint32_t nl = live & ~bad; // (first the ones that met a node that isn't affine)
+            if (nl == live) nl = live & ~b->aff.bake_mask; // (then those of the channels still not folding: two roots...)
+            if (b->emis_param >= 0) nl |= live & (1u << b->emis_param); // (the Emission Intensity is never baked)
+            if (nl == live) break;
+            live = nl;
+        }
+        if (no_fold || g_aff_off) { // (everything baked as before; the Emission Intensity still applied)
+            uint32_t keep = b->aff.on && b->emis_param >= 0;
+            if (b->folded) { uint32_t bd; aff_analyze(ir, 0, cl, b->emis_param, 0xFFFFFFFFu, &b->aff, gv, gc, &b->folded, &bd); } // (nothing analyzed: all static)
+            b->aff.bake_mask = 0xFFFFFFFFu;
+            b->aff.on = keep != 0;
+            b->folded = false;
+        }
+        if (b->folded) { // the bake's result from the roots (a uniform channel: 0)
+            int no = aff_gather_output(ir, gv, gc);
+            if (no < 0) return false;
+            out_ins = no;
+        }
+    }
     // which instructions each program needs: back from the output (and, at runtime, the static values the dynamic
     // ones read become slots: baked)
     static bool need[IR_MAX_INS], take_bake[IR_MAX_INS], take_run[IR_MAX_INS];
@@ -809,9 +871,11 @@ static void tex_mips(VkCommandBuffer cmd, uint32_t idx) {
 // format, or no pipeline: the blits. Cost: a 2048 texture's chain ~0.3 ms of GPU, once per bake
 // The buffer for a res x res bake's mips (before a command buffer is recorded: making it submits one of its own). Grown
 // with the GPU idle (a frame in flight may read the old one)
+static bool st_bury_buf(GpuBuf b); // (material_stream.inc: freed when no frame in flight reads it)
 static void mip_buf_reserve(uint32_t res, bool half) {
     VkDeviceSize need = (VkDeviceSize)(res > 1 ? res / 2 : 1) * (res > 1 ? res / 2 : 1) * (half ? 8u : 4u);
     if (!M.mip || M.mip_buf.size >= need) return;
+    if (M.mip_buf.buffer && M.fcmd && st_bury_buf(M.mip_buf)) memset(&M.mip_buf, 0, sizeof M.mip_buf); // (2026-11-24: the frame's bakes may have recorded the old one)
     if (M.mip_buf.buffer) vkDeviceWaitIdle(M.vk->device), gpu_buf_destroy(M.vk, &M.mip_buf);
     if (!gpu_buf_create(M.vk, &M.mip_buf, need, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false))
         memset(&M.mip_buf, 0, sizeof M.mip_buf);
@@ -927,11 +991,120 @@ static int mat_index(const Material* m) {
 
 static uint32_t slot_alloc(void) { return M.nslots + 1 < MAT_GPU_SLOTS ? ++M.nslots : 0; }
 
+// (2026-11-24) The parameters' and the programs' room: ranges handed out first fit and given back (merged). Before, both
+// only grew: every bake took new parameters (an edit dragged in the Material Editor ~8 a second), so past 65536 vec4 the
+// allocation returned 0 and different materials' values overlapped; the programs' buffer started over when full and the
+// streaming baked another material's tiles with its old offset, over a program written there since. A variant keeps its
+// room for its next bakes (params_need); a program its own while it fits, the old one given back once no bake in flight
+// reads it (prog_place). Parameters' first MAT_MAX_PARAMS vec4: a scratch nobody owns (what a full heap hands out)
+typedef struct RangeHeap { uint32_t n, off[512], len[512]; } RangeHeapT;
+static void rh_give(void* hp, uint32_t off, uint32_t len) {
+    RangeHeapT* h = hp;
+    if (!len) return;
+    uint32_t i = 0;
+    while (i < h->n && h->off[i] < off) i++;
+    // merged with the one before and / or after
+    bool prev = i > 0 && h->off[i - 1] + h->len[i - 1] == off, next = i < h->n && off + len == h->off[i];
+    if (prev && next) {
+        h->len[i - 1] += len + h->len[i];
+        memmove(&h->off[i], &h->off[i + 1], (h->n - i - 1) * 4), memmove(&h->len[i], &h->len[i + 1], (h->n - i - 1) * 4);
+        h->n--;
+    } else if (prev) h->len[i - 1] += len;
+    else if (next) h->off[i] = off, h->len[i] += len;
+    else if (h->n < 512) {
+        memmove(&h->off[i + 1], &h->off[i], (h->n - i) * 4), memmove(&h->len[i + 1], &h->len[i], (h->n - i) * 4);
+        h->off[i] = off, h->len[i] = len, h->n++;
+    } // (512 holes: this one is lost until a restart; never seen)
+}
+static bool rh_take(void* hp, uint32_t len, uint32_t* out) {
+    RangeHeapT* h = hp;
+    for (uint32_t i = 0; i < h->n; i++) {
+        if (h->len[i] < len) continue;
+        *out = h->off[i];
+        h->off[i] += len, h->len[i] -= len;
+        if (!h->len[i]) {
+            memmove(&h->off[i], &h->off[i + 1], (h->n - i - 1) * 4), memmove(&h->len[i], &h->len[i + 1], (h->n - i - 1) * 4);
+            h->n--;
+        }
+        return true;
+    }
+    return false;
+}
+static uint32_t rh_free_total(const void* hp) {
+    const RangeHeapT* h = hp;
+    uint32_t t = 0;
+    for (uint32_t i = 0; i < h->n; i++) t += h->len[i];
+    return t;
+}
+static void heaps_init(void) {
+    M.pheap.n = M.gheap.n = 0;
+    rh_give(&M.pheap, MAT_MAX_PARAMS, MAT_PARAM_VEC4 - MAT_MAX_PARAMS);
+    rh_give(&M.gheap, 0, MAT_PROG_WORDS);
+}
+// n vec4 for good (the UDIM tables): the scratch when full
 static uint32_t params_alloc(uint32_t n) {
-    if (M.param_used + n > MAT_PARAM_VEC4) return 0;
-    uint32_t o = M.param_used;
-    M.param_used += n ? n : 1;
+    uint32_t o;
+    if (!rh_take(&M.pheap, n ? n : 1, &o)) {
+        static bool said;
+        if (!said) printf("[RealEngine] aviso: os parametros dos materiais encheram (%u vec4)\n", MAT_PARAM_VEC4), said = true;
+        return 0;
+    }
     return o;
+}
+// A variant's (or a table's) room for n vec4: its own while it fits, else a new one (the old one given back)
+static void params_need(uint32_t* off, uint32_t* cap, uint32_t n) {
+    if (!n) n = 1;
+    if (*cap >= n) return;
+    if (*cap) rh_give(&M.pheap, *off, *cap);
+    *cap = 0;
+    uint32_t o;
+    if (rh_take(&M.pheap, n, &o)) *off = o, *cap = n;
+    else *off = params_alloc(n); // (the scratch, with its warning)
+}
+static void params_release(uint32_t* off, uint32_t* cap) {
+    if (*cap) rh_give(&M.pheap, *off, *cap);
+    *off = 0, *cap = 0;
+}
+// The programs a bake in flight may still read (given back RE_FRAMES_IN_FLIGHT + 1 frames later; all: the GPU idle)
+static void prog_drain(bool all) {
+    uint64_t fn = M.vk->frame_number;
+    for (uint32_t i = 0; i < M.npgrave;) {
+        if (!all && M.pgrave[i].at > fn) {
+            i++;
+            continue;
+        }
+        rh_give(&M.gheap, M.pgrave[i].off, M.pgrave[i].len);
+        M.pgrave[i] = M.pgrave[--M.npgrave];
+    }
+}
+static void prog_bury(uint32_t off, uint32_t len) {
+    if (!len) return;
+    if (M.npgrave >= 128) { // (2026-11-24: full: the GPU waited for, the earlier frames' given back; this frame's bakes may read the rest)
+        vkDeviceWaitIdle(M.vk->device);
+        uint64_t now = M.vk->frame_number + RE_FRAMES_IN_FLIGHT + 1;
+        for (uint32_t i = 0; i < M.npgrave;)
+            if (M.pgrave[i].at < now) rh_give(&M.gheap, M.pgrave[i].off, M.pgrave[i].len), M.pgrave[i] = M.pgrave[--M.npgrave];
+            else i++;
+        if (M.npgrave >= 128) return; // (lost until a restart rather than overwritten under a bake; never seen)
+    }
+    M.pgrave[M.npgrave].off = off, M.pgrave[M.npgrave].len = len, M.pgrave[M.npgrave++].at = M.vk->frame_number + RE_FRAMES_IN_FLIGHT + 1;
+}
+// A compiled material's bake program into the buffer: a new place (the old one buried: a bake or a streaming tile in
+// flight reads it); none left: the GPU waited for and the old ones given back first
+static bool prog_place(Compiled* c, const uint32_t* w, uint32_t n) {
+    uint32_t len = n ? n : 1, o;
+    if (c->prog_cap) prog_bury(c->bake_off, c->prog_cap), c->prog_cap = 0;
+    if (!rh_take(&M.gheap, len, &o)) { // (the earlier frames' given back, the GPU idle; this frame's bakes may read the rest)
+        vkDeviceWaitIdle(M.vk->device);
+        uint64_t now = M.vk->frame_number + RE_FRAMES_IN_FLIGHT + 1;
+        for (uint32_t i = 0; i < M.npgrave;)
+            if (!M.fcmd || M.pgrave[i].at < now) rh_give(&M.gheap, M.pgrave[i].off, M.pgrave[i].len), M.pgrave[i] = M.pgrave[--M.npgrave];
+            else i++;
+        if (!rh_take(&M.gheap, len, &o)) return false;
+    }
+    c->bake_off = o, c->prog_cap = len, c->bake_len = n;
+    if (n) memcpy((uint32_t*)M.programs.mapped + o, w, n * 4);
+    return true;
 }
 
 static float (*param_vals(void))[4] { return (float(*)[4])M.params.mapped; }
@@ -955,8 +1128,10 @@ static void source_full(const char* path, char* full, size_t cap);
 static void variant_free(Variant* v);
 #include "material_udim.inc" // (Q18) UDIM
 
+static void pend_drop(Variant* v); // (2026-11-24: below)
 static void variant_free(Variant* v) {
     stream_cancel(v);
+    pend_drop(v);
     if (v->ud_n) ud_owner_free(v); // (Q18) its UDIM tiles
     if (v->own)
         for (int k = 0; k < 3; k++) st_bury1(v->tex[k]); // (a frame in flight may still read them)
@@ -1207,12 +1382,55 @@ bool mat_toon_slot_set(uint32_t slot, const MatToon* t) {
     return true;
 }
 
+static GpuMatAff* aff_block(uint32_t slot) { return &((GpuMatAff*)((uint8_t*)M.materials.mapped + MAT_AFF_BASE))[slot]; }
+// (2026-11-24) per slot, the emission's final mean (the emissive light's: lights.c, a Blueprint's Emission Intensity dims it)
+static float g_slot_emis[MAT_GPU_SLOTS][3];
+void mat_hold_bakes(uint32_t frames) { M.first_delay = frames; }
+uint32_t mat_baked_size(const Material* m) {
+    int i = m ? mat_index(m) : -1;
+    const Variant* v = i < 0 ? NULL : m->instance ? &g_inst_var[i] : &M.comp[i].v;
+    return v && v->tex[0] ? M.tex[v->tex[0]].w : 0u;
+}
+bool mat_slot_emission(uint32_t slot, float out[3]) {
+    if (!slot || slot >= MAT_GPU_SLOTS) return false;
+    memcpy(out, g_slot_emis[slot], 12);
+    return true;
+}
+// (2026-11-24) the placeholders before the first bake (below: ph_write): which slots are one, their base color
+static bool g_ph_slot[MAT_GPU_SLOTS];
+static float g_ph_base[MAT_GPU_SLOTS][3];
+static void ph_write(uint32_t slot, const Material* m);
+static const Material* variant_material(const Variant* v, const Compiled* c);
+// The means (the GI's base color, the emissive light's emission) of a variant as its slot draws it: its baked roots'
+// through the slot's coefficients
+static void slot_avgs(const Variant* v, const Compiled* c, float base[3], float emis[3]) {
+    const Variant* t = v->own ? v : share_of(v, c);
+    if (!t->tex[0] && v->slot && g_ph_slot[v->slot]) { // (a placeholder: its constants)
+        memcpy(base, g_ph_base[v->slot], 12), memcpy(emis, g_slot_emis[v->slot], 12);
+        return;
+    }
+    const GpuMatAff* A = v->slot ? aff_block(v->slot) : NULL;
+    bool on = A && (((GpuMaterial*)M.materials.mapped)[v->slot].flags & MATF_AFFINE);
+    for (int k = 0; k < 3; k++) {
+        base[k] = on ? aff_clamp01(t->avg[k] * A->a0[k] + A->b0[k]) : t->avg[k];
+        emis[k] = on ? fmaxf(t->avg_emis[k] * A->a1[k] + A->b1[k], 0.0f) : t->avg_emis[k];
+    }
+}
+
 static void write_slot(const Variant* v, const Compiled* c) {
     if (!v->slot) return;
     if (g_slot_toon_state[v->slot] != 2) toon_slot_put(v->slot, toon_source(v, c)); // (Q11)
-    GpuMaterial* g = &((GpuMaterial*)M.materials.mapped)[v->slot];
+    // (2026-11-24) put together here and copied whole: a frame in flight reads the slot while it is written (a Blueprint's
+    // Set Parameter every Tick), and a cleared one read a texture 0 (an unwritten descriptor)
+    GpuMaterial gl, *g = &gl;
+    GpuMatExt xl, *x = &xl;
     memset(g, 0, sizeof *g);
-    const Variant* t = v->own ? v : &c->v; // shared: the material's textures
+    const Variant* t = v->own ? v : share_of(v, c); // shared: the material's textures (an instance's own, for its actors')
+    if (!t->tex[0]) { // (2026-11-24: nothing baked yet, its first bake on its way: the placeholder, not a texture 0)
+        ph_write(v->slot, variant_material(v, c));
+        return;
+    }
+    g_ph_slot[v->slot] = false;
     g->tex_base = t->tex[0];
     g->tex_nrm = t->tex[1];
     g->tex_emis = t->tex[2];
@@ -1221,7 +1439,6 @@ static void write_slot(const Variant* v, const Compiled* c) {
     g->nparams = (uint32_t)c->nparams;
     memcpy(g->avg, t->avg, sizeof g->avg);
     g->uv_scale = (c->flags & MATF_WORLD_UV) ? c->world_tile : 1.0f; // (World Aligned: cm a tile)
-    GpuMatExt* x = &((GpuMatExt*)((uint8_t*)M.materials.mapped + sizeof(GpuMaterial) * MAT_GPU_SLOTS))[v->slot];
     if (c->flags & (MATF_EXT | MATF_REFRACT)) { // (a refractive glass reads its IOR, thickness and dispersion here too)
         memcpy(x->e, c->ext, sizeof x->e);
         // (M5: the detail normal's material slot, its tiling and strength, the MATX_ flags in e6; the slot and the flags as
@@ -1239,6 +1456,174 @@ static void write_slot(const Variant* v, const Compiled* c) {
         memcpy(&g->anim[1], &c->period, 4);
         g->anim[2] = c->table_off;
     }
+    // (2026-11-24) the affine fold: the coefficients from this slot's own parameter values (MATF_AFFINE when they change
+    // anything: an identity costs the pixels nothing)
+    GpuMatAff* A = aff_block(v->slot);
+    float ab[16] = { 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0 };
+    if (c->aff.on) aff_eval(&c->aff, (const float(*)[4])(param_vals() + v->param_off), (uint32_t)c->nparams, ab);
+    memcpy(A, ab, sizeof *A);
+    bool ident = true;
+    for (int k = 0; k < 16 && ident; k++) ident = ab[k] == ((k & 4) ? 0.0f : 1.0f);
+    if (!ident) g->flags |= MATF_AFFINE;
+    GpuMaterial* gm = &((GpuMaterial*)M.materials.mapped)[v->slot];
+    memcpy(&((GpuMatExt*)((uint8_t*)M.materials.mapped + sizeof(GpuMaterial) * MAT_GPU_SLOTS))[v->slot], x, sizeof *x);
+    memcpy(gm, g, sizeof *g);
+    float fb[3], fe[3];
+    slot_avgs(v, c, fb, fe); // (the slot written: its flags and coefficients)
+    memcpy(gm->avg, fb, sizeof fb);
+    memcpy(g_slot_emis[v->slot], fe, sizeof fe);
+}
+
+// ============================================================================================
+// (2026-11-24) The placeholder before the first bake (the user: "everything shows white while it loads"): the graph's
+// constant colors (the Principled's Base Color, Metallic, Roughness, Emission; an RGB / Value node's, a Material Instance's
+// parameter; a Mix of two of them; an image or a texture node: a neutral grey until it is baked) over the 4 x 4 neutral
+// textures, through the affine block (a = 0, b = the constant): a mesh shows its color from its first frame. Then its
+// first bake comes small (64 square) and climbs to its full size in steps (material_stream.inc S.force)
+// ============================================================================================
+static bool ph_param(const Material* inst, const char* name, float v[4]) {
+    if (!inst || !name || !name[0]) return false;
+    for (int k = 0; k < inst->nparams; k++)
+        if (!strcmp(inst->params[k].name, name)) return memcpy(v, inst->params[k].value, 16), true;
+    return false;
+}
+static void ph_input(const MatGraph* g, int node, int sock, const Material* inst, float o[4], int depth) {
+    int li = follow_link(g, mat_graph_input_link(g, node, sock));
+    if (li < 0) {
+        memcpy(o, g->nodes[node].in[sock], 16);
+        return;
+    }
+    const MatLink* l = &g->links[li];
+    const MatNode* s = &g->nodes[l->from];
+    o[0] = o[1] = o[2] = 0.5f, o[3] = 1.0f; // (a texture, a noise: grey until baked)
+    if (depth > 6) return;
+    if (s->type == NODE_RGB) {
+        memcpy(o, s->value, 16);
+        if (s->param[0]) ph_param(inst, s->param, o);
+    } else if (s->type == NODE_VALUE) {
+        float pv[4], v = s->value[0];
+        if (s->param[0] && ph_param(inst, s->param, pv)) v = pv[0];
+        o[0] = o[1] = o[2] = o[3] = v;
+    } else if (s->type == NODE_MIX) { // (its result of the socket linked: the A and B of that type, by the factor)
+        float f[4], a[4], b[4];
+        int as = l->from_sock == 0 ? 1 : l->from_sock == 1 ? 3 : 5;
+        ph_input(g, l->from, 0, inst, f, depth + 1);
+        ph_input(g, l->from, as, inst, a, depth + 1);
+        ph_input(g, l->from, as + 1, inst, b, depth + 1);
+        float t = f[0] < 0.0f ? 0.0f : f[0] > 1.0f ? 1.0f : f[0];
+        for (int k = 0; k < 4; k++) o[k] = s->prop[1] == BLEND_MUL && as == 5 ? a[k] * (1.0f - t + b[k] * t) : a[k] + (b[k] - a[k]) * t;
+    }
+}
+static void ph_estimate(const Material* m, float base[3], float* metal, float* rough, float emis[3]) {
+    const Material* pm = m->instance ? m->parent : m;
+    const Material* inst = m->instance ? m : NULL;
+    base[0] = base[1] = base[2] = 0.8f, *metal = 0.0f, *rough = 0.5f, emis[0] = emis[1] = emis[2] = 0.0f;
+    const MatGraph* g = pm ? pm->graph : NULL;
+    if (!g) return;
+    int out = -1;
+    for (int i = 0; i < g->node_count; i++)
+        if (g->nodes[i].type == NODE_OUTPUT_MATERIAL) out = i;
+    int li = out >= 0 ? follow_link(g, mat_graph_input_link(g, out, 0)) : -1;
+    for (int k = 0; k < 2 && li >= 0; k++) // (through the Interior Mapping and the Wet Surface)
+        if (g->nodes[g->links[li].from].type == NODE_RE_INTERIOR || g->nodes[g->links[li].from].type == NODE_RE_WET)
+            li = follow_link(g, mat_graph_input_link(g, g->links[li].from, 0));
+    if (li < 0) return;
+    int p = g->links[li].from, t = g->nodes[p].type;
+    float v[4], s[4];
+    if (t == NODE_BSDF_PRINCIPLED) {
+        ph_input(g, p, 0, inst, v, 0), memcpy(base, v, 12);
+        ph_input(g, p, 1, inst, v, 0), *metal = v[0];
+        ph_input(g, p, 2, inst, v, 0), *rough = v[0];
+        ph_input(g, p, 26, inst, v, 0), ph_input(g, p, 27, inst, s, 0);
+        for (int k = 0; k < 3; k++) emis[k] = v[k] * s[0];
+    } else if (t == NODE_EMISSION || t == NODE_BACKGROUND) {
+        ph_input(g, p, 0, inst, v, 0), ph_input(g, p, 1, inst, s, 0);
+        for (int k = 0; k < 3; k++) emis[k] = v[k] * s[0], base[k] = 0.0f;
+    } else if (t == NODE_BSDF_DIFFUSE || t == NODE_BSDF_GLOSSY) {
+        ph_input(g, p, 0, inst, v, 0), memcpy(base, v, 12);
+        if (t == NODE_BSDF_GLOSSY) *metal = 1.0f;
+    }
+    float ei = pm->emission_intensity, pv[4];
+    if (ph_param(inst, MAT_EMISSION_INTENSITY, pv)) ei = pv[0];
+    for (int k = 0; k < 3; k++) {
+        base[k] = base[k] < 0.0f ? 0.0f : base[k] > 1.0f ? 1.0f : base[k];
+        emis[k] = emis[k] > 0.0f ? emis[k] * (ei > 0.0f ? ei : 0.0f) : 0.0f;
+    }
+    *metal = *metal < 0.0f ? 0.0f : *metal > 1.0f ? 1.0f : *metal;
+    *rough = *rough < 0.045f ? 0.045f : *rough > 1.0f ? 1.0f : *rough;
+}
+// a slot as the placeholder of m (its constants)
+static void ph_write(uint32_t slot, const Material* m) {
+    if (!slot || slot >= MAT_GPU_SLOTS || !M.ph_tex[0] || !m) return;
+    float base[3], metal, rough, emis[3];
+    ph_estimate(m, base, &metal, &rough, emis);
+    GpuMatAff A = { { 0, 0, 0, 0 }, { base[0], base[1], base[2], metal }, { 0, 0, 0, 0 }, { emis[0], emis[1], emis[2], rough } };
+    memcpy(aff_block(slot), &A, sizeof A);
+    memset(&((GpuMatExt*)((uint8_t*)M.materials.mapped + sizeof(GpuMaterial) * MAT_GPU_SLOTS))[slot], 0, sizeof(GpuMatExt));
+    GpuMaterial gl;
+    memset(&gl, 0, sizeof gl);
+    gl.tex_base = M.ph_tex[0], gl.tex_nrm = M.ph_tex[1], gl.tex_emis = M.ph_tex[2];
+    const Material* pm = m->instance && m->parent ? m->parent : m;
+    gl.flags = MATF_AFFINE | (emis[0] + emis[1] + emis[2] > 0.0f ? MATF_EMISSIVE : 0u) | (pm->two_sided ? MATF_TWO_SIDED : 0u);
+    memcpy(gl.avg, base, 12);
+    gl.uv_scale = 1.0f;
+    memcpy(&((GpuMaterial*)M.materials.mapped)[slot], &gl, sizeof gl);
+    g_ph_slot[slot] = true;
+    memcpy(g_ph_base[slot], base, 12);
+    memcpy(g_slot_emis[slot], emis, 12);
+}
+// the placeholders of the materials and instances not compiled yet (their actors point to them: the scene sent again)
+static void ph_pass(void) {
+    for (uint32_t i = 0; i < M.n && M.ph_tex[0]; i++) {
+        Material* m = M.mats[i];
+        if (!m) continue;
+        if (!m->instance) {
+            Compiled* c = &M.comp[i];
+            if (!c->valid && c->v.slot && g_ph_slot[c->v.slot] && m->dirty && m->graph) { // (edited before its first bake: its colors again)
+                ph_write(c->v.slot, m);
+                memcpy(m->avg_base, g_ph_base[c->v.slot], 12), memcpy(m->avg_emis, g_slot_emis[c->v.slot], 12);
+                continue;
+            }
+            if (c->valid || c->v.slot || !m->graph) continue;
+            c->v.slot = slot_alloc();
+            if (!c->v.slot) continue;
+            m->slot = c->v.slot, c->ph = true;
+            ph_write(c->v.slot, m);
+            memcpy(m->avg_base, g_ph_base[c->v.slot], 12), memcpy(m->avg_emis, g_slot_emis[c->v.slot], 12);
+            M.resend = true;
+        } else if (g_inst_var[i].slot && g_ph_slot[g_inst_var[i].slot] && m->dirty && m->parent) {
+            ph_write(g_inst_var[i].slot, m); // (its values edited before its first bake)
+        } else if (!g_inst_var[i].slot && m->parent) {
+            g_inst_var[i].slot = slot_alloc();
+            if (!g_inst_var[i].slot) continue;
+            m->slot = g_inst_var[i].slot;
+            ph_write(m->slot, m);
+            M.resend = true;
+        }
+    }
+}
+static void mat_placeholders(void) {
+    if (M.ready) ph_pass();
+}
+// the material a variant is of (its placeholder's constants)
+static const Material* variant_material(const Variant* v, const Compiled* c) {
+    if (v == &c->v) return M.mats[c - M.comp];
+    if (v >= g_inst_var && v < g_inst_var + MAT_MAX_ASSETS) return M.mats[v - g_inst_var];
+    if (v >= &M.dyn[0].v && v <= &M.dyn[MAT_MAX_DYNAMIC - 1].v) return ((const Dyn*)((const uint8_t*)v - offsetof(Dyn, v)))->m;
+    return NULL;
+}
+static void ph_textures(void) { // white, a flat normal (roughness and metallic from the block), black
+    const VkClearColorValue col[3] = { { { 1, 1, 1, 1 } }, { { 0.5f, 0.5f, 1.0f, 0.0f } }, { { 0, 0, 0, 0 } } };
+    const VkFormat fm[3] = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT };
+    for (int k = 0; k < 3; k++) {
+        M.ph_tex[k] = tex_create(4, 4, fm[k]);
+        if (!M.ph_tex[k]) continue;
+        VkCommandBuffer cmd = gpu_begin_once(M.vk);
+        VkImageSubresourceRange r = { VK_IMAGE_ASPECT_COLOR_BIT, 0, M.tex[M.ph_tex[k]].mips, 0, 1 };
+        vkCmdClearColorImage(cmd, M.tex[M.ph_tex[k]].image, VK_IMAGE_LAYOUT_GENERAL, &col[k], 1, &r);
+        gpu_barrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+        gpu_end_once(M.vk, cmd);
+    }
 }
 
 // a half float (the emission texture's texel) as a float
@@ -1251,17 +1636,197 @@ static float mg_half(uint16_t h) {
 // (2026-11-24, report #180: an actor vanished while its material's values were dragged) a material being edited bakes
 // into RGBA8 and stays there: each edit reuses the same textures instead of new 4096 ones and a BC7 swap (VRAM churn
 // until an allocation failed and the material went invalid); compressed once its editing stops (mat_update)
-static bool comp_live(const Compiled* c) {
+// (2026-11-24) a Material Instance being edited too (its own variant: its live_until; before, only its parent's counted)
+static bool comp_live(const Compiled* c, const Variant* v) {
+    double now = re_time_seconds();
+    if (v >= g_inst_var && v < g_inst_var + MAT_MAX_ASSETS) {
+        Material* im = M.mats[v - g_inst_var];
+        if (im && now < im->live_until) return im->bc7_pending = true, true;
+    }
     uint32_t i = (uint32_t)(c - M.comp);
-    if (i >= M.n || !M.mats[i] || re_time_seconds() >= M.mats[i]->live_until) return false;
+    if (i >= M.n || !M.mats[i] || now >= M.mats[i]->live_until) return false;
     M.mats[i]->bc7_pending = true;
+    return true;
+}
+
+// (2026-11-24) The avg readbacks of the frame's bakes: read once the frame that copied them is done (the GI's and the
+// emissive light's means stay the old ones until then)
+#define RB_MAX 64
+static struct { GpuBuf b; uint32_t slot; uint64_t at; bool emis; } g_rb[RB_MAX];
+static uint32_t g_nrb;
+// the variant a slot draws as its own (a material's, an instance's, an actor's), its compiled material and its asset
+static Variant* variant_of_slot(uint32_t slot, const Compiled** pc, Material** pm) {
+    for (uint32_t i = 0; i < M.n && slot; i++) {
+        if (M.comp[i].v.slot == slot && M.comp[i].valid) return *pc = &M.comp[i], *pm = M.mats[i], &M.comp[i].v;
+        if (g_inst_var[i].slot == slot && M.mats[i]->instance) {
+            *pc = compiled_of(M.mats[i]), *pm = M.mats[i];
+            return *pc ? &g_inst_var[i] : NULL;
+        }
+    }
+    for (uint32_t i = 0; i < M.ndyn && slot; i++)
+        if (M.dyn[i].v.slot == slot) {
+            *pc = compiled_of(M.dyn[i].m), *pm = NULL;
+            return *pc ? &M.dyn[i].v : NULL;
+        }
+    return NULL;
+}
+static void rb_resolve(bool all) {
+    uint64_t fn = M.vk->frame_number;
+    for (uint32_t i = 0; i < g_nrb;) {
+        if (!all && g_rb[i].at > fn) {
+            i++;
+            continue;
+        }
+        const Compiled* c = NULL;
+        Material* m = NULL;
+        Variant* v = variant_of_slot(g_rb[i].slot, &c, &m);
+        if (v && v->own) {
+            const uint8_t* px = g_rb[i].b.mapped;
+            for (int k = 0; k < 3; k++) {
+                float s = px[k] / 255.0f;
+                v->avg[k] = s <= 0.04045f ? s / 12.92f : powf((s + 0.055f) / 1.055f, 2.4f);
+            }
+            const uint16_t* he = (const uint16_t*)(px + 8);
+            for (int k = 0; k < 3; k++) v->avg_emis[k] = g_rb[i].emis ? fmaxf(mg_half(he[k]), 0.0f) : 0.0f;
+            write_slot(v, c);
+            if (m) slot_avgs(v, c, m->avg_base, m->avg_emis);
+        }
+        gpu_buf_destroy(M.vk, &g_rb[i].b);
+        g_rb[i] = g_rb[--g_nrb];
+    }
+}
+
+// (2026-11-24) A bake recorded into the frame's command buffer (M.fcmd): no wait. Always new textures (the old ones
+// buried: a frame in flight may read them; the same queue orders the rest: a barrier's first scope covers what ran
+// before it), their mips, BC7 when it isn't being edited; edited (live), at most 256 square and then climbing to its full
+// size in tiles over the next frames (the streaming's job: S.force). The mean colors read back a few frames later
+// (rb_resolve). False: no room for its textures (the old ones stay drawn)
+#define MAT_FIRST_RES 64u
+// (2026-11-24) the frame bakes whose textures wait for their frame to be done (then swapped into the slots: pend_resolve)
+static struct { Variant* v; const Compiled* c; } g_pend[256];
+static uint32_t g_npend;
+static void pend_drop(Variant* v) { // (a bake or a free of it: its pending textures never shown, buried)
+    if (!v->pend_at) return;
+    st_bury(v->pend);
+    memset(v->pend, 0, sizeof v->pend);
+    v->pend_at = 0;
+}
+static void pend_resolve(bool all) {
+    uint64_t fn = M.vk->frame_number;
+    for (uint32_t i = 0; i < g_npend;) {
+        Variant* v = g_pend[i].v;
+        if (v->pend_at && !all && fn < v->pend_at) {
+            i++;
+            continue;
+        }
+        if (v->pend_at) {
+            st_bury(v->tex); // (the old ones: a frame in flight may still read them)
+            memcpy(v->tex, v->pend, sizeof v->tex);
+            memset(v->pend, 0, sizeof v->pend);
+            v->pend_at = 0;
+            v->own = true;
+            st_share(g_pend[i].c, v);
+            write_slot(v, g_pend[i].c);
+        }
+        g_pend[i] = g_pend[--g_npend];
+    }
+}
+
+// (2026-11-24) A bake recorded into the frame's command buffer (M.fcmd): no wait. Always new textures, swapped into the
+// slots only once that frame is done (as the streaming's jobs: a frame in flight reads the old ones whole); their mips,
+// BC7 when it isn't being edited; edited (live), at most 256 square and then climbing to its full size in tiles over the
+// next frames (the streaming's job: S.force). The mean colors read back a few frames later (rb_resolve). False: no room
+// for its textures (the old ones stay drawn)
+static bool bake_variant_frame(const Compiled* c, Variant* v) {
+    VkCommandBuffer cmd = M.fcmd;
+    bool live = comp_live(c, v), emis = (c->flags & MATF_EMISSIVE) != 0;
+    uint32_t res = stream_res(c, v);
+    int asset = v == &c->v ? (int)(c - M.comp) : v >= g_inst_var && v < g_inst_var + MAT_MAX_ASSETS ? (int)(v - g_inst_var) : -1;
+    bool climb = false;
+    if (live && res > ST_MIN && asset >= 0 && st_streamable(c, v)) res = ST_MIN, climb = true;
+    // (2026-11-24) its first bake (the placeholder shown): 64 square, then climbing in steps (64, 256, 1024, 4096) like
+    // Unreal's mip streaming; MAT_FIRST_RES the size
+    static int first_full = -1; // (REALENGINE_FIRST_FULL: the first bake at its full size, the comparison)
+    if (first_full < 0) first_full = getenv("REALENGINE_FIRST_FULL") != NULL;
+    if (!first_full && !v->tex[0] && asset >= 0 && st_streamable(c, v) && res > MAT_FIRST_RES) res = MAT_FIRST_RES, climb = true;
+    pend_drop(v);
+    VkFormat fm[3] = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT };
+    uint32_t t[3] = { 0, 0, 0 };
+    for (int k = 0; k < 3; k++) {
+        if (k == 2 && !emis) continue;
+        t[k] = tex_create_in(cmd, res, res, fm[k]);
+        if (!t[k]) {
+            st_bury(t);
+            return false;
+        }
+    }
+    mip_buf_reserve(res, emis);
+    gpu_barrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, M.bake);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, M.layout, 0, 1, &M.set, 0, NULL);
+    BakePush p = { M.programs.addr, M.params.addr + (VkDeviceAddress)v->param_off * 16u, c->bake_off, c->bake_len, res, res,
+                   t[0], t[1], t[2], c->flags, { 0, 0, 0, 0 } };
+    p.udim = M.params.addr, p.uv_off[0] = v->uv_off[0], p.uv_off[1] = v->uv_off[1];
+    vkCmdPushConstants(cmd, M.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof p, &p);
+    vkCmdDispatch(cmd, (res + 7) / 8, (res + 7) / 8, 1);
+    gpu_barrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_MEMORY_READ_BIT);
+    for (int k = 0; k < 3; k++)
+        if (t[k]) tex_mips_hq(cmd, t[k], k == 0, true);
+    gpu_barrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+    if (g_nrb < RB_MAX && v->slot) { // the means: the smallest mips copied, read a few frames later (after the swap)
+        GpuBuf* rb = &g_rb[g_nrb].b;
+        memset(rb, 0, sizeof *rb);
+        if (gpu_buf_create(M.vk, rb, 16, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
+            const MatTex* tb = &M.tex[t[0]];
+            VkBufferImageCopy r = { 0, 0, 0, { VK_IMAGE_ASPECT_COLOR_BIT, tb->mips - 1, 0, 1 }, { 0, 0, 0 }, { 1, 1, 1 } };
+            vkCmdCopyImageToBuffer(cmd, tb->image, VK_IMAGE_LAYOUT_GENERAL, rb->buffer, 1, &r);
+            if (t[2]) {
+                const MatTex* te = &M.tex[t[2]];
+                VkBufferImageCopy re = { 8, 0, 0, { VK_IMAGE_ASPECT_COLOR_BIT, te->mips - 1, 0, 1 }, { 0, 0, 0 }, { 1, 1, 1 } };
+                vkCmdCopyImageToBuffer(cmd, te->image, VK_IMAGE_LAYOUT_GENERAL, rb->buffer, 1, &re);
+            }
+            g_rb[g_nrb].slot = v->slot, g_rb[g_nrb].emis = t[2] != 0, g_rb[g_nrb].at = M.vk->frame_number + RE_FRAMES_IN_FLIGHT + 1;
+            g_nrb++;
+        }
+    }
+    for (int k = 0; k < 2 && bc7_on() && !live; k++) { // (the color and the normal compressed in this frame too)
+        GpuBuf blk = { 0 };
+        uint32_t n = tex_to_bc7(cmd, t[k], &blk);
+        if (!n) continue;
+        if (!st_bury_buf(blk)) st_drain_submitted(), st_bury_buf(blk); // (the graves full: the earlier frames' freed)
+        st_bury1(t[k]);
+        t[k] = n;
+    }
+    gpu_barrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+    memcpy(v->pend, t, sizeof v->pend);
+    v->pend_at = M.vk->frame_number + RE_FRAMES_IN_FLIGHT;
+    g_pend[g_npend].v = v, g_pend[g_npend].c = c, g_npend++;
+    v->dirty = false;
+    if (climb) S.force[asset] = true;
+    M.stats.frame_bakes++;
+    if (live) M.stats.live_bakes++;
     return true;
 }
 
 // Bakes a variant: its textures (made when missing) from the material's program with the variant's parameter values;
 // the mips; the mean base color (the smallest mip read back: what the GI sees)
 static bool bake_variant(const Compiled* c, Variant* v) {
+    M.bake_calls++; // (2026-11-24: the mat_live_param test counts them)
     stream_cancel(v);
+    // (2026-11-24) in a frame: recorded into its command buffer, no wait (a Masked one's coverage reads its histogram on the
+    // CPU between two submits, a UDIM one's tiles and a flipbook bake as before: the GPU waited for first, as bake() did)
+    static int no_frame = -1;
+    if (no_frame < 0) no_frame = getenv("REALENGINE_SYNC_BAKES") != NULL;
+    // (a variant with nothing to draw meanwhile, its first bake: as before too)
+    const Variant* shown = v->own ? v : share_of(v, c);
+    if (M.fcmd && S.on && !no_frame && !(c->flags & (MATF_MASKED | MATF_UDIM)) && !c->animated && !v->ud_tile && !ud_on(c) &&
+        (shown->tex[0] || (v->slot && g_ph_slot[v->slot])) &&
+        g_npend < 256)
+        return bake_variant_frame(c, v);
+    if (M.fcmd) vkDeviceWaitIdle(M.vk->device); // (the old path reuses its textures in place: no frame may read them)
+    pend_drop(v); // (2026-11-24: a frame bake still waiting: never shown)
     if (!v->ud_tile) ud_master_origin(c, v); // (Q18: a UDIM material's own variant is its first tile)
     uint32_t res = stream_res(c, v); // (its full resolution, unless the streaming budget is short)
     int udim = ud_on(c) ? udim_of_uv(v->uv_off[0] + 0.5f, v->uv_off[1] + 0.5f) : 0, src_udim = udim ? udim : ud_lone(c);
@@ -1303,7 +1868,7 @@ static bool bake_variant(const Compiled* c, Variant* v) {
     // histogram between); 400 materials of 4096 took 6.8 s with a submit each, 2.8 s without BC7
     uint32_t bcn[2] = { 0, 0 };
     GpuBuf bcb[2] = { { 0 }, { 0 } };
-    bool live = comp_live(c); // (#180: edited now: RGBA8 until it stops)
+    bool live = comp_live(c, v); // (#180: edited now: RGBA8 until it stops)
     for (int k = 0; k < 2 && bc7_on() && !live && !(c->flags & MATF_MASKED); k++)
         if (v->tex[k]) bcn[k] = tex_to_bc7(cmd, v->tex[k], &bcb[k]);
     if (readback) {
@@ -1332,7 +1897,8 @@ static bool bake_variant(const Compiled* c, Variant* v) {
         gpu_buf_destroy(M.vk, &bcb[k]);
         if (bcn[k]) st_bury1(v->tex[k]), v->tex[k] = bcn[k], swapped = true;
     }
-    if (swapped) st_share(c, v); // (no slot keeps a buried one)
+    st_share(c, v); // (no slot keeps a buried one: new textures or the BC7 ones; 2026-11-24: the slots sharing it too)
+    (void)swapped;
     if (c->flags & MATF_MASKED) alpha_coverage_mips(v->tex[0], c->flags >> 24); // (the cut's coverage kept in the mips)
     if (!live) variant_bc7(c, v); // (a Masked one's, after its coverage: a quarter of the memory)
     v->dirty = false;
@@ -1541,9 +2107,29 @@ static bool interior_ext(const MatGraph* g, Ir* ir, float ext[13][4]) {
     return true;
 }
 
+// (2026-11-24) what the renderer reads of a material when it sends its instances (its runs: Masked, Translucent, RE_EXT,
+// Toon, subsurface, refraction, tessellation, its glow): a bake that keeps it and the slot needs no resend of the scene
+// (the slot's textures and values are written in place; before, every bake resent every instance: ~9 ms a frame while a
+// value was dragged)
+static uint64_t mat_class_sig(const Material* m, const Compiled* c) {
+    uint64_t s = (uint64_t)(c->flags & 0x00FFFFFFu) | (uint64_t)m->blend_mode << 24 | (uint64_t)m->shading_model << 28 | (uint64_t)c->v.slot << 32;
+    s ^= (uint64_t)(m->ext_lobes | m->wet << 1 | m->interior << 2 | m->subsurface << 3 | m->transmissive << 4 | m->parallax << 5 | m->tess_active << 6 |
+                    m->two_sided << 7 | (m->vcol & 3) << 8) << 52;
+    return s;
+}
+
+static bool bake_compiled(Material* m, int mi);
 static bool bake(Material* m) {
     int mi = mat_index(m);
     if (mi < 0 || !m->graph) return false;
+    uint64_t cls0 = mat_class_sig(m, &M.comp[mi]);
+    bool had = M.comp[mi].valid;
+    bool r = bake_compiled(m, mi);
+    if (!had || mat_class_sig(m, &M.comp[mi]) != cls0) M.resend = true;
+    return r;
+}
+
+static bool bake_compiled(Material* m, int mi) {
     double t0 = re_time_seconds();
     static Ir ir;
     Built b;
@@ -1556,11 +2142,16 @@ static bool bake(Material* m) {
         free(b.run.w);
         return false;
     }
-    vkDeviceWaitIdle(M.vk->device); // the old textures may still be read by a frame
-    stream_cancel(NULL); // (the program buffer may move: a transition in flight is dropped)
-    st_drain(true);
-    S.hstale = true;
+    // (2026-11-24) the frame's bakes don't wait: the old textures are buried (st_bury: freed when no frame in flight reads
+    // them), the old program too (prog_place), the bake recorded into the frame's command buffer (bake_variant); an
+    // explicit call (the loading screen, the tests) waits as before
+    if (!M.fcmd) vkDeviceWaitIdle(M.vk->device);
     Compiled* c = &M.comp[mi];
+    // (a transition of its variants in flight is dropped: it would bake its next tiles with the new program; the old
+    // program is buried, not overwritten. A UDIM tile's job: dropped too)
+    if (!M.fcmd || (S.job.asset >= 0 && (S.job.c == c || S.job.asset >= UD_JOB))) stream_cancel(NULL);
+    if (!M.fcmd) st_drain(true), prog_drain(true);
+    S.hstale = true;
     c->res = (uint32_t)(m->resolution >= 64 && m->resolution <= 4096 ? m->resolution : 1024);
     c->flags = (b.emissive ? MATF_EMISSIVE : 0u) | (m->world_grid ? MATF_WORLD_GRID : 0u) | (m->two_sided ? MATF_TWO_SIDED : 0u);
     if (m->world_aligned) c->flags |= MATF_WORLD_UV; // (its tile: write_slot puts it in the uv scale)
@@ -1586,11 +2177,11 @@ static bool bake(Material* m) {
         c->ext[1][0] = c->ext[1][1] = c->ext[1][2] = 1.0f, c->ext[1][3] = 0.0f;
         c->ext[2][0] = c->ext[2][1] = c->ext[2][2] = 0.0f;
         c->ext[7][0] = m->eye_iris_radius > 0.01f ? m->eye_iris_radius : 0.25f;
-        c->ext[7][1] = m->eye_iris_depth >= 0.0f ? (m->eye_iris_depth > 2.0f ? 2.0f : m->eye_iris_depth) : 0.25f;
+        c->ext[7][1] = mat_pack_iris_depth(m->eye_iris_depth); // (2026-11-25, item 20: no top, a float)
         c->flags |= MATF_EYE;
         m->ext_lobes = true;
         if (m->eye_glow > 0.0f) { // (Q13) Eye Glow in e5.w (mesh.frag g_retro): its strength x16 in the top bits, RGB565 below
-            uint32_t k = (uint32_t)fminf(m->eye_glow * 16.0f + 0.5f, 255.0f), cr[3];
+            uint32_t k = mat_pack_glow8(m->eye_glow), cr[3]; // (8 bits: the field stops at MAT_GLOW8_MAX)
             const uint32_t mx[3] = { 31u, 63u, 31u };
             for (int i = 0; i < 3; i++) cr[i] = (uint32_t)(fminf(fmaxf(m->eye_glow_color[i], 0.0f), 1.0f) * (float)mx[i] + 0.5f);
             c->ext[5][3] = (float)(k << 16 | cr[0] << 11 | cr[1] << 5 | cr[2]);
@@ -1600,14 +2191,15 @@ static bool bake(Material* m) {
     // metallic flakes in e12 (mesh.frag flake_glint): the lobes' pipelines
     c->ext[12][0] = c->ext[12][1] = c->ext[12][2] = c->ext[12][3] = 0.0f;
     if (m->shading_model != MAT_SHADING_EYE && m->shading_model != MAT_SHADING_TOON && m->retro > 0.0f) {
-        uint32_t k = (uint32_t)fminf(m->retro * 16.0f + 0.5f, 255.0f), cr[3];
+        uint32_t k = mat_pack_glow8(m->retro), cr[3]; // (8 bits: the field stops at MAT_GLOW8_MAX)
         const uint32_t mx[3] = { 31u, 63u, 31u };
         for (int i = 0; i < 3; i++) cr[i] = (uint32_t)(fminf(fmaxf(m->retro_color[i], 0.0f), 1.0f) * (float)mx[i] + 0.5f);
         c->ext[5][3] = (float)(k << 16 | cr[0] << 11 | cr[1] << 5 | cr[2]);
         m->ext_lobes = true;
     }
     if (m->shading_model != MAT_SHADING_TOON && m->flakes > 0.0f) {
-        c->ext[12][0] = fminf(m->flakes, 4.0f), c->ext[12][1] = fmaxf(m->flake_size, 0.002f), c->ext[12][2] = fminf(fmaxf(m->flake_spread, 0.0f), 1.0f);
+        c->ext[12][0] = mat_pack_flakes(m->flakes), c->ext[12][1] = mat_pack_flake_size(m->flake_size), // (2026-11-25: no top)
+            c->ext[12][2] = fminf(fmaxf(m->flake_spread, 0.0f), 1.0f);
         m->ext_lobes = true;
     }
     c->toon = m->toon; // (Q11) its toon and outline values (its slots' blocks: write_slot)
@@ -1668,7 +2260,7 @@ static bool bake(Material* m) {
     }
     if (c->xflags & MATX_LAYERS) c->xflags &= ~MATX_LOBES; // (a landscape's layers take e3 / e5: its own extra lobes off)
     c->ext[6][1] = m->detail_tiling > 0.01f ? m->detail_tiling : 8.0f;
-    c->ext[6][2] = m->detail_strength < 0.0f ? 0.0f : m->detail_strength > 4.0f ? 4.0f : m->detail_strength;
+    c->ext[6][2] = mat_pack_detail(m->detail_strength); // (2026-11-25, item 20: no top, a float)
     // M7: parallax occlusion (the Displacement baked into the base's alpha), its depth and most steps in e7
     // (Q17) Nanite Tessellation in its place: the same height moves its DAG clusters' surface for real (tess.glsl), the
     // magnitude and center in GpuMaterial.anim[2] (two halfs; anim[3] is the UDIM's table); an opaque still one (a flipbook's height changes per frame)
@@ -1688,15 +2280,34 @@ static bool bake(Material* m) {
     if ((c->flags & MATF_TRANSLUCENT) && m->refraction > 0.0f && !(c->flags & (MATF_POM | MATF_EYE)) && !m->subsurface) {
         c->flags |= MATF_REFRACT;
         c->ext[7][0] = m->refr_thickness > 0.0f ? (m->refr_thickness > 200.0f ? 200.0f : m->refr_thickness) : 0.0f;
-        c->ext[7][1] = m->dispersion < 0.0f ? 0.0f : m->dispersion > 1.0f ? 1.0f : m->dispersion;
-        c->ext[7][2] = m->refraction > 4.0f ? 4.0f : m->refraction;
+        c->ext[7][1] = mat_pack_dispersion(m->dispersion); // (2026-11-25, item 20: no top, floats)
+        c->ext[7][2] = mat_pack_refraction(m->refraction);
     }
-    // the bake program into the program buffer (append; a full buffer starts over)
-    if (M.prog_used + b.bake.n > MAT_PROG_WORDS) M.prog_used = 0;
-    c->bake_off = M.prog_used;
-    c->bake_len = b.bake.n;
-    if (b.bake.n) memcpy((uint32_t*)M.programs.mapped + c->bake_off, b.bake.w, b.bake.n * 4);
-    M.prog_used += b.bake.n;
+    // (2026-11-24) an edit that leaves the bake as it was (the same program, flags and size, the same values of the parameters
+    // the bake reads: a live parameter's value, the Emission Intensity, a value of the Material Editor's that folds): its
+    // slots written, no bake. Only while it is being edited (outside the editor every compile bakes, as before)
+    uint64_t sig = 1469598103934665603ull;
+    {
+        const uint32_t* w = b.bake.w;
+        for (uint32_t i = 0; i < b.bake.n; i++) sig = (sig ^ w[i]) * 1099511628211ull;
+        uint32_t hd[4] = { c->flags, c->res, c->xflags, (uint32_t)ir.nparams };
+        for (int i = 0; i < 4; i++) sig = (sig ^ hd[i]) * 1099511628211ull;
+        for (int i = 0; i < ir.nparams; i++) {
+            if (!(b.aff.bake_mask & (1u << (i & 31)))) continue;
+            const uint32_t* u = (const uint32_t*)ir.pdef[i]; // (a material's values are its nodes': the list below)
+            for (int k = 0; k < 4; k++) sig = (sig ^ u[k]) * 1099511628211ull;
+        }
+    }
+    bool same = c->valid && c->bake_sig == sig && c->v.tex[0] && c->v.own && !c->animated && !(c->flags & MATF_UDIM) &&
+                re_time_seconds() < m->live_until && !getenv("REALENGINE_NO_LIVE_SKIP");
+    c->bake_sig = sig;
+    c->aff = b.aff, c->emis_param = b.emis_param;
+    // the bake program into the program buffer (its own place; the old one buried for the bakes in flight)
+    if (!same && !prog_place(c, b.bake.w, b.bake.n)) {
+        snprintf(m->error, sizeof m->error, "%s", "material programs full");
+        free(b.bake.w), free(b.run.w);
+        return false;
+    }
     c->nparams = ir.nparams;
     for (int i = 0; i < ir.nparams; i++) {
         snprintf(c->pnames[i], MAT_NAME, "%s", ir.pnames[i]);
@@ -1714,10 +2325,27 @@ static bool bake(Material* m) {
         q->kind = 1;
         for (int k = 0; k < nkeep; k++)
             if (!strcmp(keep[k].name, q->name)) q->kind = keep[k].kind;
+        if (!strcmp(q->name, MAT_EMISSION_INTENSITY)) q->kind = 0; // (2026-11-25: a scalar; it was listed as a color)
     }
     if (!c->v.slot) c->v.slot = slot_alloc();
-    c->v.param_off = params_alloc((uint32_t)c->nparams);
+    params_need(&c->v.param_off, &c->v.param_cap, (uint32_t)c->nparams);
     fill_params(c->v.param_off, c, m, NULL);
+    if (same) { // (2026-11-24) the slots only: the material's, its instances', the actors' (their values against the new defaults)
+        c->valid = true;
+        m->slot = c->v.slot;
+        write_slot(&c->v, c);
+        slot_avgs(&c->v, c, m->avg_base, m->avg_emis);
+        for (uint32_t j = 0; j < M.n; j++)
+            if (M.mats[j]->instance && M.mats[j]->parent == m) M.mats[j]->dirty = true, M.any_dirty = true; // (update_instance: no bake when only live values differ)
+        for (uint32_t j = 0; j < M.ndyn; j++)
+            if (compiled_of(M.dyn[j].m) == c) write_slot(&M.dyn[j].v, c);
+        m->bake_ms = (re_time_seconds() - t0) * 1000.0;
+        m->ninstr = (uint32_t)b.ninstr, m->nstatic = (uint32_t)b.nstatic;
+        M.stats.live_writes++;
+        free(b.bake.w);
+        free(b.run.w);
+        return true;
+    }
     // animated: frame k bakes with __time = k / frames of the period (frame 0 is the material's own variant)
     int time_param = -1;
     for (int i = 0; i < c->nparams; i++)
@@ -1733,7 +2361,7 @@ static bool bake(Material* m) {
         uint32_t nf = (uint32_t)(m->anim_frames >= 2 && m->anim_frames <= MAT_ANIM_MAX ? m->anim_frames : 16);
         c->res = (uint32_t)(m->anim_res >= 64 && m->anim_res <= 2048 ? m->anim_res : 512);
         c->period = ir.anim_period > 0.05f ? ir.anim_period : 2.0f;
-        c->table_off = params_alloc(nf);
+        params_need(&c->table_off, &c->table_cap, nf);
         c->time_param = time_param;
         // frame 0 now (shown still); the rest a few per editor frame (anim_continue: 16 frames took 65-130 ms at once)
         param_vals()[c->v.param_off + (uint32_t)time_param][0] = 0.0f;
@@ -1755,9 +2383,8 @@ static bool bake(Material* m) {
     (void)still_res;
     c->valid = ok || c->v.tex[0] != 0; // (#180: a bake that couldn't get its textures keeps the last result drawn)
     m->slot = c->v.slot;
-    memcpy(m->avg_base, c->v.avg, sizeof m->avg_base);
-    memcpy(m->avg_emis, c->v.avg_emis, sizeof m->avg_emis);
     write_slot(&c->v, c);
+    slot_avgs(&c->v, c, m->avg_base, m->avg_emis); // (2026-11-24: through its coefficients)
     m->bake_ms = (re_time_seconds() - t0) * 1000.0;
     m->ninstr = (uint32_t)b.ninstr, m->nstatic = (uint32_t)b.nstatic, m->ndynamic = 0, m->nslots = 0;
     M.stats.bake_ms_total += m->bake_ms;
@@ -1777,19 +2404,30 @@ static void update_instance(Material* m) {
     Compiled* c = &M.comp[pi];
     Variant* v = &g_inst_var[mi];
     if (!v->slot) v->slot = slot_alloc();
+    if (m->slot != v->slot) M.resend = true; // (2026-11-24: its actors point to a new slot)
+    bool own = false;
     if (c->nparams > 0) {
-        v->param_off = params_alloc((uint32_t)c->nparams);
+        params_need(&v->param_off, &v->param_cap, (uint32_t)c->nparams);
         fill_params(v->param_off, c, p, m);
-        bake_variant(c, v);
-    } else {
+        // (2026-11-24) its own textures only when a value the bake reads differs from its parent's: the others (the affine
+        // fold's, the Emission Intensity, the Wet Surface's...) are its slot's coefficients and parameters
+        const float(*pv)[4] = (const float(*)[4])param_vals();
+        for (int k = 0; k < c->nparams && !own; k++)
+            own = (c->aff.bake_mask & (1u << (k & 31))) && memcmp(pv[v->param_off + (uint32_t)k], pv[c->v.param_off + (uint32_t)k], 16);
+    }
+    if (own) bake_variant(c, v);
+    else {
+        bool had = v->own;
         variant_free(v);
         memcpy(v->avg, c->v.avg, sizeof v->avg);
         memcpy(v->avg_emis, c->v.avg_emis, sizeof v->avg_emis);
+        if (had) // (its actors' instances that drew with its textures: the parent's now)
+            for (uint32_t i = 0; i < M.ndyn; i++)
+                if (M.dyn[i].m == m && !M.dyn[i].v.own) write_slot(&M.dyn[i].v, c);
     }
     m->slot = v->slot;
-    memcpy(m->avg_base, v->own ? v->avg : c->v.avg, sizeof m->avg_base);
-    memcpy(m->avg_emis, v->own ? v->avg_emis : c->v.avg_emis, sizeof m->avg_emis);
     write_slot(v, c);
+    slot_avgs(v, c, m->avg_base, m->avg_emis);
     S.hstale = true; // (its own textures or its parent's: where its need goes)
 }
 
@@ -1989,14 +2627,47 @@ bool mat_update(VkCtx* vk, VkCommandBuffer cmd) {
     (void)vk;
     if (!M.ready) return false;
     if (M.any_detail) detail_follow();
+    if (cmd) pend_resolve(false), rb_resolve(false); // (2026-11-24: the frame bakes' textures swapped in, their means, their frames done)
+    { // (2026-11-24) REALENGINE_MAT_EDIT_BENCH=1: a material of the scene edited every frame as the Material Editor does
+      // while a color is dragged (a constant: a real bake each time), the measure of an edit's cost in a frame
+        static int eb = -1;
+        static double eb_t;
+        if (eb < 0) eb = getenv("REALENGINE_MAT_EDIT_BENCH") != NULL;
+        for (uint32_t i = 0; eb && cmd && i < M.n; i++) {
+            Material* m = M.mats[i];
+            if (m->instance || !m->graph || !M.comp[i].valid || M.comp[i].animated || (M.comp[i].flags & (MATF_MASKED | MATF_UDIM)) || m->resolution < 1024) continue;
+            for (int n = 0; n < m->graph->node_count; n++)
+                if (m->graph->nodes[n].type == NODE_BSDF_PRINCIPLED && mat_graph_input_link(m->graph, n, 1) < 0) { // (its Metallic)
+                    eb_t += 0.01;
+                    m->graph->nodes[n].in[1][0] = 0.5f + 0.5f * sinf((float)eb_t);
+                    m->live_until = re_time_seconds() + 2.5;
+                    mat_mark_dirty(m);
+                    break;
+                }
+            break;
+        }
+    }
     // a frame's (the editor with its workers): a few at a time; an explicit call or the game's: all of them now
-    bool changed = M.any_dirty && mat_update_dirty(!cmd || !async_ready());
+    // (2026-11-24) a frame's bakes recorded into its command buffer (M.fcmd: bake_variant_frame), no wait
+    M.fcmd = cmd;
+    ph_pass(); // (2026-11-24: a material loaded without a slot yet: its placeholder)
+    bool delay = cmd && M.first_delay && (M.first_delay--, true); // (the mat_first_frame test: its first frames without bakes)
+    bool changed = M.any_dirty && !delay && mat_update_dirty(!cmd || !async_ready());
+    if (delay && M.resend) changed = true, M.resend = false;
     for (uint32_t i = 0; i < M.n; i++) // (#180) a material whose editing stopped: its textures compressed now, once
         if (M.mats[i] && M.mats[i]->bc7_pending && re_time_seconds() >= M.mats[i]->live_until && !M.mats[i]->dirty && M.comp[i].valid) {
             M.mats[i]->bc7_pending = false;
-            variant_bc7(&M.comp[i], &M.comp[i].v);
+            // (2026-11-24) baked live at 256: its climb to the full size compresses it (the streaming's job); an
+            // instance's own variant the same way
+            const Variant* bv = M.mats[i]->instance ? &g_inst_var[i] : &M.comp[i].v;
+            if (S.force[i] || (bv->tex[0] && M.tex[bv->tex[0]].format != VK_FORMAT_R8G8B8A8_UNORM)) continue;
+            if (M.mats[i]->instance) {
+                const Compiled* ic = compiled_of(M.mats[i]);
+                if (ic && g_inst_var[i].own) variant_bc7(ic, &g_inst_var[i]);
+            } else variant_bc7(&M.comp[i], &M.comp[i].v);
             changed = true;
         }
+    M.fcmd = VK_NULL_HANDLE;
     // the texture streaming's step for this frame (the frame's command buffer: a tile of a bake, copies or a swap)
     if (cmd) stream_step(cmd);
     else st_drain(false);
@@ -2016,8 +2687,10 @@ static bool anim_continue(bool all, double t0) {
             }
             uint32_t k = c->anim_next++;
             Variant* fv = &c->frames[k];
+            uint32_t po = fv->param_off, pcap = fv->param_cap; // (2026-11-24: its room kept for its next bakes)
             memset(fv, 0, sizeof *fv);
-            fv->param_off = params_alloc((uint32_t)c->nparams);
+            fv->param_off = po, fv->param_cap = pcap;
+            params_need(&fv->param_off, &fv->param_cap, (uint32_t)c->nparams);
             fill_params(fv->param_off, c, m, NULL);
             param_vals()[fv->param_off + (uint32_t)c->time_param][0] = c->period * (float)k / (float)c->anim_total;
             if (!bake_variant(c, fv)) {
@@ -2081,12 +2754,14 @@ static bool mat_update_dirty(bool all) {
     }
     M.stats.materials = M.n;
     M.stats.slots = M.nslots;
+    M.stats.params_free = rh_free_total(&M.pheap), M.stats.prog_free = rh_free_total(&M.gheap); // (2026-11-24)
     // (Q22) changed only when a material or an instance was baked, or an instance's slot changed: the renderer sends
     // every instance again on it (and waits for the GPU to send the meshes' info). "Always" made a level streaming in
     // (its images still decoding: nothing baked, the slice left for later) pay that every frame: world_partition's and
     // pcg_stream's hitches, ~12 ms a frame for ~1.5 s. The flipbooks' frames and the dynamic instances' values are
     // written into their slots in place (their instances point to the same slots)
-    bool changed = baked || M.resend;
+    // (2026-11-24) a frame's bakes: only when a material's class or slot changed (bake: M.resend); explicit calls as before
+    bool changed = (baked && !M.fcmd) || M.resend;
     M.resend = false;
     return changed;
 }
@@ -2103,7 +2778,7 @@ uint32_t mat_dynamic_for(Entity e, Material* m) {
     d->m = m;
     d->v.slot = slot_alloc();
     if (!d->v.slot) return m->slot;
-    d->v.param_off = params_alloc((uint32_t)c->nparams);
+    params_need(&d->v.param_off, &d->v.param_cap, (uint32_t)c->nparams);
     const GpuMaterial* src = &((GpuMaterial*)M.materials.mapped)[m->slot];
     memcpy(param_vals() + d->v.param_off, param_vals() + src->param_off, (size_t)c->nparams * 16);
     memcpy(d->v.avg, m->avg_base, sizeof d->v.avg);
@@ -2125,7 +2800,26 @@ bool mat_set_param(uint32_t slot, const char* name, const float v[4]) {
                 float* dst = param_vals()[d->v.param_off + k];
                 if (!memcmp(dst, v, 16)) return true;
                 memcpy(dst, v, 16);
-                if (k >= c->nbaked) return true; // (2026-11-16: only the Wet Surface reads it, at run time: no bake)
+                M.stats.live_params++;
+                // (2026-11-24) a value the bake doesn't read (the affine fold's, the Emission Intensity, the Wet Surface's,
+                // Transmission's, the Interior's Night: 2026-11-16): its slot's coefficients, no bake
+                if (!(c->aff.bake_mask & (1u << (k & 31)))) {
+                    write_slot(&d->v, c);
+                    return true;
+                }
+                M.stats.live_params--;
+                // one the bake reads: its own textures, unless all those values are its material's again (shared)
+                const GpuMaterial* src = &((GpuMaterial*)M.materials.mapped)[d->m->slot];
+                const float(*pv)[4] = (const float(*)[4])param_vals();
+                bool differs = false;
+                for (int q = 0; q < c->nparams && !differs; q++)
+                    differs = (c->aff.bake_mask & (1u << (q & 31))) && memcmp(pv[d->v.param_off + (uint32_t)q], pv[src->param_off + (uint32_t)q], 16);
+                if (!differs) {
+                    if (d->v.own) variant_free(&d->v);
+                    d->v.dirty = false;
+                    write_slot(&d->v, c);
+                    return true;
+                }
                 d->v.dirty = true; // baked again before the next frame (once, however many values changed)
                 M.any_dirty = true;
                 return true;
@@ -2137,7 +2831,10 @@ bool mat_set_param(uint32_t slot, const char* name, const float v[4]) {
 
 void mat_end_play(void) {
     vkDeviceWaitIdle(M.vk->device);
-    for (uint32_t i = 0; i < M.ndyn; i++) variant_free(&M.dyn[i].v), g_slot_toon_state[M.dyn[i].v.slot % MAT_GPU_SLOTS] = 0; // (Q11)
+    for (uint32_t i = 0; i < M.ndyn; i++) {
+        variant_free(&M.dyn[i].v), g_slot_toon_state[M.dyn[i].v.slot % MAT_GPU_SLOTS] = 0; // (Q11)
+        params_release(&M.dyn[i].v.param_off, &M.dyn[i].v.param_cap); // (2026-11-24: their room given back)
+    }
     M.ndyn = 0;
     M.any_dirty = M.resend = true; // (the actors' instances back on their materials' slots)
 }
@@ -2159,6 +2856,27 @@ VkImageView mat_preview_frame_view(const Material* m, int which, uint32_t frame)
     if (!c || c->nframes < 2 || which < 0 || which > 2) return VK_NULL_HANDLE;
     const Variant* v = frame % c->nframes ? &c->frames[frame % c->nframes] : &c->v;
     return v->tex[which] ? M.tex[v->tex[which]].view : VK_NULL_HANDLE;
+}
+
+// (2026-11-25, the tester's (c): MI_ToonBlue's base color thumbnail a black square) Since the affine fold a texture holds
+// the fold's roots and the slot's coefficients make the color (tex * a0 + b0): a parameter's color straight into the Base
+// Color is a root of 0 and b0 the color. How the base color thumbnail shows it: the image tinted by a0 (no offset), a solid
+// color (b0: no image in it), or the slot's mean color (both: a flat estimate). Unfolded: the image as it is
+int mat_preview_base(const Material* m, float tint[3], float solid[3]) {
+    for (int k = 0; k < 3; k++) tint[k] = 1.0f, solid[k] = 0.0f;
+    uint32_t slot = m ? m->slot : 0u;
+    if (!slot || slot >= MAT_GPU_SLOTS || !M.materials.mapped) return MAT_PREVIEW_IMAGE;
+    const float* ab = (const float*)aff_block(slot);
+    const GpuMaterial* gm = &((const GpuMaterial*)M.materials.mapped)[slot];
+    if (!(gm->flags & MATF_AFFINE)) return MAT_PREVIEW_IMAGE;
+    float amax = 0.0f, bmax = 0.0f;
+    for (int k = 0; k < 3; k++) amax = fmaxf(amax, fabsf(ab[k])), bmax = fmaxf(bmax, fabsf(ab[4 + k]));
+    if (bmax < 1e-4f) {
+        for (int k = 0; k < 3; k++) tint[k] = ab[k];
+        return MAT_PREVIEW_IMAGE;
+    }
+    for (int k = 0; k < 3; k++) solid[k] = amax < 1e-4f ? ab[4 + k] : gm->avg[k];
+    return MAT_PREVIEW_SOLID;
 }
 
 VkImageView mat_preview_view(const Material* m, int which) {
@@ -2245,11 +2963,14 @@ bool mat_init(VkCtx* vk, const char* content_root) {
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; // (Q18) the UDIM tiles'
     if (vkCreateSampler(vk->device, &si, NULL, &M.sampler_clamp) != VK_SUCCESS) return false;
     VkBufferUsageFlags st = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    if (!M.bake || !gpu_buf_create(vk, &M.materials, (sizeof(GpuMaterial) + sizeof(GpuMatExt) + sizeof(GpuToon)) * MAT_GPU_SLOTS, st, true) ||
+    heaps_init(); // (2026-11-24)
+    if (!M.bake || !gpu_buf_create(vk, &M.materials, MAT_AFF_BASE + sizeof(GpuMatAff) * MAT_GPU_SLOTS, st, true) ||
         !gpu_buf_create(vk, &M.programs, (VkDeviceSize)MAT_PROG_WORDS * 4, st, true) ||
         !gpu_buf_create(vk, &M.params, (VkDeviceSize)MAT_PARAM_VEC4 * 16, st, true))
         return false;
-    memset(M.materials.mapped, 0, (sizeof(GpuMaterial) + sizeof(GpuMatExt) + sizeof(GpuToon)) * MAT_GPU_SLOTS); // (Q11: + the toon blocks)
+    memset(M.materials.mapped, 0, MAT_AFF_BASE + sizeof(GpuMatAff) * MAT_GPU_SLOTS); // (Q11: + the toon blocks; 2026-11-24: + the affine ones)
+    ph_textures(); // (2026-11-24: the placeholders' white, flat normal and black)
+    { const char* d = getenv("REALENGINE_MAT_FIRST_DELAY"); M.first_delay = d ? (uint32_t)atoi(d) : 0u; } // (mat_first_frame: frames before any bake)
     M.ready = true;
     return true;
 }
@@ -2257,6 +2978,11 @@ bool mat_init(VkCtx* vk, const char* content_root) {
 void mat_shutdown(VkCtx* vk) {
     if (!M.ready) return;
     vkDeviceWaitIdle(vk->device);
+    // (2026-11-25, bug-fixer: the asset_picker test's 12 leaked objects) the graves too: the buffers buried by the frame
+    // bakes (their BC7 blocks, an old mips' buffer) went with the memset of S below, never destroyed
+    st_drain(true);
+    for (uint32_t i = 0; i < g_nrb; i++) gpu_buf_destroy(vk, &g_rb[i].b); // (2026-11-24: the frame bakes' readbacks)
+    g_nrb = 0;
     for (uint32_t i = 0; i < MAT_TEX_MAX; i++) tex_free(i);
     tex_mem_shutdown();
     for (uint32_t i = 0; i < M.n; i++) {

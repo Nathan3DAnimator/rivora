@@ -72,7 +72,7 @@ set(SHADER_HEADERS ${SHADER_DIR}/mat_vm.glsl ${SHADER_DIR}/mat_ops.h ${SHADER_DI
 list(APPEND SHADER_HEADERS ${SHADER_DIR}/tess.glsl) # (Q17)
 list(APPEND SHADER_HEADERS ${SHADER_DIR}/farview.glsl ${SHADER_DIR}/impostor.glsl) # (Q21)
 list(APPEND SHADER_HEADERS ${SHADER_DIR}/mr.glsl ${SHADER_DIR}/ar.glsl) # (Q25b: mixed reality)
-foreach(S mesh.vert mesh.frag fullscreen.vert sky.frag grid.frag mask.frag masked.frag composite.frag probe_trace.comp probe_update.comp
+foreach(S mesh.vert mesh.frag fullscreen.vert sky.frag grid.frag mask.frag mask_hair.frag masked.frag composite.frag probe_trace.comp probe_update.comp
           pathtrace.comp view2.comp lightmap_bake.comp lightmap_blend.comp exposure.comp atmosphere.comp cull.comp tlas_fill.comp hiz.comp
           light_grid.comp occluder_light.comp gi_cache.comp weather.comp material_bake.comp velocity.vert velocity.frag
           bloom.comp crowd.comp preview.vert preview.frag preview_bg.frag preview_ao.frag shadow_split.comp denoise.comp den_trace.comp gtao.comp sss.comp vrs.comp ups_mv.comp decal_bin.comp alpha_hist.comp bc7.comp mip_kaiser.comp tsr.comp omm.comp velocity_crowd.vert skin.comp particle_sim.comp particle.vert
@@ -349,6 +349,7 @@ add_library(re_core STATIC
     src/jobs.c
     src/i18n.c
     src/i18n_table.c
+    src/i18n_table_es.c
     src/crashlog.c
     src/re_crypto.c
     src/re_zlib.c
@@ -537,6 +538,9 @@ add_library(re_render STATIC
     src/traffic.c
     src/ui_widget.c
     src/game_settings.c
+    src/loc.c
+    src/loc_gather.c
+    src/loc_auto.c
     src/pause_menu.c
     src/save_progress.c
     src/save_menu.c
@@ -650,12 +654,26 @@ add_executable(realengine WIN32
     src/movie_render.c
     src/trace_view.c
     src/plugins_ui.c
+    src/i18n_dump.c
+    src/mat_i18n.c
+    src/plugin_kit.c
+    src/plugin_kit_artist.c
+    src/plugin_kit_level.c
+    src/plugin_kit_anim.c
+    src/plugin_kit_gameplay.c
+    src/plugin_kit_prod.c
+    src/plugin_kit_render.c
+    src/plugin_kit_misc.c
     src/graph_style.c
     src/graph_layout.c # (2026-11-23) Organize Nodes, every node editor
     src/theme_editor.c
     src/editor_dock.c
+    src/editor_host.c # (2026-11-25, item 9) the Editors window: the asset editors' tabs, any kind side by side
+    src/ui_viewports.c # (item 9) the windows dragged out: owned by the editor's, vsync, SDR
     src/editor_look.c
     src/dock_test.c
+    src/dock_test_docs.c # (item 9) the dock test's asset editors part
+    src/ui_sweep.c # (item 21) --ui-sweep: every menu, button and window by injected input
     src/plugins_test.c
     src/source_control.c
     src/input_editor.c
@@ -692,6 +710,9 @@ add_executable(realengine WIN32
     src/pcg_test.c
     src/udim_test.c
     src/emissive_test.c
+    src/mat_first_test.c
+    src/selection_test.c
+    src/groom_skin_test.c
     src/farview_test.c
     src/ai_senses_test.c
     src/quest_test.c
@@ -715,12 +736,19 @@ add_executable(realengine WIN32
     src/picker_test.c
     src/ui_icons.c
     src/ui_tips.c
+    src/ui_tips_table_es.c
     src/ui_tips_table.c src/ui_tips_table_q5.c src/ui_tips_table_q8.c src/ui_tips_table_q11.c src/ui_tips_table_q12.c src/ui_tips_table_q13.c src/ui_tips_table_q14.c src/ui_tips_table_q15.c src/ui_tips_table_q16.c src/ui_tips_table_q18.c src/ui_tips_table_q19.c src/ui_tips_table_q17.c src/ui_tips_table_q20.c src/ui_tips_table_q21.c src/ui_tips_table_q25.c src/ui_tips_table_q23.c src/ui_tips_table_look.c
     src/services.c
     src/imgui_hooks.c
     src/debug_viewer.c
     src/mat_editor.c
     src/toon_ui.c
+    src/ui_number.c
+    src/facility_leak_test.c
+    src/editor_docs.c
+    src/project_switch_test.c
+    src/scal_mem_test.c
+    src/place_hitch_test.c
     src/asset_viewer.c
     src/brand.c
     src/ui_widget_draw.c
@@ -736,6 +764,7 @@ add_executable(realengine WIN32
     src/mcp_server.c
     src/mcp_tools.c
     src/mcp_ui.c
+    src/loc_ui.c
     src/mcp_test.c
     src/gameplay_tags_ui.c
     src/bp_debug_test.c
@@ -752,7 +781,8 @@ add_custom_command(TARGET ExamplePlugin POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/plugins/ExamplePlugin/Source/ExamplePlugin.c $<TARGET_FILE_DIR:ExamplePlugin>/Source/ExamplePlugin.c
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/src/plugin_api.h $<TARGET_FILE_DIR:ExamplePlugin>/Source/plugin_api.h
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/$<CONFIG>/SDK
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/src/plugin_api.h ${CMAKE_BINARY_DIR}/$<CONFIG>/SDK/plugin_api.h)
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/src/plugin_api.h ${CMAKE_BINARY_DIR}/$<CONFIG>/SDK/plugin_api.h
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/src/plugin_api.hpp ${CMAKE_BINARY_DIR}/$<CONFIG>/SDK/plugin_api.hpp)
 add_dependencies(realengine ExamplePlugin)
 add_dependencies(realengine realengine_updater realengine_game)
 target_include_directories(realengine PRIVATE ${SHADER_OUT})
@@ -801,6 +831,12 @@ add_test(NAME jobs COMMAND re_test_jobs)
 add_executable(re_test_ui_popups tests/test_ui_popups.c src/imgui_hooks.c) # the UI's fades never hide a popup (headless ImGui)
 target_link_libraries(re_test_ui_popups PRIVATE cimgui)
 add_test(NAME ui_popups COMMAND re_test_ui_popups)
+# (2026-11-25, item 20 do pedido do usuário) os campos numéricos como o UI Min/Max contra o Clamp Min/Max da Unreal:
+# um valor digitado fora da faixa do slider fica como digitado, arrastar fica na faixa, o limite real segura (headless)
+add_executable(re_test_ui_number tests/test_ui_number.c src/ui_number.c src/toon.c src/imgui_hooks.c)
+target_link_libraries(re_test_ui_number PRIVATE re_core cimgui)
+add_test(NAME ui_number COMMAND re_test_ui_number)
+set_tests_properties(ui_number PROPERTIES PASS_REGULAR_EXPRESSION "ui_number test: OK" FAIL_REGULAR_EXPRESSION "FAIL|IM_ASSERT")
 add_executable(re_test_ui_tips tests/test_ui_tips.c src/ui_tips.c src/ui_tips_table.c src/ui_tips_table_q5.c src/ui_tips_table_q8.c src/ui_tips_table_q11.c src/ui_tips_table_q12.c src/ui_tips_table_q13.c src/ui_tips_table_q14.c src/ui_tips_table_q15.c src/ui_tips_table_q16.c src/ui_tips_table_q18.c src/ui_tips_table_q19.c src/ui_tips_table_q17.c src/ui_tips_table_q20.c src/ui_tips_table_q21.c src/ui_tips_table_q25.c src/ui_tips_table_q23.c src/ui_tips_table_look.c src/imgui_hooks.c) # the descriptions: table, lookup, shown beside the item
 target_include_directories(re_test_ui_tips PRIVATE src)
 target_link_libraries(re_test_ui_tips PRIVATE re_core cimgui)
@@ -817,6 +853,11 @@ add_test(NAME editor_fps COMMAND realengine --bench 3 --min-fps 200)
 # and sides, the outer edges, the gaps between panels) docks there; a maximized window of its own closed by its X, by
 # the system and by a close that reached the main window: it closes, the engine keeps running
 add_test(NAME dock_targets COMMAND realengine --validation --dock-test)
+# (item 21) the UI sweep: every menu, toolbar button, window, right click menu and Play's pause menu clicked in a project of
+# its own; its report in ui_sweep/ (tools/ui_sweep_report.py: the Markdown and the bug list). It passes when the run ends:
+# its findings are the report's, not the test's result
+add_test(NAME ui_sweep COMMAND realengine --validation --lang pt --new-project ${CMAKE_BINARY_DIR}/test_projects/Sweep --template 1 --ui-sweep ${CMAKE_BINARY_DIR}/ui_sweep)
+set_tests_properties(ui_sweep PROPERTIES PASS_REGULAR_EXPRESSION "UI sweep: [0-9]+ controls" FAIL_REGULAR_EXPRESSION "FAIL: UI sweep" ENVIRONMENT "REALENGINE_BACKGROUND=1;REALENGINE_I18N_MISSING=${CMAKE_BINARY_DIR}/ui_sweep/i18n_missing.txt" TIMEOUT 900 RESOURCE_LOCK gpu)
 # (2026-11-20, crashes #143-146) the editor closed as by its X, nothing automated: the preferences and the layout written
 # (an APPDATA of its own), the layout before ImGui's context goes (it crashed every normal close since the 0.43)
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/editor_close_appdata)
@@ -833,7 +874,7 @@ set_tests_properties(look_migration PROPERTIES PASS_REGULAR_EXPRESSION "Look mig
 add_test(NAME icon_sheet COMMAND realengine --validation --bench 2 --icon-sheet --shot ${CMAKE_BINARY_DIR}/icon_sheet.png)
 set_tests_properties(icon_sheet PROPERTIES PASS_REGULAR_EXPRESSION "Screenshot written: [^
 ]*icon_sheet.png" FAIL_REGULAR_EXPRESSION "FAILED|IM_ASSERT" TIMEOUT 120)
-set_tests_properties(dock_targets PROPERTIES PASS_REGULAR_EXPRESSION "Dock test OK" FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 180)
+set_tests_properties(dock_targets PROPERTIES PASS_REGULAR_EXPRESSION "Dock test OK" FAIL_REGULAR_EXPRESSION "FAIL|VUID" TIMEOUT 180) # (2026-11-25: the floating windows' validation errors fail it too)
 add_test(NAME gpu_marks COMMAND realengine --validation --scene cloth --bench 3 --check-gpu-marks) # where a lost GPU stopped: every pass marked and finished (notas-dev/servicos.md)
 # The orthographic views (sugestão #66): the default level from above and from the front, validated (Vulkan's layers:
 # the orthographic projection, the grid on the facing plane, the cull's LOD and Hi-Z without perspective), above 250 fps
@@ -898,8 +939,11 @@ set_tests_properties(snow_scene PROPERTIES PASS_REGULAR_EXPRESSION "lakes, [1-9]
 add_test(NAME ocean_scene COMMAND realengine --validation --scene ocean --play --bench 3 --min-fps 200) # the FFT ocean, a boat on it, its wake
 add_test(NAME cloth_scene COMMAND realengine --validation --scene cloth --bench 3 --min-fps 200) # 12 cloths (34 thousand vertices) by Vertex Block Descent: a flag, draping, a tear (notas-dev/tecido.md)
 add_test(NAME vehicle_from_mesh COMMAND realengine --vehicle-mesh-test --bench 1) # an "imported" car (body + 4 named wheels) made into a vehicle: wheels found and measured, it rests and drives
+# (2026-11-25, bug-fixer) offline: the relay's release list and the release feed (releases.atom) read
+add_test(NAME update_parse COMMAND realengine --update-parse-test)
+set_tests_properties(update_parse PROPERTIES PASS_REGULAR_EXPRESSION "update parse: OK" FAIL_REGULAR_EXPRESSION "FAIL")
 add_test(NAME update_download COMMAND realengine --update-test) # the real latest release by the API path (github.com's download path gave 504), signature, unpack (needs the internet)
-set_tests_properties(update_download PROPERTIES LABELS network)
+set_tests_properties(update_download PROPERTIES LABELS network SKIP_REGULAR_EXPRESSION "update-test: SKIP") # (only GitHub's limit on every path: skipped, with its reason)
 set_tests_properties(net_protocol PROPERTIES PASS_REGULAR_EXPRESSION "Net test: OK")
 # the hang watchdog: a frame frozen 7.5 s, the report must name the frozen function (the 0.17 "crash" opening a project was a freeze)
 add_test(NAME hang_watchdog COMMAND realengine --hang-test --bench 12)
@@ -914,6 +958,18 @@ add_test(NAME net_session_advanced COMMAND realengine --bp-test --bench 16 --net
 set_tests_properties(net_session_advanced PROPERTIES PASS_REGULAR_EXPRESSION "Net session: OK" FAIL_REGULAR_EXPRESSION "FAIL")
 # Blueprints (notas-dev/blueprints.md): assets made, compiled and played in the editor, the world checked, validated
 add_test(NAME blueprints COMMAND realengine --validation --bp-test --bp-package ${CMAKE_BINARY_DIR}/test_game/bp --bench 2 --min-fps 200) # (a walking camera: motion blur ~0.3 ms more)
+# (2026-11-25, bug-fixer) the same right after the network tests (they leave Content/BpTest's classes known, and its setup
+# deletes their files): Package Game left out a Blueprint whose file was deleted; before, "could not copy BP_LevelRef.rbp",
+# the setup failed and the suite's blueprints failed 2 of 2
+add_test(NAME blueprints_after_net COMMAND realengine --validation --bp-test --bp-package ${CMAKE_BINARY_DIR}/test_game/bp_after_net --bench 2)
+set_tests_properties(net_session_advanced PROPERTIES FIXTURES_SETUP net_left_bp)
+set_tests_properties(blueprints_after_net PROPERTIES FIXTURES_REQUIRED net_left_bp PASS_REGULAR_EXPRESSION "bp-test: Timeline: Value 2.000"
+                     FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 300)
+# (2026-11-25, bug-fixer) the same at 4 fps (a busy suite): its checks see 2 s of game time, not 0.8 (each frame's dt counts
+# at most 0.1 s); before, "the Timeline didn't play" (Done 0)
+add_test(NAME blueprints_slow COMMAND realengine --validation --bp-test --bench 2)
+set_tests_properties(blueprints_slow PROPERTIES ENVIRONMENT "REALENGINE_SLOW_FRAME_MS=250" PASS_REGULAR_EXPRESSION "bp-test: Timeline: Value 2.000"
+                     FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 300)
 # The Construction Script in the editor (sugestão #64): shown turned, the move kept, authored again before a save
 add_test(NAME construction_editor COMMAND realengine --validation --cs-test --bench 1)
 # A skeletal mesh moved in place as the gizmo moves it (relatório #114): its parts follow on the next update
@@ -946,7 +1002,7 @@ add_test(NAME source_control COMMAND realengine --sc-test) # (B14) Git: new, sub
 # (B14c) Plugins: the example plugin's nodes (pure, callable, vectors) called by a script in Play, its tick, the crash
 # guard; New Plugin's template built by its build.bat (Visual Studio's compiler), loaded and called
 add_test(NAME plugins COMMAND realengine --validation --plugin-test --bench 3)
-set_tests_properties(plugins PROPERTIES ENVIRONMENT "REALENGINE_PLUGINS_ENABLE=ExamplePlugin;REALENGINE_PLUGIN_CRASH_TEST=1"
+set_tests_properties(plugins PROPERTIES ENVIRONMENT "REALENGINE_PLUGINS_ENABLE=ExamplePlugin;REALENGINE_PLUGIN_CRASH_TEST=1;REALENGINE_KIT_WINDOWS=1"
                      PASS_REGULAR_EXPRESSION "Plugins OK" FAIL_REGULAR_EXPRESSION "FAIL|VUID")
 add_test(NAME plugin_template COMMAND realengine --plugin-new-test ${CMAKE_BINARY_DIR}/plugin_template)
 set_tests_properties(plugin_template PROPERTIES PASS_REGULAR_EXPRESSION "TestPlugin Remap.*ok" FAIL_REGULAR_EXPRESSION "FAIL")
@@ -1056,6 +1112,19 @@ set_tests_properties(cinematics PROPERTIES FAIL_REGULAR_EXPRESSION "FAIL|VUID|DE
 add_test(NAME procgen_steady COMMAND realengine --scene procgen --play --bench 5 --min-fps 200) # (standing: the streamed world's steady cost)
 set_tests_properties(procgen_steady PROPERTIES ENVIRONMENT "REALENGINE_PROCGEN_STILL=1" FAIL_REGULAR_EXPRESSION "FAIL: [0-9]+ fps")
 add_test(NAME procgen_facility COMMAND realengine --validation --scene facility --play --bench 3 --min-fps 200)
+# (2026-11-25, item 19: o vídeo do usuário na instalação procedural) a sala mais funda, fechada, sem as lâmpadas: só luz de fora
+# a ilumina. O ar da atmosfera (aerial perspective) somava ~4 nits azuis em toda sala de todo interior (4,9 nits de média);
+# com a profundidade inicial da Unreal (100 m) ficam ~1 nit (a GI que entra pela porta de entrada). As lâmpadas pelo tamanho
+# da sala: procgen_selftest
+add_test(NAME facility_leak COMMAND realengine --validation --scene facility_leak --bench 8 --shot ${CMAKE_BINARY_DIR}/facility_leak.png)
+# (2026-11-25, bug-fixer) the limit 2.5 nits: 13 runs gave two states, 1.46-1.55 and 1.97-2.01 (2.008 failed at 2.0 in
+# the suite); the leak this test was made for is 5.08 (the binary before item 19). Its mean was 1.03 when it was made
+# (2026-11-25, builder-advanced) none of that was a leak: the lamps on as the facility is built, switched off, and the
+# surface cache's 512 updates' mean kept their bounce for tens of seconds (0.73 after 25 s), longer once quiet (the two
+# states: whether the quiet share began before the last reallocation). A known light that changes now shortens the mean
+# (gi_cache.c light_seen): 0.063-0.067 nits every run. The limit 0.5 (REALENGINE_CACHE_LIGHT_SHORT=0 gives 1.2-2.0: fails)
+set_tests_properties(facility_leak PROPERTIES ENVIRONMENT "REALENGINE_FACILITY_LUM_MEAN_MAX=0.5"
+                     PASS_REGULAR_EXPRESSION "facility_leak: the walls and ceiling" FAIL_REGULAR_EXPRESSION "FAIL|VUID|DEVICE_LOST")
 set_tests_properties(procgen_facility PROPERTIES PASS_REGULAR_EXPRESSION "Procedural facility: 30 rooms" FAIL_REGULAR_EXPRESSION "FAIL|VUID")
 add_test(NAME mobile_selftest COMMAND realengine --mobile-test)
 add_test(NAME mr_selftest COMMAND realengine --mr-test) # (Q25b) mixed reality: the stand-in room, its actors (collide, never drawn), traces onto the floor / table / wall, the room following the play space, the level turned to the walls, a Passthrough Window, the simulated real depth against a trace, the level's floor hidden
@@ -1206,6 +1275,46 @@ add_test(NAME hair_low COMMAND realengine --validation --scene hair --scalabilit
 # hung in "skin (ossos e BLAS)" (a job refit another skin's BLAS); 6 s of it must run clean
 add_test(NAME skin_churn COMMAND realengine --validation --scene skin_churn --bench 6)
 set_tests_properties(skin_churn PROPERTIES FAIL_REGULAR_EXPRESSION "FAIL|VUID|DEVICE_LOST|stopped responding" PASS_REGULAR_EXPRESSION "Measure: ")
+# (2026-11-24, a cena Unamed: 2080 Skeletal Mesh Actors parados, sem animação) cada skin passava pelo skin_bind na thread
+# do render em todo quadro (a lista buscada inteira; os sem espaço varriam os índices da malha e falhavam de novo): o
+# conjunto dinâmico e os skins abaixo de 1,5 ms de CPU por quadro, os parados na pose de ligação sem área ("out of room"
+# nunca), e o único animado (--skin-still 1) ainda entortado com vértices próprios
+add_test(NAME skin_still COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/SKINSTILL --template 0
+         --import ${CMAKE_SOURCE_DIR}/tests/data/import/rig.fbx --skin-copies 2079 --skin-still 1 --play-eject --bench 3 --max-skin-ms 1.5)
+set_tests_properties(skin_still PROPERTIES FIXTURES_REQUIRED projects FAIL_REGULAR_EXPRESSION "FAIL|Could not|VUID|DEVICE_LOST|out of room|meshes reloaded"
+                     PASS_REGULAR_EXPRESSION "Skins at their bind: [1-9][0-9]* \\(0 without room\\), with their own vertices [1-9][0-9]* \\([1-9][0-9]* bends")
+# (2026-11-24, a cena Unamed) os 1764 skins que não cabiam na área (no máximo) varriam os índices da malha e falhavam de
+# novo em todo quadro: com a área limitada a 60 mil vértices (REALENGINE_SKIN_ROOM_MAX) e as 2080 cópias animadas, os sem
+# espaço ficam na bind sem tentar de novo e sem recarregar as malhas, a CPU abaixo de 0,65 ms (antes 0,92)
+add_test(NAME skin_noroom COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/SKINNOROOM --template 0
+         --import ${CMAKE_SOURCE_DIR}/tests/data/import/rig.fbx --skin-copies 2079 --skin-still 4096 --play-eject --bench 3 --max-skin-ms 0.65)
+set_tests_properties(skin_noroom PROPERTIES FIXTURES_REQUIRED projects ENVIRONMENT "REALENGINE_SKIN_ROOM_MAX=60000"
+                     FAIL_REGULAR_EXPRESSION "FAIL|Could not|VUID|DEVICE_LOST"
+                     PASS_REGULAR_EXPRESSION "Skins at their bind: [1-9][0-9]* \\([1-9][0-9]* without room\\), with their own vertices [1-9][0-9]* \\([1-9][0-9]* bends")
+# (2026-11-24, item 4) 5000 skins of the test rig: all animated (each with its pose: the dynamic set's CPU and the frame, no
+# "out of room" with the room by the VRAM, the log of changes not overflowed) and all standing (dormant, static paths)
+add_test(NAME skin_5000 COMMAND realengine --new-project ${CMAKE_BINARY_DIR}/test_projects/SKIN5000 --template 0
+         --import ${CMAKE_SOURCE_DIR}/tests/data/import/rig.fbx --skin-copies 4999 --skin-still 5000 --play-eject --bench 4 --max-skin-ms 6 --min-fps 60)
+set_tests_properties(skin_5000 PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "Skins at their bind: [0-9]+ \\(0 without room\\)" FAIL_REGULAR_EXPRESSION "FAIL|VUID|out of room at the most")
+add_test(NAME skin_5000_still COMMAND realengine --new-project ${CMAKE_BINARY_DIR}/test_projects/SKIN5000S --template 0
+         --import ${CMAKE_SOURCE_DIR}/tests/data/import/rig.fbx --skin-copies 4999 --skin-still 0 --play-eject --bench 4 --max-skin-ms 1.5 --min-fps 100)
+set_tests_properties(skin_5000_still PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "Dormant dynamic instances" FAIL_REGULAR_EXPRESSION "FAIL|VUID|out of room at the most")
+# (2026-11-25, item 17) the selection's outline on every kind of actor (selection_test.c): a cube, an actor with components,
+# the animated skin at two moments (two silhouettes), a light and an Empty (their shapes), nothing selected (no pixel), the
+# icons hidden (G), validated; the mask pass under 0.3 ms at 1440p
+add_test(NAME selection_outline COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/SELOUTLINE --template 0
+         --scene selection --import ${CMAKE_SOURCE_DIR}/tests/data/import/rig.fbx --play-eject --game-view --bench 12)
+set_tests_properties(selection_outline PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "Selection OK" FAIL_REGULAR_EXPRESSION "FAIL|VUID|DEVICE_LOST")
+# (2026-11-25, item 16) the Tlender's fur on a skin: a hair on a piece riding an armature's bone (hair_skinned.tlend: its Spin
+# action), on the Skeletal Mesh's actor, its strands bent by the bones, Visible off and on (groom_skin_test.c), validated
+add_test(NAME groom_skin COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/GROOMSKIN --template 0
+         --import ${CMAKE_SOURCE_DIR}/tests/data/import/hair_skinned.tlend --play-eject --groom-skin-test --bench 6)
+set_tests_properties(groom_skin PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "Groom skin OK" FAIL_REGULAR_EXPRESSION "FAIL|VUID|DEVICE_LOST")# (2026-11-24, item 4 step 3) live skins drawn by their cluster LOD DAG: the rig subdivided at its import into a dense skin
+# (60 416 triangles: Nanite Auto), 9 bent copies by their clusters (the spheres widened by the pose's reach), validated
+add_test(NAME skin_dag COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/SKINDAG --template 0
+         --import ${CMAKE_SOURCE_DIR}/tests/data/import/rig.fbx --skin-copies 8 --play-eject --cam 0,900,150,270,-5 --bench 5)
+set_tests_properties(skin_dag PROPERTIES FIXTURES_REQUIRED projects ENVIRONMENT "REALENGINE_IMPORT_SUBDIV=4;REALENGINE_DAG_STATS=1"
+                     PASS_REGULAR_EXPRESSION "DAG: [1-9][0-9]* instances" FAIL_REGULAR_EXPRESSION "FAIL|Could not|VUID|DEVICE_LOST")
 add_test(NAME hair_dynamic COMMAND realengine --validation --scene hair_dynamic --scalability 3 --bench 3 --min-fps 150)
 # a river (B12c, river.c: a Water Body River's spline, its ribbon), three crates with Buoyancy floating down it and a
 # Character swimming in it (B12f), validated in Play (editor_river_check); the camera under the water (B12h)
@@ -1218,6 +1327,27 @@ add_test(NAME fog_volume COMMAND realengine --validation --scene fogvol --scalab
 set_tests_properties(fog_volume PROPERTIES FAIL_REGULAR_EXPRESSION "FAIL|VUID|DEVICE_LOST")
 # Heterogeneous Volumes (A9.5a, volume.c with the Tlender's OpenVDB reader): the example puff (24 .vdb frames written by
 # vdb.c's writer, read back) played and drawn as the fires are
+# (2026-11-25, bug-fixer) placing a Heterogeneous Volume from the Add menu: its files read and resampled on a worker,
+# no frame over 150 ms (before: 1096 ms in the UI sweep, the 24 .vdb read in the frame)
+add_test(NAME place_volume_hitch COMMAND realengine --validation --place-hitch-test "Heterogeneous Volume" 150)
+set_tests_properties(place_volume_hitch PROPERTIES PASS_REGULAR_EXPRESSION "Place hitch test OK" FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 180)
+# (2026-11-25, bug-fixer) the Play button in a new Third Person project: the vendors' upscalers asked on a thread of their
+# own (game_settings.c gus_warm) and the gamepads asked behind the start's splash, no frame over 100 ms (before: 1284 ms in the UI sweep, NGX started in the frame; then 188 ms, the first gamepad poll)
+# (2026-11-25, bug-fixer) Add > Visual Effects > Rain in a new Third Person project: the RE_EXT pipelines (the rain on the
+# surfaces) made on a thread, no frame over 150 ms (before: 257 ms of a 300-450 ms frame making them)
+add_test(NAME place_rain_hitch COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/RainHitch --template 1 --place-hitch-test Rain 150)
+set_tests_properties(place_rain_hitch PROPERTIES PASS_REGULAR_EXPRESSION "Place hitch test OK" FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 180 FIXTURES_REQUIRED projects)
+# (2026-11-25, bug-fixer) File > Open Asset and Help > Assistant in a new Third Person project: the Content listed and the
+# Assistant's base built on workers, no frame over 150 ms (before: 1.0 s and 0.4 s in the UI sweep, both in the frame)
+add_test(NAME open_asset_hitch COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/OpenAssetHitch --template 1 --place-hitch-test OpenAsset 150)
+set_tests_properties(open_asset_hitch PROPERTIES PASS_REGULAR_EXPRESSION "Place hitch test OK" FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 180 FIXTURES_REQUIRED projects)
+add_test(NAME assistant_hitch COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/AssistantHitch --template 1 --place-hitch-test Assistant 150)
+set_tests_properties(assistant_hitch PROPERTIES PASS_REGULAR_EXPRESSION "Place hitch test OK" FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 180 FIXTURES_REQUIRED projects)
+add_test(NAME play_hitch COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/PlayHitch --template 1 --place-hitch-test Play 100)
+set_tests_properties(play_hitch PROPERTIES PASS_REGULAR_EXPRESSION "Place hitch test OK" FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 180 FIXTURES_REQUIRED projects)
+# (2026-11-25, bug-fixer) Settings > Cinematic and back to Medium, three rounds: what going back keeps (the UI sweep: +270 MB)
+add_test(NAME scalability_memory COMMAND realengine --validation --scalability-mem-test)
+set_tests_properties(scalability_memory PROPERTIES PASS_REGULAR_EXPRESSION "Scalability memory test OK" FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 180)
 add_test(NAME volume_vdb COMMAND realengine --validation --scene volume --scalability 3 --bench 2 --min-fps 200)
 set_tests_properties(volume_vdb PROPERTIES PASS_REGULAR_EXPRESSION "Volume: 24 frame" FAIL_REGULAR_EXPRESSION "FAIL|VUID|DEVICE_LOST|aviso: Volume")
 # de-lighting (A9.5e, delight.c): a sphere's checker lit from one side, its baked light taken out with its normals
@@ -1415,6 +1545,11 @@ set_tests_properties(hud PROPERTIES FIXTURES_REQUIRED projects FAIL_REGULAR_EXPR
 add_test(NAME pause_options COMMAND realengine --validation --pause-test --bench 3 --min-fps 200)
 set_tests_properties(pause_options PROPERTIES ENVIRONMENT "REALENGINE_SETTINGS_FILE=${CMAKE_BINARY_DIR}/pause_test/GameUserSettings.ini"
                      PASS_REGULAR_EXPRESSION "Pause test: OK" FAIL_REGULAR_EXPRESSION "FAIL" FIXTURES_SETUP pause_saved)
+# (2026-11-25, bug-fixer) the same with the editor's view at Cinematic: Apply with nothing changed leaves the view's preset
+# (before: the saved preset put on the view, its MSAA pipelines made again, a frame of 403 ms in the UI sweep)
+add_test(NAME pause_apply_cinematic COMMAND realengine --validation --pause-test --scalability 4 --bench 3)
+set_tests_properties(pause_apply_cinematic PROPERTIES ENVIRONMENT "REALENGINE_SETTINGS_FILE=${CMAKE_BINARY_DIR}/pause_test_cine/GameUserSettings.ini"
+                     PASS_REGULAR_EXPRESSION "Apply with nothing changed took" FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 180)
 add_test(NAME pause_options_reload COMMAND realengine --validation --pause-test-reload --bench 1)
 set_tests_properties(pause_options_reload PROPERTIES ENVIRONMENT "REALENGINE_SETTINGS_FILE=${CMAKE_BINARY_DIR}/pause_test/GameUserSettings.ini"
                      PASS_REGULAR_EXPRESSION "Pause reload: OK" FAIL_REGULAR_EXPRESSION "FAIL" FIXTURES_REQUIRED pause_saved)
@@ -1516,6 +1651,10 @@ if(Python3_FOUND)
     add_test(NAME ingame_sweep COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ingame_sweep.py --check)
     set_tests_properties(ingame_sweep PROPERTIES PASS_REGULAR_EXPRESSION "ingame_sweep: OK")
     set_tests_properties(tips_audit PROPERTIES PASS_REGULAR_EXPRESSION "tips_audit: OK")
+    # (2026-11-25, item 12) every visible text through TR(), every key in Portuguese and Spanish (the tables' texts: the
+    # editor's --i18n-dump)
+    add_test(NAME i18n_audit COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/i18n_audit.py ${CMAKE_SOURCE_DIR}/src --exe $<TARGET_FILE:realengine>)
+    set_tests_properties(i18n_audit PROPERTIES PASS_REGULAR_EXPRESSION "i18n_audit: OK" FAIL_REGULAR_EXPRESSION "FAIL")
     add_test(NAME theme_contrast COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/theme_contrast.py $<TARGET_FILE:re_test_theme>)
     set_tests_properties(theme_contrast PROPERTIES PASS_REGULAR_EXPRESSION "contrast: 11 theme\\(s\\), 0 failing" FAIL_REGULAR_EXPRESSION "FAIL")
 endif()
@@ -1656,6 +1795,12 @@ set_tests_properties(mated_ui PROPERTIES FIXTURES_REQUIRED projects ENVIRONMENT 
 # only by a glowing sphere, its floor read back from the shot; Emissive Light 0: no light made
 add_test(NAME emissive_light COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/EmitLight --template 0 --scene emit --bench 4 --shot ${CMAKE_BINARY_DIR}/emissive_light.png --min-fps 200)
 add_test(NAME emissive_light_off COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/EmitLightOff --template 0 --scene emit_off --bench 2 --shot ${CMAKE_BINARY_DIR}/emissive_light_off.png)
+# (2026-11-25, o bloqueio dos itens 3/5 pelo tester) a Emission Intensity: gravada pelo editor (2,5) e relida do arquivo; o campo
+# nos Details do material emissivo e da MI dele (um número, não uma cor); a miniatura da cor de base de uma MI com a cor por
+# parâmetro (o fold afim: era um quadrado preto); um Blueprint em Play com Set Scalar Parameter Value on Materials (4): o
+# brilho do ator 4 vezes e o ponto mais claro da cena mais claro
+add_test(NAME emission_intensity COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/EmitIntensity --template 0 --scene emit_intensity --bench 8)
+set_tests_properties(emission_intensity PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "emit intensity: ok" FAIL_REGULAR_EXPRESSION "FAIL|VUID")
 set_tests_properties(emissive_light emissive_light_off PROPERTIES FIXTURES_REQUIRED projects FAIL_REGULAR_EXPRESSION "FAIL|VUID|DEVICE_LOST" PASS_REGULAR_EXPRESSION "emit: ok")
 # (2026-11-23) the viewport's gizmo by injected mouse and keys (src/gizmo_test.inc): the X arrow moves along X alone with
 # one undo step, a click that never moves makes none, Y mid-drag moves the constraint, "250" typed is 250 cm, the right
@@ -1728,6 +1873,12 @@ add_test(NAME import_obj COMMAND realengine --validation --new-project ${CMAKE_B
          --import ${CMAKE_SOURCE_DIR}/tests/data/import/test.obj --bench 1)
 set_tests_properties(import_obj PROPERTIES FIXTURES_REQUIRED projects FAIL_REGULAR_EXPRESSION "FAIL|Could not"
                      PASS_REGULAR_EXPRESSION "3 meshes, 3 materials \\(1 textures, 0 nodes skipped\\), 0 skeletal meshes, 0 animations, 3 actors")
+set_tests_properties(import_obj PROPERTIES FIXTURES_SETUP import_obj_done)
+# (2026-11-24) the import's report: in Saved/ImportReports, never a .txt in the Content folder (tools/check_import_report.cmake)
+add_test(NAME import_report_saved COMMAND ${CMAKE_COMMAND} -DPROJECT=${CMAKE_BINARY_DIR}/test_projects/OBJ -DNAME=test
+         -P ${CMAKE_SOURCE_DIR}/tools/check_import_report.cmake)
+set_tests_properties(import_report_saved PROPERTIES FIXTURES_REQUIRED import_obj_done PASS_REGULAR_EXPRESSION "import report check: OK"
+                     FAIL_REGULAR_EXPRESSION "FAIL")
 # glTF (tests/data/import/make_gltf.js writes them): a .glb with an embedded image, a hierarchy, a mesh on two nodes of
 # the same name, a primitive without indices and one without a material, a spot light, a skinned body over two joints
 # with an animation and a mesh under a joint (a Skeletal Mesh of 3 parts); a .gltf with a data URI buffer, an external
@@ -1776,12 +1927,27 @@ add_test(NAME mcp COMMAND realengine --validation --new-project ${CMAKE_BINARY_D
 set_tests_properties(mcp PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "mcp: ok" FAIL_REGULAR_EXPRESSION "FAIL|VUID" TIMEOUT 300)
 add_test(NAME mat_live_edit COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/MATLIVE --template 0 --mat-live-test --bench 1) # (2026-11-24, #180)
 set_tests_properties(mat_live_edit PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "mat live: ok" FAIL_REGULAR_EXPRESSION "FAIL|VUID")
+# (2026-11-24) the affine fold: a Material Instance's and a Blueprint's values without a bake, the folded image against a full bake,
+# a baked parameter still baking, the editor's folding value writing the slots only, the parameters' and programs' room kept
+add_test(NAME mat_live_param COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/MATPARAM --template 0 --mat-param-test --bench 1)
+set_tests_properties(mat_live_param PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "mat param: ok" FAIL_REGULAR_EXPRESSION "FAIL|VUID")
+# (2026-11-24) the class per mesh: the materials scene's RE_EXT materials (car paint, skin...) don't move the other meshes off the
+# plain pipelines (the main pass has both kinds of runs), validated
+add_test(NAME mat_class_split COMMAND realengine --validation --scene materials --bench 2 --class-split-check)
+set_tests_properties(mat_class_split PROPERTIES PASS_REGULAR_EXPRESSION "class split: ok" FAIL_REGULAR_EXPRESSION "FAIL|VUID")
+# (2026-11-24) the materials' color on the first frame, before any bake (the placeholder), and their textures climbing 64 -> 256 -> 1024
+add_test(NAME mat_first_frame COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/MATFIRST --template 0 --scene firstframe --bench 4)
+set_tests_properties(mat_first_frame PROPERTIES FIXTURES_REQUIRED projects PASS_REGULAR_EXPRESSION "first frame: ok" FAIL_REGULAR_EXPRESSION "FAIL|VUID")
 add_test(NAME rig_detect COMMAND realengine --rig-test) # (2026-11-23) the rig's roles on Mixamo, Rigify, UE, no names, CC
 set_tests_properties(rig_detect PROPERTIES PASS_REGULAR_EXPRESSION "rig_detect: ok" FAIL_REGULAR_EXPRESSION "FAIL")
 add_test(NAME rig_fit COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/RIGFIT --template 0
          --import ${CMAKE_SOURCE_DIR}/tests/data/import/humanoid.glb --rig-fit-test --bench 1) # (2026-11-23) the bodies as thick as the skin
 set_tests_properties(rig_fit PROPERTIES PASS_REGULAR_EXPRESSION "rig fit: ok" FAIL_REGULAR_EXPRESSION "FAIL|VUID")
 add_test(NAME preload COMMAND realengine --preload-test ${CMAKE_BINARY_DIR}/preload_test) # (2026-11-23) levels preloaded at a speed, swapped in
+# (2026-11-24, item 15) the game's localization: the table, the pseudo-localization, .po / .csv round trips, compiled,
+# the culture switched (its time, the table's memory); no window
+add_test(NAME loc COMMAND realengine --loc-test ${CMAKE_BINARY_DIR}/loc_test)
+set_tests_properties(loc PROPERTIES PASS_REGULAR_EXPRESSION "loc: ok" FAIL_REGULAR_EXPRESSION "FAIL")
 set_tests_properties(preload PROPERTIES PASS_REGULAR_EXPRESSION "preload: ok" FAIL_REGULAR_EXPRESSION "FAIL")
 add_test(NAME mesh_sockets COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/MSOCK --template 0
          --import ${CMAKE_SOURCE_DIR}/tests/data/import/near/models/near.obj --mesh-socket-test --bench 1)
@@ -1809,8 +1975,21 @@ add_test(NAME preview_anim_bp COMMAND realengine --validation --open-viewport /C
 # Mesh, Skeleton, Animation, Montage, Blend Space, Anim Blueprint, Physics Asset, IK Rig, Material, Particles, Vehicle,
 # Cloth) opened on an example, its GPU picture read back in each of the 13 view modes with the model's pixels counted (not
 # the bones'); a socket made, moved, saved and read back with its preview mesh drawn; the cost with 1 and 3 editors open
+# (2026-11-25, bug-fixer) switching projects with asset editors open: all closed (the Blueprints' windows pointed at what
+# bp_shutdown freed), the save prompt (Cancel, Don't Save), the same assets reopened in the other project and back
+add_test(NAME project_switch_clean COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/test_projects/SwitchA ${CMAKE_BINARY_DIR}/test_projects/SwitchB)
+set_tests_properties(project_switch_clean PROPERTIES FIXTURES_SETUP switch_projects)
+add_test(NAME project_switch COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/SwitchA --template 0 --project-switch-test)
+set_tests_properties(project_switch PROPERTIES FIXTURES_REQUIRED switch_projects PASS_REGULAR_EXPRESSION "Project switch test: OK" FAIL_REGULAR_EXPRESSION "FAIL|VUID|DEVICE_LOST" TIMEOUT 300)
 add_test(NAME asset_viewport COMMAND realengine --validation --asset-viewport-test)
 set_tests_properties(asset_viewport PROPERTIES PASS_REGULAR_EXPRESSION "Asset viewport test: OK" FAIL_REGULAR_EXPRESSION "FAIL|VUID" TIMEOUT 300)
+# (2026-11-25, o bloqueio do item 8 pelo tester) --open-asset de um Sound Wave caía no editor de Blueprint e nada abria:
+# agora a tabela do Content Browser (content_open_asset) abre cada tipo no seu editor; o som abre com Informações, Som e
+# Configurações (só esse estágio do asset_viewport: REALENGINE_AVP_ONLY=sound)
+add_test(NAME asset_open_sound COMMAND realengine --validation --new-project ${CMAKE_BINARY_DIR}/test_projects/OPENSOUND --template 0
+         --import-folder ${CMAKE_SOURCE_DIR}/tests/data/import/folder --open-asset /Content/Imported/folder/Sounds/hit.rsound --asset-viewport-test)
+set_tests_properties(asset_open_sound PROPERTIES FIXTURES_REQUIRED projects ENVIRONMENT "REALENGINE_AVP_ONLY=sound"
+                     PASS_REGULAR_EXPRESSION "Asset viewport test: OK" FAIL_REGULAR_EXPRESSION "FAIL|VUID" TIMEOUT 120)
 # (Q23, notas-dev/auditoria-artista.md) the artist tools' fixes: the .hdr decoder, the textures' kinds, the Static Mesh
 # viewer's vertex count (no window); the Texture viewer's .hdr, its thumbnail and the viewer following the file, an .exr's reason
 add_test(NAME artist_selftest COMMAND realengine --artist-selftest)
@@ -1905,16 +2084,86 @@ if(WIN32)
     set_target_properties(realengine_mcp PROPERTIES OUTPUT_NAME rivora_mcp)
     target_link_libraries(realengine_mcp PRIVATE ws2_32)
     add_dependencies(realengine realengine_mcp)
+    # (2026-11-24, item 7) every exe with the program's icon (the updater's and the bridge's showed Windows' blank one)
+    target_sources(realengine_updater PRIVATE ${RE_GENERATED_DIR}/realengine.rc)
+    target_sources(realengine_mcp PRIVATE ${RE_GENERATED_DIR}/realengine.rc)
     add_executable(realengine_legacy WIN32 src/legacy_launcher.c ${RE_GENERATED_DIR}/realengine.rc)
     set_target_properties(realengine_legacy PROPERTIES OUTPUT_NAME realengine)
     add_dependencies(realengine realengine_legacy)
     set_property(SOURCE ${RE_GENERATED_DIR}/realengine.rc APPEND PROPERTY OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/data/branding/icon.ico)
+    # (2026-11-24, item 7) the icon read back from each exe equals data/branding/icon.ico (tools/make_icon.py: the blue R)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(NAME exe_icon COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_exe_icon.py
+                 ${CMAKE_SOURCE_DIR}/data/branding/icon.ico $<TARGET_FILE:realengine> $<TARGET_FILE:realengine_game>
+                 $<TARGET_FILE:realengine_updater> $<TARGET_FILE:realengine_mcp> $<TARGET_FILE:realengine_legacy>)
+        set_tests_properties(exe_icon PROPERTIES PASS_REGULAR_EXPRESSION "exe icon check: OK" FAIL_REGULAR_EXPRESSION "FAIL")
+    endif()
 endif()
 # The Blueprint debugger (bp_debug.h, notas-dev/blueprints.md "Debugger"): a breakpoint stops BeginPlay (the world waits),
 # a pin and a variable read, Step Into / Over, a script's line breakpoint and its step by lines, a Tick's breakpoint
 # traced, Continue; the VM's cost with no breakpoint and with one elsewhere (bp_debug_test.c)
 add_test(NAME bp_debugger COMMAND realengine --validation --bp-debug-test --bench 4)
 set_tests_properties(bp_debugger PROPERTIES FAIL_REGULAR_EXPRESSION "FAIL|VUID" PASS_REGULAR_EXPRESSION "bp-debug test: OK")
+
+# --- (2026-11-25, item 22) The new suite's own tests (tools/suite.ps1, notas-dev/testes.md) ---
+# The updater's signature offline: test keys made in the build, never the release key
+add_test(NAME update_sign COMMAND ${CMAKE_COMMAND} -DUPDATER=$<TARGET_FILE:realengine_updater> -DWORK=${CMAKE_BINARY_DIR}/update_sign
+         -P ${CMAKE_SOURCE_DIR}/tools/test_update_sign.cmake)
+set_tests_properties(update_sign PROPERTIES PASS_REGULAR_EXPRESSION "update_sign: OK" FAIL_REGULAR_EXPRESSION "FAIL")
+# (bug-fixer) The editor's children end with it: a VR Preview's rivora_game.exe, then the editor quits (none left)
+add_test(NAME child_process_cleanup COMMAND ${CMAKE_COMMAND} -DENGINE=$<TARGET_FILE:realengine> -DPROJECT=${CMAKE_BINARY_DIR}/test_projects/ChildCleanup
+         -P ${CMAKE_SOURCE_DIR}/tools/test_child_cleanup.cmake)
+set_tests_properties(child_process_cleanup PROPERTIES PASS_REGULAR_EXPRESSION "child cleanup: OK" FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 240)
+# Package for Android, and run it on a phone when one is on adb (no SDK: skipped)
+add_test(NAME android_package COMMAND ${CMAKE_COMMAND} -DENGINE=$<TARGET_FILE:realengine> -DLEVEL=${CMAKE_BINARY_DIR}/test_android/Level.rlevel
+         -DOUT=${CMAKE_BINARY_DIR}/test_android/pkg -P ${CMAKE_SOURCE_DIR}/tools/test_android_package.cmake)
+set_tests_properties(android_package PROPERTIES PASS_REGULAR_EXPRESSION "android_package: OK" SKIP_REGULAR_EXPRESSION "android_package: SKIP"
+                     FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 900)
+if(Python3_FOUND)
+    # The UI sweep's report clean: no crash, assert, validation error, frame over 400 ms, memory kept or missing translation
+    add_test(NAME ui_sweep_clean COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ui_sweep_report.py ${CMAKE_BINARY_DIR}/ui_sweep --check)
+    set_tests_properties(ui_sweep_clean PROPERTIES PASS_REGULAR_EXPRESSION "ui_sweep_clean: OK" FAIL_REGULAR_EXPRESSION "FAIL" FIXTURES_REQUIRED ui_sweep_ran)
+    set_tests_properties(ui_sweep PROPERTIES FIXTURES_SETUP ui_sweep_ran) # (the report checked after the sweep that writes it)
+    # (2026-11-25, bug-fixer) a fresh project each run: test_projects/Sweep left by the last one made --new-project fail
+    # ("could not create the project"), the sweep ran with no project and its robot took 1.7 s in the Edit menu's episode
+    set_tests_properties(ui_sweep PROPERTIES FIXTURES_REQUIRED projects)
+    # The reference scenes: the house at a fixed camera, each preset's picture against tests/data/ref (compare_png.py)
+    # and its fps target
+    # (the engine's arguments joined by "|": test_render_ref.cmake splits them)
+    function(re_render_ref rname rargs)
+        add_test(NAME render_ref_${rname} COMMAND ${CMAKE_COMMAND} -DENGINE=$<TARGET_FILE:realengine> -DPY=${Python3_EXECUTABLE}
+                 -DSRC=${CMAKE_SOURCE_DIR} -DSHOT=${CMAKE_BINARY_DIR}/render_ref/house_${rname}.png
+                 -DREF=${CMAKE_SOURCE_DIR}/tests/data/ref/house_${rname}.png "-DARGS=--validation|--game-view|${rargs}"
+                 -DDARK=${ARGV2} -P ${CMAKE_SOURCE_DIR}/tools/test_render_ref.cmake)
+        set_tests_properties(render_ref_${rname} PROPERTIES PASS_REGULAR_EXPRESSION "render ref house_${rname}.png: OK|reference written"
+                             FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 300)
+    endfunction()
+    re_render_ref(epico "--scene|house|--scalability|3|--bench|4|--min-fps|200")
+    re_render_ref(alto "--scene|house|--scalability|2|--bench|4|--min-fps|200")
+    re_render_ref(baixo "--scene|house|--scalability|0|--bench|4|--min-fps|200" 30) # (at most 30 % of it black: it was 90 %)
+    # (2026-11-25) The Low preset's house without a reference: its view lit by the spot's bounce through the door (the GI
+    # fallback's local lights, gi_fallback.c), not black but for the lit wall (before: ~90 % of the view almost black)
+    add_test(NAME gi_bounce_house COMMAND ${CMAKE_COMMAND} -DENGINE=$<TARGET_FILE:realengine> -DPY=${Python3_EXECUTABLE}
+             -DSRC=${CMAKE_SOURCE_DIR} -DSHOT=${CMAKE_BINARY_DIR}/render_ref/house_bounce.png -DREF=- -DDARK=30
+             "-DARGS=--validation|--game-view|--scene|house|--scalability|0|--bench|4|--min-fps|200" -P ${CMAKE_SOURCE_DIR}/tools/test_render_ref.cmake)
+    set_tests_properties(gi_bounce_house PROPERTIES PASS_REGULAR_EXPRESSION "render ref house_bounce.png: OK" FAIL_REGULAR_EXPRESSION "FAIL" TIMEOUT 300)
+    re_render_ref(rt "--scene|house|--render-style|2|--bench|4|--min-fps|100")
+endif()
+
+# (2026-11-25, bug-fixer) One rule for every test above: the validation layer's messages fail it. vkctx.c prints each one
+# as "[Vulkan] <message>" (warnings and errors, only with --validation), and not all of them carry a "VUID" (the floating
+# windows' ones did not: dock_targets passed with 10 of them); 44 tests with --validation had no FAIL regex at all. Added
+# as one more FAIL regex (the property is a list: any match fails), so each test's own stays as it is
+get_directory_property(RE_ALL_TESTS TESTS)
+foreach(t IN LISTS RE_ALL_TESTS)
+    get_test_property(${t} FAIL_REGULAR_EXPRESSION re_fail)
+    if(NOT re_fail)
+        set(re_fail "")
+    endif()
+    list(APPEND re_fail "VUID|\\[Vulkan\\]")
+    set_tests_properties(${t} PROPERTIES FAIL_REGULAR_EXPRESSION "${re_fail}")
+endforeach()
 
 # The suite's areas (a LABEL per test), the quick kit (tools/suite.ps1) and the GPU lock: after every add_test above
 include(${CMAKE_CURRENT_SOURCE_DIR}/tools/suite_areas.cmake)

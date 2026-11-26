@@ -47,7 +47,7 @@ extern const UiTip g_ui_tips_look[]; // (Q26, ui_tips_table_look.c: the Azul Rea
 extern const int g_ui_tip_look_count;
 
 // the tables as one (built on first use)
-#define TIP_MAX 2560 // (Q11: 1934 with its table; room for the next ones)
+#define TIP_MAX 4096 // (Q11: 1934 with its table; 2560 until item 12: 2515 then)
 static UiTip g_all[TIP_MAX];
 static int g_nall;
 static void tables_join(void) {
@@ -78,7 +78,7 @@ const UiTip* ui_tips_table(int* count) {
 }
 
 // label -> tip: open addressing over the static table, built on first use
-#define TIP_CAP 4096
+#define TIP_CAP 8192 // (4096 until item 12: only the first 2048 of 2452 descriptions were found)
 static int16_t g_index[TIP_CAP]; // tip + 1, 0 = empty
 static bool g_ready;
 
@@ -107,10 +107,34 @@ static const UiTip* find_n(const char* s, size_t n) {
     return NULL;
 }
 
+// (2026-11-25, item 12) the Spanish ones: their own index
+static const UiTipEs* g_es;
+static int g_nes;
+static int16_t g_index_es[TIP_CAP];
+void ui_tips_set_es(const UiTipEs* t, int count) {
+    g_es = t, g_nes = count;
+    memset(g_index_es, 0, sizeof g_index_es);
+    for (int i = 0; i < count && i < TIP_CAP / 2; i++) {
+        uint32_t k = hash_n(t[i].label, strlen(t[i].label)) & (TIP_CAP - 1);
+        while (g_index_es[k]) k = (k + 1) & (TIP_CAP - 1);
+        g_index_es[k] = (int16_t)(i + 1);
+    }
+}
+const char* ui_tip_es(const char* label) {
+    if (!g_es || !label) return NULL;
+    uint32_t k = hash_n(label, strlen(label)) & (TIP_CAP - 1);
+    while (g_index_es[k]) {
+        const UiTipEs* t = &g_es[g_index_es[k] - 1];
+        if (!strcmp(t->label, label)) return t->text;
+        k = (k + 1) & (TIP_CAP - 1);
+    }
+    return NULL;
+}
+
 static const char* tip_text(const UiTip* t) {
     int lang = i18n_language();
-    const char* s = lang > LANG_EN && lang < LANG_COUNT ? t->text[lang] : NULL;
-    return s && s[0] ? s : t->text[0];
+    const char* s = lang == LANG_PT_BR ? t->text[1] : lang == LANG_ES ? ui_tip_es(t->label) : NULL;
+    return i18n_terms(s && s[0] ? s : t->text[0]); // (2026-11-25, item 13: "Graph" / "Grafo" on screen)
 }
 
 const char* ui_tip_find(const char* label) {

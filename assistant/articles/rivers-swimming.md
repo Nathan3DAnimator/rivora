@@ -1,6 +1,6 @@
 id: rivers-swimming
 kind: concept
-title: Rios, flutuação, nado e debaixo d'água | Rivers, buoyancy, swimming and underwater
+title: Rios, flutuação, nado e debaixo d'água | Rivers, buoyancy, swimming and underwater | Ríos, flotación, nado y bajo el agua
 keys: character swim, character should swim, swim in the lake, swim in water, personagem nadar, nadar no lago, rio, river, water body river, correnteza, current, spline de rio, river spline, flutuar, float, boiar, buoyancy, buoyancy component, caixa flutuando, objeto flutuando, nadar, swim, swimming, nado, personagem nadando, character swimming, debaixo d'agua, debaixo da agua, underwater, embaixo d'agua, linha d'agua, waterline, mergulhar, dive, REALENGINE_NO_UNDERWATER
 --- pt
 ```diagram steps
@@ -34,3 +34,19 @@ The Character swims when the water passes its chest; the camera under water chan
 **Under water:** with the camera in the water, the picture turns blue-green (red goes first), darker the deeper, with a slight waver. With the lens at the surface, the waterline cuts the screen. To compare without it: `REALENGINE_NO_UNDERWATER=1`.
 
 Test scenes: `river` (with Play) and `underwater`.
+--- es
+```diagram steps
+Water Body River: una spline con ancho, profundidad y velocidad por punto
+El agua corre a lo largo de ella (las olas van río abajo)
+Buoyancy: un cuerpo con física flota y la corriente lo lleva
+El Character nada cuando el agua le pasa del pecho; la cámara bajo el agua cambia la imagen
+```
+**Río:** **Añadir > Efectos visuales > Water Body River** (como el Water Body River de Unreal). En Detalles > **River**, cada punto tiene su lugar, **W** (ancho), **D** (profundidad) y **V** (velocidad); **Add Point** alarga el río. El color, la claridad y la espuma vienen del **Water Body** del mismo actor. El agua dibuja sus olas corriendo río abajo y corre más lenta en las orillas.
+
+**Flotación:** en un actor con **Simulate Physics**, **+ Añadir > Buoyancy**. Flota en cualquier agua (lago, río, océano), se endereza con las olas y la corriente lo lleva. **Buoyancy** (1 = madera; 2 = una boya alta; por debajo de 0,5 se hunde), **Water Drag** (cuánto tira el agua) y **Pontoons** (1 o 5 puntos de apoyo).
+
+**Nado:** un **Character** nada solo cuando el agua le pasa del pecho: sin gravedad, con la cabeza sobre el agua, más lento, y la corriente lo lleva. **Jump** nada hacia arriba; en aguas poco profundas camina más lento. **Swim Speed** (0 = 55 % de Max Walk Speed).
+
+**Bajo el agua:** con la cámara en el agua, la imagen se vuelve azul verdosa (el rojo se pierde primero), más oscura cuanto más profundo, con una ligera ondulación. Con la lente en la superficie, la línea de flotación corta la pantalla. Para comparar sin ello: `REALENGINE_NO_UNDERWATER=1`.
+
+Escenas de prueba: `river` (con Jugar) y `underwater`.

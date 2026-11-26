@@ -1,6 +1,6 @@
 id: job-system
 kind: concept
-title: Job system: sistemas em paralelo (para profissionais) | Job system: systems in parallel (for professionals)
+title: Job system: sistemas em paralelo (para profissionais) | Job system: systems in parallel (for professionals) | Job system: sistemas en paralelo (para profesionales)
 keys: job system, jobs, threads, paralelo, multithread, nucleos, workers, estagios, parallel for, dependencias, schedule, cpu cores
 --- pt
 ```diagram steps
@@ -22,3 +22,13 @@ Each system says what it reads and writes | A conflict = the next stage | A stag
 - The Debug Viewer (F10) shows each stage in the **Game Systems** list.
 - The editor's long tasks (import, light baking) take another path: [Background tasks](article:async-api).
 - See also: [ECS architecture](article:ecs-architecture).
+--- es
+```diagram steps
+Cada sistema dice qué lee y qué escribe | Un conflicto = la siguiente etapa | Una etapa: bloques de 16384 filas | Un worker por núcleo, sin locks
+```
+- Los sistemas del ECS (movimiento, animación, IA...) declaran los componentes que leen y escriben. Dos que tocan datos distintos se ejecutan juntos; uno que entra en conflicto pasa a la siguiente etapa.
+- Cada etapa se vuelve tareas (sistema × arquetipo × bloque) que los workers toman mediante un contador atómico. No se asigna nada mientras se ejecuta.
+- Medido: Rotating Movement sobre 1 millón de entidades, 4,8 ms en serie → 3,8 ms en 16 hilos (la memoria es el límite, no la CPU).
+- El Debug Viewer (F10) muestra cada etapa en la lista **Game Systems**.
+- Las tareas largas del editor (importar, hornear luz) toman otro camino: [Tareas en segundo plano](article:async-api).
+- Mira también: [Arquitectura ECS](article:ecs-architecture).

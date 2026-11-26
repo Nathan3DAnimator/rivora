@@ -1,6 +1,6 @@
 id: montage-combo-hit
 kind: recipe
-title: Combos e acertos de golpe no montage | Combos and attack hits in a montage
+title: Combos e acertos de golpe no montage | Combos and attack hits in a montage | Combos y golpes en un Montage
 keys: combo, combos, encadear golpes, chain attacks, janela de combo, combo window, golpe, hit, acerto, hitbox, hit window, janela de acerto, notify state, anim notify state, luta, fighting, soco, punch, montage combo input, is in montage window, on montage hit, parry, invencibilidade
 --- pt
 ```diagram steps
@@ -36,3 +36,20 @@ Event Key Mouse Left -> Branch ( Is Montage Playing ) True -> Montage Combo Inpu
 Event On Montage Hit -> Apply Damage ( Damaged Actor = Other Actor, Base Damage = 20 )
 ```
 The attack montage (with its sections and windows) goes in the Play Montage's Details.
+--- es
+```diagram steps
+Montage con secciones (Attack1, Attack2) | Ventana de combo (Next Section) | Ventana de golpe (hueso y radio) | Montage Combo Input en el botón | On Montage Hit: Apply Damage
+```
+## Ventanas en el Montage Editor
+En **Windows**, **Add Window** crea una con un nombre, un tipo y su tiempo:
+- **State**: solo avisa cuándo se abre y se cierra (**Event On Montage Window**): una parada, una invulnerabilidad.
+- **Combo**: si el jugador pulsa dentro de ella (o un poco antes), el montage pasa a su **Next Section** cuando se cierra; si no, el ataque **termina con la sección** en que está.
+- **Hit**: una esfera (**Hit Radius**) barre el **Hit Bone** (puño, hoja, pie) en cada fotograma; **Event On Montage Hit** se ejecuta **una vez por actor** que toca: quién, dónde y qué ventana.
+- **Is In Montage Window** dice si una ventana de un nombre está abierta ahora.
+
+```blueprint
+Event Key Mouse Left -> Branch ( Is Montage Playing ) True -> Montage Combo Input ( Target = self )
+                                                      False -> Play Montage ( Target = self, Play Rate = 1 )
+Event On Montage Hit -> Apply Damage ( Damaged Actor = Other Actor, Base Damage = 20 )
+```
+El montage de ataque (con sus secciones y ventanas) va en los Detalles del Play Montage.

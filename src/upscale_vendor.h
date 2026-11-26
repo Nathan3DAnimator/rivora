@@ -19,6 +19,9 @@ void ups_vendor_shutdown(struct VkCtx* vk);     // (before the device goes)
 // Whether one can run here (UPS_FSR / UPS_DLSS / UPS_XESS), and why not. The first ask starts its runtime (DLSS: NGX's
 // capability check)
 bool ups_vendor_usable(int kind, const char** why);
+void ups_vendor_warm_async(void);
+// (2026-11-25) the menus' ask: never waits; *pending while the runtimes are still being asked (the warm, started if none)
+bool ups_vendor_usable_nowait(int kind, const char** why, bool* pending); // (2026-11-25) every runtime asked on a thread of its own (the Play, the game's start)
 const char* ups_vendor_version(int kind); // "310.9.16"... ("" before it started)
 
 typedef struct UpsImage { VkImage image; VkImageView view; VkFormat format; uint32_t w, h; } UpsImage;

@@ -30,6 +30,31 @@ struct GpuMatExt { vec4 e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12; }
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer GpuMatExtBuf { GpuMaterial m[MAT_EXT_BASE]; GpuMatExt x[]; };
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer MatFrameBuf { uvec4 t[]; }; // base, normal, emission
 
+// (2026-11-24) The affine fold (MATF_AFFINE, material_affine.inc): the baked channels turned into the final ones by the slot's
+// coefficients, after the GpuToon table: a0 (base rgb, metallic) and b0 their offsets, a1 (emission rgb, roughness) and b1
+// theirs. A parameter that only scales or offsets a channel (a Multiply, an Add, a Mix with a fixed factor, a Strength), and
+// the Emission Intensity, change only these: no bake (Material Instances, Set Scalar / Vector Parameter Value, the editor)
+struct GpuMatAff { vec4 a0, b0, a1, b1; };
+struct MatToonPad { vec4 t[12]; }; // (toon.glsl GpuToon's size)
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer GpuMatAffBuf { GpuMaterial m[MAT_EXT_BASE]; GpuMatExt x[MAT_EXT_BASE]; MatToonPad t[MAT_EXT_BASE]; GpuMatAff a[]; };
+// base: linear; emis: the texture's units (x100 nits). The base and the metallic stay in 0..1 (what the baked texture held),
+// the roughness its own clamp after
+void mat_affine(uvec2 materials, uint slot, inout vec3 base, inout float metal, inout float rough, inout vec3 emis) {
+    GpuMatAff A = GpuMatAffBuf(materials).a[slot];
+    base = clamp(base * A.a0.rgb + A.b0.rgb, 0.0, 1.0);
+    metal = clamp(metal * A.a0.w + A.b0.w, 0.0, 1.0);
+    rough = clamp(rough * A.a1.w + A.b1.w, 0.0, 1.0);
+    emis = max(emis * A.a1.rgb + A.b1.rgb, vec3(0.0));
+}
+vec3 mat_affine_base(uvec2 materials, uint slot, vec3 base) {
+    GpuMatAff A = GpuMatAffBuf(materials).a[slot];
+    return clamp(base * A.a0.rgb + A.b0.rgb, 0.0, 1.0);
+}
+vec3 mat_affine_emis(uvec2 materials, uint slot, vec3 emis) {
+    GpuMatAff A = GpuMatAffBuf(materials).a[slot];
+    return max(emis * A.a1.rgb + A.b1.rgb, vec3(0.0));
+}
+
 // (Q18) A UDIM material's tile under the uv (MATF_UDIM, material_udim.inc): its textures (base, normal / roughness /
 // metallic, emission) from its table in the parameters (row anim.w + 1 + column + 10 x row; 0: a tile it doesn't have,
 // its first tile's), and the uv inside it. The engine's V runs down: tile 1011 is v -1..0

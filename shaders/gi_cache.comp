@@ -243,6 +243,11 @@ void main() {
             // a back face: the ray started inside (a wall closer than the ray's tmin): the wall is right here
             if (h.hit) walls[k] = 1.0 - (h.front ? h.t / tmax : 0.0);
         }
+        // (2026-11-25) the atlas's neighbor another face (gi_cache.c template_make: a box's other side beside this one in
+        // the UV2): a wall right here, the reads never take its light (the sunlit top of a slab on the ceiling under it)
+        uint edges = uint(ct.pad0 + 0.5);
+        for (int k = 0; k < 4; k++)
+            if ((edges & (1u << k)) != 0u) walls[k] = 1.0;
         imageStore(u_walls, px, walls);
     }
     imageStore(u_meta, px, vec4(noise, min(cnt + 1.0, f.cache_params.y), streak, fast));

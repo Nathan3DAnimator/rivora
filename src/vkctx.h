@@ -76,6 +76,7 @@ typedef struct VkCtx {
     bool frag_stores;  // (Q7) fragmentStoresAndAtomics: the asset previews' AO view mode (render_preview.c)
     bool bc_textures;  // BC1-BC7 sampled (the PCs; most phones' GPUs not: the materials stay RGBA8, notas-dev/android.md)
     bool unused_attachments; // VK_EXT_dynamic_rendering_unused_attachments: an attachment without an image (render.c's split)
+    bool mem_budget;         // (2026-11-25) VK_EXT_memory_budget enabled: vkctx_gpu_memory_used
     bool shader_stats; // --shader-stats: VK_KHR_pipeline_executable_properties, the main pass's registers (render.c)
     bool serialize_frames; // vkctx_wait_submitted waits: NVIDIA drivers before 617 (their background compiler crash)
     bool gpu_markers;  // VK_AMD_buffer_marker: gpu_mark's passes (where a lost GPU stopped, in the crash report)
@@ -114,7 +115,10 @@ typedef struct VkCtx {
 void vk_check(VkResult result, const char* what);
 const char* vk_result_name(VkResult r);
 bool vkctx_init(VkCtx* ctx, struct GLFWwindow* window, bool validation);
+// (2026-11-25) bytes of the GPU's own (device local) memory this process uses now, by VK_EXT_memory_budget; 0 without it
+uint64_t vkctx_gpu_memory_used(const VkCtx* ctx);
 extern int g_vk_validation_errors; // errors the validation layer reported (with --validation)
+extern char g_vk_last_validation[512]; // the last one's text (the UI sweep's report)
 // VR (xr.c): the extensions the OpenXR runtime needs, set before vkctx_init; the GPU it drives (NULL: the best one)
 extern const char* g_vk_extra_instance_exts[16];
 extern uint32_t g_vk_extra_ninst;

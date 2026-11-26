@@ -1,6 +1,6 @@
 id: metro-scene
 kind: howto
-title: Cena do metrô abandonado (raios de sol, trem, mato) | Abandoned metro scene (sun shafts, train, weeds)
+title: Cena do metrô abandonado (raios de sol, trem, mato) | Abandoned metro scene (sun shafts, train, weeds) | Escena del metro abandonado (rayos de sol, tren, maleza)
 keys: metro, metrô, metro abandonado, estacao abandonada, tunel, trem, vagao, trilho, trilhos, dormente, raios de sol, god rays, feixes de luz, luz pelo telhado, poeira no ar, pocas, mato, grafite, abandoned metro, subway, train car, rails, sun shafts, light beams, broken roof, puddles, weeds, graffiti, scene metro
 --- pt
 ```diagram steps
@@ -30,3 +30,17 @@ Create project (First Person) | --scene metro | MetroAbandonado map | Play walks
   - **Shafts in the puddles**: near-mirror surfaces (puddles, a wet film, glass) also reflect the lit fog their reflection ray crosses: the sun's shafts show on the wet floor.
 - **Tip**: shafts read best when the gaps are long and narrow and the sun crosses the view from the side (the shafts seen edge on).
 - The assets are CC0 (Poly Haven, ambientCG), downloaded at build time; their list and licenses go in `Content/Demo/LICENSES.txt`. See also [Demo games](article:demo-games) and [Sky, clouds and fog](article:sky-fog).
+--- es
+```diagram steps
+Crear proyecto (Primera Persona) | --scene metro | mapa MetroAbandonado | Jugar recorre el vestíbulo
+```
+- **Ábrela**: `realengine --new-project "<Projects>/MetroAbandonado" --template 2 --scene metro`. El nivel va a `Content/Maps/MetroAbandonado.rlevel` y se convierte en el mapa de inicio del editor y del juego (en Alto).
+- **Qué muestra**: un vestíbulo de metro de 64 m con el techo roto. El sol entra por las grietas como **haces en la niebla volumétrica**; un viejo tren de dos vagones (pintura descascarada, óxido, ventanas sucias, grafitis) en la vía derecha; concreto mojado con charcos; maleza, helechos y pasto entre los rieles.
+- **De qué está hecha** (todo del motor, para aprender):
+  - **Rieles**: una **Spline Mesh** con el perfil de los dos rieles y **Spline Instances** para las traviesas, más otra Spline Mesh de grava. Mueve los puntos de la spline y los rieles se doblan con ella.
+  - **Maleza**: un actor **Foliage** (pasto hecho por la escena, malezas y helechos CC0) pintado donde cae el sol. Selecciónalo y usa el pincel para pintar más.
+  - **Charcos, grafitis y manchas**: **Decals** (Añadir > Efectos visuales > Decal). El piso tiene el nodo **Wet Surface**.
+  - **Luz**: una Directional Light alta a través de las grietas, una Sky Light tenue, una **Exponential Height Fog** volumétrica (densidad 0,009, anisotropía 0,8) y un Post Process con exposición fija, GI más fuerte y un **Color Grading LUT** (sombra fría, luz cálida).
+  - **Haces en los charcos**: las superficies casi espejo (charcos, una película húmeda, vidrio) también reflejan la niebla iluminada que atraviesa su rayo de reflejo: los haces del sol se ven en el piso mojado.
+- **Consejo**: los haces se leen mejor cuando las grietas son largas y estrechas y el sol cruza la vista de lado (los haces vistos de canto).
+- Los assets son CC0 (Poly Haven, ambientCG), descargados al compilar; su lista y licencias van en `Content/Demo/LICENSES.txt`. Véase también [Juegos de demostración](article:demo-games) y [Cielo, nubes y niebla](article:sky-fog).

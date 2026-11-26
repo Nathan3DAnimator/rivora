@@ -1,8 +1,19 @@
 # Marca: ícone, intro e tela de carregamento (`src/brand.c`)
 
 ## Arquivos (`data/branding/`)
-- `icon.ico` (16–256 px, PNG dentro) e `icon.png`: o "R" com a órbita, do logo do usuário. O `.rc` dá o ícone ao
-  `realengine.exe` e ao `realengine_game.exe` (o GLFW o usa nas janelas: `GLFW_ICON`).
+- `icon.ico` (16, 24, 32, 48, 64, 128, 256 px, PNG dentro) e `icon.png` (256): desde 24/11/2026 o **R azul da abertura**
+  (o "R" com a órbita do `logo.png` como máscara, no degradê do Azul Real: claro em cima, #2B6FE3 no meio, fundo
+  embaixo; fundo transparente com sombra suave), gerado por `python tools/make_icon.py` (Pillow + numpy). Antes era o
+  R prateado sobre preto de outubro, que ficou nos exes depois da troca de nome (o pedido do usuário: "o ícone não
+  mudou"). O `.rc` (`realengine.rc.in`, `GLFW_ICON`) vai em **todos os exes**: `rivora.exe`, `rivora_game.exe`,
+  `rivora_updater.exe`, `rivora_mcp.exe` e o lançador `realengine.exe` (o atualizador e a ponte MCP não tinham ícone).
+  O GLFW registra a classe das janelas com o `GLFW_ICON` do exe: a janela do editor, as janelas soltas do ImGui
+  (viewports) e a do jogo pegam o mesmo ícone sem `glfwSetWindowIcon`; a abertura em camada carregava o id 1 (nada)
+  e agora carrega `GLFW_ICON`. A marca da barra de menu (`brand_mark`) já era o R tingido com o acento do tema.
+  Não há atalho nem instalador no código (o pacote é um zip; o atalho antigo aponta para o `realengine.exe`, que tem
+  o ícone). O Windows guarda os ícones em cache: um atalho fixado pode mostrar o antigo até o cache renovar.
+- Teste `exe_icon` (área editor): `tools/check_exe_icon.py` lê o `GLFW_ICON` de cada exe (LoadLibraryEx como dados,
+  o grupo e os RT_ICON) e compara byte a byte com o `icon.ico`, tamanho por tamanho.
 - `logo.png` (512²): o R para a intro. `splash.jpg`: a tela do usuário **sem os textos e a barra pintados** (os cantos,
   "Create • Render • Play", status, barra, rótulos, copyright): a engine os desenha ao vivo e traduzidos.
 - Gerados por um script PowerShell (System.Drawing; não há Python na máquina): recortes, ICO com PNGs, e o fundo

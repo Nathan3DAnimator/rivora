@@ -1,6 +1,6 @@
 id: ai-damage-avoidance
 kind: recipe
-title: IA que sente o dano e desvia dos outros | AI that feels damage and avoids the others
+title: IA que sente o dano e desvia dos outros | AI that feels damage and avoids the others | Sentido de daño y evasión entre agentes de IA
 keys: sentido de dano, damage sense, aisense damage, report damage event, inimigo nao reage quando atingido, ia nao percebe quem acertou, ia atingida de surpresa, enemy doesn't react when shot, ai ignores damage, quem me acertou, desvio, avoidance, rvo, rvo avoidance, inimigos atravessam um ao outro, ia atravessa outra ia, personagens se atravessam, agents walk through each other, characters walk through each other, enemies pass through each other, npcs overlap, local avoidance, desviar de outro personagem, multidao pequena, empurrar
 --- pt
 Como o **AISense_Damage** e o **RVO Avoidance** da Unreal, já ligados em todo agente de IA (componente **IA**):
@@ -44,3 +44,24 @@ class Bullet extends Actor
 ```
 
 The **Instigator** is who the AI will hunt: pass the shooter's pawn (for a bullet, its owner). For the rest of the perception (sight, hearing, squads) see [AI in depth](article:ai-pro) and [NavMesh](article:navmesh).
+--- es
+Como **AISense_Damage** y **RVO Avoidance** de Unreal, ya activados en todo agente de IA (el componente **AI**):
+1. **Sentido de daño**: un **Apply Damage** (o **Apply Radial Damage**) sobre un actor con los componentes **AI** y **Health** cuenta para su percepción. Sabe al instante quién lo golpeó (el **Instigator**), desde cualquier lado, sin cono y sin tiempo de reacción: `TargetActor` pasa a ser el tirador, `LastKnownLocation` y `NoiseLocation` su posición, y `HeardNoise` queda activo durante 4 s. Si está de pie, **se gira hacia el tirador** (2 s) y, al verlo, `CanSeeTarget` se activa: el Behavior Tree y el Real Brain reaccionan como si lo hubiera visto.
+2. No cuentan: el daño de alguien del **mismo Team** (fuego amigo) y un agente del **Team 0** (ignora a los demás).
+3. **Evasión entre agentes**: al caminar (AI Move To, el Move To del árbol, Chase, Patrol...), un agente que está a punto de cruzarse con otro Character o con el jugador en menos de 1,2 s se aparta; de frente, cada uno va por su derecha, como las personas en una acera. Si se tocan, se separan. Su objetivo y el actor hacia el que camina no cuentan (quiere llegar a ellos).
+4. Costo: una cuadrícula hash por fotograma, sin asignar memoria; la lista **AI** del Debug Viewer (F10) muestra el tiempo de la IA. `REALENGINE_AI_AVOID=0` desactiva la evasión (para comparar).
+
+```diagram steps
+Apply Damage sobre el enemigo (Instigator = el tirador) | El enemigo sabe quién fue: TargetActor | Se gira hacia el tirador y lo ve: CanSeeTarget | Lo persigue, rodeando a los demás
+```
+```blueprint
+Event ActorBeginOverlap -> Apply Damage ( Target = Other Actor, Amount = 25, Damage Type = "Damage.Physical", Instigator = self )
+```
+```real
+class Bullet extends Actor
+    event OnBeginOverlap(other: Actor)
+        other.ApplyDamage(25.0, "Damage.Physical", self, self)
+        DestroyActor()
+```
+
+El **Instigator** es a quien la IA va a cazar: pasa el pawn del tirador (en una bala, su dueño). Para el resto de la percepción (vista, oído, escuadrones) consulta [IA en profundidad](article:ai-pro) y [NavMesh](article:navmesh).

@@ -1,6 +1,6 @@
 id: digital-humans
 kind: concept
-title: Pele e olhos realistas (humanos digitais) | Realistic skin and eyes (digital humans)
+title: Pele e olhos realistas (humanos digitais) | Realistic skin and eyes (digital humans) | Piel y ojos realistas (humanos digitales)
 keys: olho, olhos, eye, eyes, iris, íris, cornea, córnea, pupila, pupil, esclera, sclera, olho de vidro, Shading Model, modelo de sombreamento, Eye shading model, M_Eye, SM_Eye, pele, skin, subsurface, subsuperficie, sss, subsurface scattering, espalhamento, burley, subsurface profile, perfil de subsuperficie, humano digital, digital human, metahuman, rosto, face, orelha contra a luz, ear backlit, ear glow, ear glows red, light behind the ear, backlight, backlit skin, contraluz, luz por tras da orelha, orelha vermelha, red glow, transmissao, transmission, dedo vermelho contra a luz, pele de cera, waxy skin, pele de plastico, plastic skin, Subsurface Weight, Subsurface Radius, Subsurface Scale, M_HumanSkin, REALENGINE_NO_SSS
 --- pt
 ```diagram steps
@@ -44,3 +44,24 @@ Light enters the skin, scatters inside and leaves a little to the side: that is 
 - **Mesh:** the iris at the UV's center (0.5, 0.5), **Iris Radius** its radius in UV and **Iris Depth** the cornea's height in cm. The eye looks along its actor's forward (+X).
 - **Ready to use:** the mesh `Examples/SM_Eye` and the material `Examples/M_Eye`; the `eyes` test scene shows both on a head.
 - **Eyelids:** their shadow comes from the normal (ray traced) shadows.
+--- es
+```diagram steps
+El material tiene Subsurface Weight y Subsurface Scale mayores que 0
+Píxeles pares: solo la luz difusa; impares: el brillo (un tablero de ajedrez)
+Un pase reparte la luz difusa según el perfil Burley de cada color
+La luz detrás de una parte fina (una oreja, un dedo) la atraviesa
+```
+La luz entra en la piel, se dispersa por dentro y sale un poco hacia un lado: eso es lo que le quita el aspecto de plástico a un rostro. El motor lo hace **en espacio de pantalla**, como el Subsurface Profile de Unreal.
+- **Cómo usarlo:** en el nodo **Principled BSDF** del material, pon **Subsurface Weight** en 1, **Subsurface Radius** en el color que se dispersa más lejos (piel: 1, 0.2, 0.1, el rojo llega más lejos) y **Subsurface Scale** en metros (piel: 0.01 a 0.015). El ejemplo listo es `Examples/M_HumanSkin`. El valor por defecto de Blender (0.05) hace que la piel parezca cera.
+- **Transmission:** con una luz detrás, una oreja, un dedo o el ala de la nariz se vuelven rojos (un rayo mide el grosor). Necesita ray tracing (Medio y superior).
+- **Costo** (RTX 3060, Épico, la escena `skin`): el pase 0.13 ms; solo existe cuando aparece un material con subsurface. Las muestras crecen con el preset (Bajo 6, Medio 8, Alto 12, Épico 16).
+- **Dónde está desactivado:** con MSAA (el preset Cinemático) y con Variable Rate Shading la piel vuelve al modelo antiguo (luz envolvente más allá del terminador).
+- Para comparar sin él: `REALENGINE_NO_SSS=1`; para ver el tablero de ajedrez crudo: `REALENGINE_SSS_RAW=1`.
+
+**Ojos:** en el editor de materiales, **Shading Model = Eye** (como en Unreal).
+- La **córnea** se vuelve una capa clara y húmeda sobre todo el ojo (el reflejo nítido del cielo y las luces).
+- El **iris** queda debajo y se ve **refractado**: se desplaza cuando la cámara gira, como el de un ojo real.
+- El iris se ilumina como un **plato poco profundo**: la luz que entra por un lado se acumula en el lado opuesto (la cáustica).
+- **Malla:** el iris en el centro de la UV (0.5, 0.5), **Iris Radius** su radio en UV e **Iris Depth** la altura de la córnea en cm. El ojo mira hacia el frente de su actor (+X).
+- **Listo para usar:** la malla `Examples/SM_Eye` y el material `Examples/M_Eye`; la escena de prueba `eyes` muestra ambos en una cabeza.
+- **Párpados:** su sombra viene de las sombras normales (con ray tracing).

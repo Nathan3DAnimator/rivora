@@ -256,6 +256,9 @@ typedef enum BpNodeKind {
     BPK_PLAY_HIT_REACTION, // (2026-11-23)
     BPK_ENTER_COVER, BPK_EXIT_COVER, BPK_COVER_PEEK, BPK_IS_IN_COVER, // (2026-11-23, anim_cover.inc)
     BPK_PRELOAD_LEVEL, BPK_SET_LEVEL_LOAD_SPEED, BPK_SET_ASYNC_LOAD_SPEED, BPK_GET_PRELOAD_PROGRESS, BPK_CANCEL_PRELOAD, // (2026-11-23, level_preload.h)
+    BPK_GET_STREAM_STATE, // (2026-11-24) a Load Stream Level's Progress / Loaded / Failed by name
+    BPK_SET_CULTURE, BPK_GET_CULTURE, BPK_GET_CULTURES, // (2026-11-24, loc.h) the game's localization
+    BPK_SET_GROOM_VISIBLE, BPK_SET_GROOM_SIMULATE, BPK_GET_GROOM_VISIBLE, BPK_GET_GROOM_SIMULATE, // (2026-11-25, item 16) the actor's Groom on / off, simulated or static
     BPN_KIND_COUNT
 } BpNodeKind;
 
@@ -302,11 +305,13 @@ enum {
     OP_CONV,    // a <- b converted from type c & 255 to type c >> 8 (Integer64, Byte, Color, Bool)
     OP_SPAWNARG, // (Expose on Spawn) the next OP_SPAWN's variable (name hash in register b) <- a (d: a string)
     OP_TIMELINE, // (2026-11-16) a Timeline node's input b (Play, Play from Start, Stop, Reverse, Reverse from End, Set New Time: c's time) on timeline a
+    OP_LATENT_INFO, // (2026-11-24) for the next OP_LATENT2: its Progress register a (0xFFFF: none) and where Failed goes on, b
     OP_BREAK = 63, // the debugger's (bp_debug.h): a breakpoint, a step or a trace at a node's start; a: its patch (the op it replaced)
     OP_NATIVE = 64,
 };
 #define BP_MAX_NPARAM 8 // a native's inputs past the third (OP_NPARAM)
-enum { LAT_RETRIGGER = 1, LAT_SPAWN, LAT_STREAM_LOAD, LAT_STREAM_UNLOAD, LAT_LIGHTING /* (Q16) Build Lighting (Async)'s Completed */ };
+enum { LAT_RETRIGGER = 1, LAT_SPAWN, LAT_STREAM_LOAD, LAT_STREAM_UNLOAD, LAT_LIGHTING /* (Q16) Build Lighting (Async)'s Completed */,
+       LAT_PRELOAD /* (2026-11-24) Preload Level's Loaded / Failed */ };
 
 #define BP_K 0x8000u
 #define BP_MAX_CALL 32  // the return stack

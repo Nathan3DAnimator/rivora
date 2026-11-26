@@ -1,6 +1,6 @@
 id: print-debug
 kind: recipe
-title: Mostrar valores na tela (depurar) | Show values on the screen (debugging)
+title: Mostrar valores na tela (depurar) | Show values on the screen (debugging) | Mostrar valores en pantalla (depuración)
 keys: print, imprimir, mostrar valor, debug, depurar, console, log, ver variavel, print string, por que nao funciona, testar valor
 --- pt
 O texto aparece no canto da tela durante o Play e no Registro de Saída. Coloque valores entre chaves na interpolação.
@@ -70,3 +70,37 @@ class DebuggerPy(Actor):
 ```
 
 Also: **F10** opens the Debug Viewer (each object's cost) and **Window > Output Log** keeps everything. [Open the log](open:log)
+--- es
+El texto aparece en la esquina de la pantalla mientras juegas y en el Output Log. Pon los valores entre llaves en la interpolación.
+
+```blueprint
+Event BeginPlay
+  -> Print String ( In String = Append( "Location: ", To String( Get Actor Location ) ) )
+```
+```real
+class Debugger extends Actor
+    var hits = 3
+
+    event BeginPlay()
+        print("Hits: {hits}, at {GetActorLocation()}")
+```
+```cs
+public class DebuggerCs : Actor
+{
+    int hits = 3;
+
+    void BeginPlay()
+    {
+        print($"Hits: {hits}, at {GetActorLocation()}");
+    }
+}
+```
+```py
+class DebuggerPy(Actor):
+    hits = 3
+
+    def begin_play(self):
+        print(f"Hits: {self.hits}, at {get_actor_location()}")
+```
+
+Además: **F10** abre el Debug Viewer (el costo de cada objeto) y **Ventana > Output Log** lo guarda todo. [Abrir el registro](open:log)

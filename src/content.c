@@ -47,6 +47,7 @@ void tlend_import_set_mirror(const char* src_root, const char* dst_vroot); // (2
 #include "platform.h"
 #include "platform_files.h"
 #include "ui_icons.h"
+#include "ui_tips.h"
 
 #define MAX_ITEMS 4096
 #define MAX_FOLDERS 1024
@@ -204,7 +205,7 @@ static AssetKind kind_of(const char* name) {
     if (!strcmp(ext, "rsmix")) return ASSET_SOUND_MIX;
     if (!strcmp(ext, "rsconc")) return ASSET_SOUND_CONCURRENCY;
     if (!strcmp(ext, "rsubmix")) return ASSET_SUBMIX;
-    if (!strcmp(ext, "real") || !strcmp(ext, "cs") || !strcmp(ext, "py") || !strcmp(ext, "c")) return ASSET_SCRIPT;
+    if (!strcmp(ext, "rvs") || !strcmp(ext, "real") || !strcmp(ext, "cpp") || !strcmp(ext, "rcpp") || !strcmp(ext, "cs") || !strcmp(ext, "py") || !strcmp(ext, "c")) return ASSET_SCRIPT;
     if (!strcmp(ext, "rparticle")) return ASSET_PARTICLE_SYSTEM;
     if (!strcmp(ext, "rikrig")) return ASSET_IK_RIG;
     if (!strcmp(ext, "rphys")) return ASSET_PHYSICS_ASSET;
@@ -263,6 +264,214 @@ static bool name_matches(const char* name, const char* filter) {
     return false;
 }
 
+// --- (2026-11-24) Filters, as Unreal's Filters menu: a filter added shows as a chip under the search (its family's
+// color); a click turns it on or off, the right click removes it. The type filters that are on add up (OR); the Other
+// filters (Favorites, Recent, Modified, In Use in Level) and the search narrow what they let through (AND). Any filter
+// on: the current folder and below, without the folders (as a search). Kept in editor.ini (the user's) ---
+#define KB(k) (1ull << (k))
+typedef struct CbFilter {
+    const char* key;   // its id in editor.ini and the tips ("cbf_<key>")
+    const char* label; // English (TR)
+    UiIcon icon;
+    int family;        // the asset kind whose family color the chip takes (-1: token below)
+    int token;
+    uint64_t kinds;    // the asset kinds it lets through (0: a special one)
+    bool advanced;     // in the menu's Advanced submenu (the basic ones at its top level)
+} CbFilter;
+static const CbFilter g_cbf[CBF_COUNT] = {
+    [CBF_BLUEPRINT] = { "blueprint", N_("Blueprint Class"), ICON_BLUEPRINT, ASSET_BLUEPRINT, 0, KB(ASSET_BLUEPRINT) | KB(ASSET_BP_INTERFACE) | KB(ASSET_MACRO_LIB), false },
+    [CBF_WIDGET] = { "widget", N_("Widget Blueprint"), ICON_WIDGET, ASSET_DIALOGUE, 0, KB(ASSET_BLUEPRINT), false },
+    [CBF_MATERIAL] = { "material", N_("Material"), ICON_MATERIAL, ASSET_MATERIAL, 0, KB(ASSET_MATERIAL), false },
+    [CBF_MATERIAL_INSTANCE] = { "material_instance", N_("Material Instance"), ICON_MATERIAL_INSTANCE, ASSET_MATERIAL_INSTANCE, 0, KB(ASSET_MATERIAL_INSTANCE), false },
+    [CBF_STATIC_MESH] = { "static_mesh", N_("Static Mesh"), ICON_STATIC_MESH, ASSET_STATIC_MESH, 0, KB(ASSET_STATIC_MESH) | KB(ASSET_BASIC_SHAPE), false },
+    [CBF_SKELETAL_MESH] = { "skeletal_mesh", N_("Skeletal Mesh"), ICON_SKELETAL_MESH, ASSET_SKELETAL_MESH, 0, KB(ASSET_SKELETAL_MESH), false },
+    [CBF_TEXTURE] = { "texture", N_("Texture"), ICON_TEXTURE, ASSET_TEXTURE_SOURCE, 0, KB(ASSET_TEXTURE_SOURCE), false },
+    [CBF_SOUND] = { "sound", N_("Sound"), ICON_SOUND_WAVE, ASSET_SOUND_WAVE, 0,
+                    KB(ASSET_SOUND_WAVE) | KB(ASSET_SOUND_CUE) | KB(ASSET_SOUND_ATTENUATION) | KB(ASSET_SOUND_CLASS) | KB(ASSET_SOUND_MIX) |
+                        KB(ASSET_SOUND_CONCURRENCY) | KB(ASSET_SUBMIX) | KB(ASSET_METASOUND) | KB(ASSET_SOUND_SOURCE), false },
+    [CBF_LEVEL] = { "level", N_("Level"), ICON_LEVEL, ASSET_LEVEL, 0, KB(ASSET_LEVEL), false },
+    [CBF_ANIMATION] = { "animation", N_("Animation"), ICON_ANIMATION, ASSET_ANIMATION, 0, KB(ASSET_ANIMATION) | KB(ASSET_ANIM_MONTAGE), false },
+    [CBF_PARTICLES] = { "particles", N_("Particle System"), ICON_PARTICLES, ASSET_PARTICLE_SYSTEM, 0, KB(ASSET_PARTICLE_SYSTEM), false },
+    [CBF_SEQUENCE] = { "sequence", N_("Level Sequence"), ICON_SEQUENCE, ASSET_LEVEL_SEQUENCE, 0, KB(ASSET_LEVEL_SEQUENCE), false },
+    [CBF_DATA_ASSET] = { "data_asset", N_("Data Asset"), ICON_DATA, ASSET_DATA_ASSET, 0, KB(ASSET_DATA_ASSET), false },
+    [CBF_STRUCT] = { "struct", N_("Structure"), ICON_STRUCT, ASSET_BP_STRUCT, 0, KB(ASSET_BP_STRUCT), true },
+    [CBF_ENUM] = { "enum", N_("Enumeration"), ICON_ENUM, ASSET_BP_ENUM, 0, KB(ASSET_BP_ENUM), true },
+    [CBF_AI] = { "ai", N_("Artificial Intelligence"), ICON_BEHAVIOR_TREE, ASSET_BEHAVIOR_TREE, 0, KB(ASSET_BEHAVIOR_TREE) | KB(ASSET_BRAIN), true },
+    [CBF_INPUT] = { "input", N_("Input"), ICON_INPUT_ACTION, ASSET_INPUT_ACTION, 0, KB(ASSET_INPUT_ACTION) | KB(ASSET_INPUT_CONTEXT), true },
+    [CBF_SCRIPT] = { "script", N_("Script"), ICON_SCRIPT, ASSET_SCRIPT, 0, KB(ASSET_SCRIPT), true },
+    [CBF_IK_RIG] = { "ik_rig", N_("IK Rig"), ICON_IK_RIG, ASSET_IK_RIG, 0, KB(ASSET_IK_RIG), true },
+    [CBF_PHYSICS] = { "physics", N_("Physics"), ICON_PHYSICS_ASSET, ASSET_PHYSICS_ASSET, 0, KB(ASSET_PHYSICS_ASSET) | KB(ASSET_PHYS_MATERIAL), true },
+    [CBF_VEHICLE] = { "vehicle", N_("Vehicle"), ICON_VEHICLE, ASSET_VEHICLE, 0, KB(ASSET_VEHICLE), true },
+    [CBF_DIALOGUE] = { "dialogue", N_("Dialogue"), ICON_DIALOGUE, ASSET_DIALOGUE, 0, KB(ASSET_DIALOGUE), true },
+    [CBF_QUEST] = { "quest", N_("Quest"), ICON_QUEST, ASSET_QUEST, 0, KB(ASSET_QUEST), true },
+    [CBF_CAMERA_SHAKE] = { "camera_shake", N_("Camera Shake"), ICON_CAMERA, ASSET_CAMERA_SHAKE, 0, KB(ASSET_CAMERA_SHAKE), true },
+    [CBF_PCG] = { "pcg", N_("PCG Graph"), ICON_GRAPH, ASSET_PCG_GRAPH, 0, KB(ASSET_PCG_GRAPH), true },
+    [CBF_MODEL_FILE] = { "model_file", N_("Model File"), ICON_RASSET, ASSET_MESH_SOURCE, 0, KB(ASSET_MESH_SOURCE) | KB(ASSET_RASSET), true },
+    [CBF_OTHER_FILE] = { "other_file", N_("Other File"), ICON_FILE, ASSET_OTHER, 0, KB(ASSET_OTHER), true },
+    [CBF_FAVORITES] = { "favorites", N_("Favorites"), ICON_TAG, -1, TK_AMBER, 0, false },
+    [CBF_RECENT] = { "recent", N_("Recently Opened"), ICON_TIMER, -1, TK_ACCENT, 0, false },
+    [CBF_MODIFIED] = { "modified", N_("Modified"), ICON_UNSAVED, -1, TK_WARN, 0, false },
+    [CBF_IN_LEVEL] = { "in_level", N_("In Use in Level"), ICON_LEVEL, -1, TK_ASSET_LEVEL, 0, false },
+};
+#define CBF_MAX_FAV 256
+#define CBF_MAX_RECENT 32
+#define CBF_MAX_USED 8192
+static struct {
+    uint64_t added, on;                  // bits by CbFilterId: shown as a chip; on
+    char fav[CBF_MAX_FAV][VPATH];        // the favorites (vpaths) and their hashes
+    uint32_t fav_hash[CBF_MAX_FAV];
+    int nfav;
+    char recent[CBF_MAX_RECENT][VPATH];  // the assets opened last (newest first)
+    uint32_t recent_hash[CBF_MAX_RECENT];
+    int nrecent;
+    uint32_t used[CBF_MAX_USED];         // the level's assets (sorted hashes), read when a scan needs them
+    int nused;
+    uint32_t dirty_bp[256];              // the Blueprints changed and not saved (their hashes), at the scan
+    int ndirty_bp;
+    double scan_ms;                      // the last scan's time (the measure)
+} F;
+static ContentLevelHooks s_level;
+
+static uint32_t vp_hash(const char* vpath) { // (the Blueprints' bp_vpath_hash: what the levels store)
+    uint32_t h = 2166136261u;
+    for (const char* c = vpath; *c; c++) h = (h ^ (uint8_t)tolower((unsigned char)(*c == '\\' ? '/' : *c))) * 16777619u;
+    return h ? h : 1u;
+}
+static uint64_t cbf_types_on(void) { return F.on & (KB(CBF_FIRST_OTHER) - 1); }
+static bool filters_on(void) { return F.on != 0; }
+static int fav_index(const char* vpath) {
+    uint32_t h = vp_hash(vpath);
+    for (int i = 0; i < F.nfav; i++)
+        if (F.fav_hash[i] == h && !_stricmp(F.fav[i], vpath)) return i;
+    return -1;
+}
+bool content_is_favorite(const char* vpath) { return vpath && fav_index(vpath) >= 0; }
+void content_set_favorite(const char* vpath, bool on) {
+    if (!vpath || !vpath[0]) return;
+    int i = fav_index(vpath);
+    if (on && i < 0 && F.nfav < CBF_MAX_FAV) {
+        snprintf(F.fav[F.nfav], VPATH, "%s", vpath);
+        F.fav_hash[F.nfav++] = vp_hash(vpath);
+    } else if (!on && i >= 0) {
+        memmove(F.fav[i], F.fav[i + 1], sizeof F.fav[0] * (size_t)(F.nfav - i - 1));
+        memmove(&F.fav_hash[i], &F.fav_hash[i + 1], sizeof F.fav_hash[0] * (size_t)(F.nfav - i - 1));
+        F.nfav--;
+    } else
+        return;
+    if (F.on & KB(CBF_FAVORITES)) S.dirty = true;
+}
+static void recent_add(const char* vpath) {
+    if (!vpath || strncmp(vpath, "/Content", 8) != 0) return;
+    uint32_t h = vp_hash(vpath);
+    int at = F.nrecent < CBF_MAX_RECENT ? F.nrecent : CBF_MAX_RECENT - 1;
+    for (int i = 0; i < F.nrecent; i++)
+        if (F.recent_hash[i] == h) at = i;
+    memmove(F.recent[1], F.recent[0], sizeof F.recent[0] * (size_t)at);
+    memmove(&F.recent_hash[1], &F.recent_hash[0], sizeof F.recent_hash[0] * (size_t)at);
+    snprintf(F.recent[0], VPATH, "%s", vpath);
+    F.recent_hash[0] = h;
+    if (at == F.nrecent) F.nrecent++;
+    if (F.on & KB(CBF_RECENT)) S.dirty = true;
+}
+int content_filter_count(void) { return CBF_COUNT; }
+const char* content_filter_label(int id) { return id >= 0 && id < CBF_COUNT ? g_cbf[id].label : ""; }
+void content_filter_set(int id, bool added, bool on) {
+    if (id < 0 || id >= CBF_COUNT) return;
+    uint64_t b = KB(id);
+    F.added = added ? F.added | b : F.added & ~b;
+    F.on = added && on ? F.on | b : F.on & ~b;
+    S.dirty = true;
+}
+void content_filter_get(int id, bool* added, bool* on) {
+    if (added) *added = id >= 0 && id < CBF_COUNT && (F.added & KB(id));
+    if (on) *on = id >= 0 && id < CBF_COUNT && (F.on & KB(id));
+}
+void content_filters_clear(void) {
+    F.added = F.on = 0;
+    S.dirty = true;
+}
+double content_filter_scan_ms(void) { return F.scan_ms; }
+static int u32_cmp(const void* a, const void* b) {
+    uint32_t x = *(const uint32_t*)a, y = *(const uint32_t*)b;
+    return x < y ? -1 : x > y;
+}
+static void filters_prepare(void) { // what the scan's tests need, gathered once per scan
+    F.nused = 0, F.ndirty_bp = 0;
+    if ((F.on & KB(CBF_IN_LEVEL)) && s_level.used_assets) {
+        F.nused = s_level.used_assets(F.used, CBF_MAX_USED);
+        qsort(F.used, (size_t)F.nused, sizeof F.used[0], u32_cmp);
+    }
+    if (F.on & KB(CBF_MODIFIED))
+        for (uint32_t i = 0; i < bp_asset_count() && F.ndirty_bp < 256; i++) {
+            const BpAsset* a = bp_asset_at(i);
+            if (a && a->dirty) F.dirty_bp[F.ndirty_bp++] = a->hash;
+        }
+}
+// The item passes the filters that are on (the search was checked before)
+static bool filter_pass(Item* it) {
+    if (!F.on) return true;
+    if (it->kind == ASSET_FOLDER) return false;
+    uint64_t types = cbf_types_on();
+    if (types) {
+        bool any = false;
+        for (int f = 0; f < CBF_FIRST_OTHER && !any; f++) {
+            if (!(types & KB(f)) || !(g_cbf[f].kinds & KB(it->kind))) continue;
+            if (f == CBF_BLUEPRINT || f == CBF_WIDGET) { // (a Widget Blueprint is a class whose root is a User Widget)
+                BpAsset* a = it->kind == ASSET_BLUEPRINT ? item_bp(it) : NULL;
+                bool widget = a && bp_native_of(a) == BPN_USER_WIDGET;
+                if ((f == CBF_WIDGET) != widget) continue;
+            }
+            any = true;
+        }
+        if (!any) return false;
+    }
+    uint32_t h = (F.on & (KB(CBF_RECENT) | KB(CBF_IN_LEVEL) | KB(CBF_MODIFIED))) ? vp_hash(it->vpath) : 0;
+    if ((F.on & KB(CBF_FAVORITES)) && fav_index(it->vpath) < 0) return false;
+    if (F.on & KB(CBF_RECENT)) {
+        bool r = false;
+        for (int i = 0; i < F.nrecent && !r; i++) r = F.recent_hash[i] == h;
+        if (!r) return false;
+    }
+    if (F.on & KB(CBF_IN_LEVEL)) {
+        bool used = it->kind == ASSET_BASIC_SHAPE ? false : bsearch(&h, F.used, (size_t)F.nused, sizeof h, u32_cmp) != NULL;
+        if (!used) return false;
+    }
+    if (F.on & KB(CBF_MODIFIED)) {
+        int scs = sc_state(it->vpath);
+        bool m = scs == SC_NEW || scs == SC_MODIFIED || scs == SC_ADDED;
+        for (int i = 0; i < F.ndirty_bp && !m; i++) m = F.dirty_bp[i] == h;
+        if (!m && it->kind == ASSET_LEVEL && s_level.unsaved) {
+            char abs[VPATH + 64];
+            to_abs(it->vpath, abs, sizeof abs);
+            m = s_level.unsaved(abs);
+        }
+        if (!m) return false;
+    }
+    return true;
+}
+// editor.ini (the user's): the chips and which are on, the favorites, the recent assets
+void content_write_prefs(FILE* f) {
+    fprintf(f, "cb_filters=%llx,%llx\n", (unsigned long long)F.added, (unsigned long long)F.on);
+    for (int i = 0; i < F.nfav; i++) fprintf(f, "cb_fav=%s\n", F.fav[i]);
+    for (int i = F.nrecent - 1; i >= 0; i--) fprintf(f, "cb_recent=%s\n", F.recent[i]); // (oldest first: read back in order)
+}
+bool content_read_pref(const char* key, const char* v) {
+    if (!strcmp(key, "cb_filters")) {
+        unsigned long long a = 0, o = 0;
+        if (sscanf(v, "%llx,%llx", &a, &o) >= 1) {
+            uint64_t all = KB(CBF_COUNT) - 1;
+            F.added = (uint64_t)a & all, F.on = (uint64_t)o & F.added;
+            S.dirty = true;
+        }
+    } else if (!strcmp(key, "cb_fav")) {
+        content_set_favorite(v, true);
+    } else if (!strcmp(key, "cb_recent")) {
+        recent_add(v);
+    } else
+        return false;
+    return true;
+}
+
 // --- Reading the folders ---
 
 static void add_item(const char* dir_vpath, const char* name, AssetKind kind, int shape, uint64_t size, int64_t mtime) {
@@ -288,8 +497,10 @@ static void walk_one(void* user, const ReDirEntry* e) {
     if (e->name[0] == '.') return; // hidden: .git, .vs
     const char* ext = e->is_dir ? NULL : strrchr(e->name, '.');
     if (ext && (!_stricmp(ext, ".rlevelbp") || !_stricmp(ext, ".rlight") || !_stricmp(ext, ".tmp"))) return; // a level's parts (Level Blueprint, baked light)
-    if (name_matches(e->name, S.filter) || !c->recursive)
+    if (name_matches(e->name, S.filter) || !c->recursive) {
         add_item(c->vpath, e->name, e->is_dir ? ASSET_FOLDER : kind_of(e->name), 0, e->size, e->mtime);
+        if (S.nitems && !filter_pass(&S.items[S.nitems - 1])) S.nitems--; // (2026-11-24: the Filters)
+    }
     if (c->recursive && e->is_dir && c->depth < 16) {
         WalkCtx sub = { "", c->depth + 1, true };
         snprintf(sub.vpath, VPATH, "%s/%s", c->vpath, e->name);
@@ -306,13 +517,18 @@ static int item_cmp(const void* a, const void* b) {
 }
 
 static void scan_items(void) {
+    double t0 = re_time_seconds();
     S.nitems = 0;
-    bool search = S.filter[0] != 0;
+    bool search = S.filter[0] != 0 || filters_on(); // (a filter on: this folder and below, as a search)
+    filters_prepare();
     if (is_engine(S.cur)) {
         if (!strcmp(S.cur, "/Engine")) add_item("/Engine", "BasicShapes", ASSET_FOLDER, 0, 0, 0);
         else if (!strcmp(S.cur, "/Engine/BasicShapes"))
             for (int s = 0; s < SHAPE_COUNT; s++)
-                if (name_matches(g_shape_names[s], S.filter)) add_item(S.cur, g_shape_names[s], ASSET_BASIC_SHAPE, s, 0, 0);
+                if (name_matches(g_shape_names[s], S.filter)) {
+                    add_item(S.cur, g_shape_names[s], ASSET_BASIC_SHAPE, s, 0, 0);
+                    if (!filter_pass(&S.items[S.nitems - 1])) S.nitems--;
+                }
     } else {
         WalkCtx c = { "", 0, search };
         snprintf(c.vpath, VPATH, "%s", S.cur);
@@ -338,6 +554,7 @@ static void scan_items(void) {
         S.pending_rename[0] = 0;
     }
     S.dirty = false;
+    F.scan_ms = (re_time_seconds() - t0) * 1000.0;
 }
 
 static void tree_walk(const char* vpath, int depth);
@@ -1091,7 +1308,6 @@ static int g_open_item = -1; // a double click this frame
 // --- Made, then named, then opened (Unreal's Add: the new asset's name is edited first) ---
 static bool s_creating;            // the Add menus are running: an editor asked to open what they made waits
 static bool s_open_after_rename;   // the item being renamed opens when the name is typed
-static ContentLevelHooks s_level;
 
 void content_set_level_hooks(const ContentLevelHooks* h) { s_level = h ? *h : (ContentLevelHooks){ 0 }; }
 
@@ -1155,6 +1371,7 @@ void content_created(const char* vpath) {
 void content_open_asset(const char* vpath) {
     const char* dot = strrchr(vpath, '.');
     if (!dot) return;
+    recent_add(vpath); // (the Recently Opened filter)
     bool is_bp;
     bp_kind_of_path(vpath, &is_bp);
     if (is_bp) bp_editor_open(vpath);
@@ -1258,6 +1475,116 @@ static void add_menus(bool editable) {
     s_creating = false;
 }
 
+// --- (2026-11-24) The Filters button, its menu and the chips under the search ---
+static bool g_prefs_changed; // a filter or a favorite changed: the editor writes editor.ini
+bool content_take_prefs_changed(void) {
+    bool c = g_prefs_changed;
+    g_prefs_changed = false;
+    return c;
+}
+static void draw_star(ImDrawList* dl, float cx, float cy, float r, uint32_t col) {
+    ImVec2 p[10];
+    for (int k = 0; k < 10; k++) {
+        float a = -1.5707963f + (float)k * 0.62831853f, rr = k & 1 ? r * 0.45f : r;
+        p[k] = (ImVec2){ cx + cosf(a) * rr, cy + sinf(a) * rr };
+    }
+    ImDrawList_AddConcavePolyFilled(dl, p, 10, col);
+}
+static int cbf_token(int f) { return g_cbf[f].family >= 0 ? ui_asset_family_token(g_cbf[f].family) : g_cbf[f].token; }
+static void cbf_tip(int f) { // the standard tooltip: its icon, its name, what it does
+    char desc[400], key[48];
+    snprintf(key, sizeof key, "cbf_%s", g_cbf[f].key);
+    const char* d = ui_tip_find(key);
+    if (!d) {
+        snprintf(desc, sizeof desc, TR("Shows only the %s assets (this folder and below). Several types add up; the search and the Other Filters narrow them."), TR(g_cbf[f].label));
+        d = desc;
+    }
+    ui_tip_item(g_cbf[f].icon, TR(g_cbf[f].label), d, NULL);
+}
+static void cbf_toggle_added(int f) {
+    bool added = (F.added & KB(f)) != 0;
+    content_filter_set(f, !added, !added); // (added: on at once, as Unreal's)
+    g_prefs_changed = true;
+}
+static void cbf_menu_item(int f) {
+    char label[96];
+    snprintf(label, sizeof label, "%s##cbf_%s", TR(g_cbf[f].label), g_cbf[f].key);
+    if (ui_menu_item(g_cbf[f].icon, label, NULL, (F.added & KB(f)) != 0, true)) cbf_toggle_added(f);
+    cbf_tip(f);
+}
+static void filters_button(void) {
+    int n = 0;
+    for (int f = 0; f < CBF_COUNT; f++) n += (F.on >> f) & 1;
+    char label[64];
+    if (n) snprintf(label, sizeof label, "%s (%d)", TR("Filters"), n);
+    else snprintf(label, sizeof label, "%s", TR("Filters"));
+    if (ui_icon_button("cb_filters", ICON_FILTER, label, n ? TH(TK_ACCENT) : TH(TK_N14), n > 0,
+                       TR("Filters: show only some types of assets, the favorites, the recent, the modified or the ones the level uses")))
+        igOpenPopup_Str("cb_filters_menu", 0);
+    if (igBeginPopup("cb_filters_menu", 0)) {
+        igSeparatorText(TR("Other Filters"));
+        for (int f = CBF_FIRST_OTHER; f < CBF_COUNT; f++) cbf_menu_item(f);
+        igSeparatorText(TR("Asset Types"));
+        for (int f = 0; f < CBF_FIRST_OTHER; f++)
+            if (!g_cbf[f].advanced) cbf_menu_item(f);
+        if (ui_begin_menu(ICON_MENU, TR("More Types"), true)) {
+            for (int f = 0; f < CBF_FIRST_OTHER; f++)
+                if (g_cbf[f].advanced) cbf_menu_item(f);
+            igEndMenu();
+        }
+        igSeparator();
+        if (ui_menu_item(ICON_REFRESH, TR("Reset Filters"), NULL, false, F.added != 0)) {
+            content_filters_clear();
+            g_prefs_changed = true;
+        }
+        igEndPopup();
+    }
+}
+// The chips of the filters added: its family's color when on, grey when off; click: on/off, right click: removed
+static void filter_chips(void) {
+    if (!F.added) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    ImVec2 start = igGetCursorScreenPos();
+    float right = start.x + igGetContentRegionAvail().x;
+    float h = igGetFrameHeight() * 0.9f, pad = 7.0f, isz = igGetFontSize() * 0.9f, x = start.x, y = start.y;
+    for (int f = 0; f < CBF_COUNT; f++) {
+        if (!(F.added & KB(f))) continue;
+        const char* name = TR(g_cbf[f].label);
+        float w = pad + 4.0f + isz + 5.0f + igCalcTextSize(name, NULL, false, -1).x + pad;
+        if (x > start.x && x + w > right) x = start.x, y += h + 4.0f;
+        bool on = (F.on & KB(f)) != 0;
+        char id[48];
+        snprintf(id, sizeof id, "##chip_%s", g_cbf[f].key);
+        igSetCursorScreenPos((ImVec2){ x, y });
+        igInvisibleButton(id, (ImVec2){ w, h }, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        bool hov = igIsItemHovered(0);
+        if (igIsItemClicked(ImGuiMouseButton_Left)) {
+            content_filter_set(f, true, !on);
+            g_prefs_changed = true;
+        } else if (igIsItemClicked(ImGuiMouseButton_Right)) {
+            content_filter_set(f, false, false);
+            g_prefs_changed = true;
+        }
+        {
+            char d[400];
+            snprintf(d, sizeof d, "%s %s", TR("Click: on or off. Right click: remove the filter."), on ? TR("(on)") : TR("(off)"));
+            ui_tip_item(g_cbf[f].icon, name, d, NULL);
+        }
+        uint32_t c = TH(cbf_token(f));
+        float r = h * 0.5f;
+        ImDrawList_AddRectFilled(dl, (ImVec2){ x, y }, (ImVec2){ x + w, y + h }, on ? THA(cbf_token(f), hov ? 112u : 80u) : TH(hov ? TK_BG_HOVER : TK_BG_RAISED), r, 0);
+        ImDrawList_AddRect(dl, (ImVec2){ x, y }, (ImVec2){ x + w, y + h }, on ? c : TH(TK_N8), r, 1.0f, 0);
+        ImDrawList_AddCircleFilled(dl, (ImVec2){ x + pad + 2.0f, y + h * 0.5f }, 3.0f, on ? c : TH(TK_N10), 10); // (the on light)
+        float ix = x + pad + 6.0f;
+        if (f == CBF_FAVORITES) draw_star(dl, ix + isz * 0.5f, y + h * 0.5f, isz * 0.48f, on ? c : TH(TK_N11));
+        else ui_icon(dl, g_cbf[f].icon, ix, y + (h - isz) * 0.5f, isz, on ? TH(TK_N15) : TH(TK_N11));
+        ImDrawList_AddText_Vec2(dl, (ImVec2){ ix + isz + 5.0f, y + (h - igGetFontSize()) * 0.5f }, on ? TH(TK_N15) : TH(TK_N11), name, NULL);
+        x += w + 4.0f;
+    }
+    igSetCursorScreenPos((ImVec2){ start.x, y + h + 4.0f });
+    igDummy((ImVec2){ 0, 0 });
+}
+
 static void draw_tile(int i, float x, float y, float tile, float row_h) {
     Item* it = &S.items[i];
     ImDrawList* dl = igGetWindowDrawList();
@@ -1295,6 +1622,14 @@ static void draw_tile(int i, float x, float y, float tile, float row_h) {
             igSeparator();
         }
         content_create_menu(it->vpath, it->kind, editable); // (Q6) what is made from it, by its type (content_create.c)
+        if (it->kind != ASSET_FOLDER) { // (2026-11-24) the Favorites filter's
+            bool fav = content_is_favorite(it->vpath);
+            if (ui_menu_item(ICON_TAG, fav ? TR("Remove from Favorites") : TR("Add to Favorites"), NULL, false, true)) {
+                for (int k = 0; k < S.nitems; k++) // (the selection with it)
+                    if (k == i || S.sel[k]) content_set_favorite(S.items[k].vpath, !fav);
+                g_prefs_changed = true;
+            }
+        }
         if (ui_menu_item(ICON_RENAME, TR("Rename"), "F2", false, editable)) begin_rename(i);
         if (ui_menu_item(ICON_DELETE, TR("Delete"), "Delete", false, editable)) S.ask_delete = true;
         igSeparator();
@@ -1342,6 +1677,7 @@ static void draw_tile(int i, float x, float y, float tile, float row_h) {
     if (!folder) // (Q26, the mockups; Unreal's) the kind: a bar of its family's color under the picture
         ImDrawList_AddRectFilled(dl, (ImVec2){ x + 2, y + tile - 5.0f }, (ImVec2){ x + tile - 2, y + tile - 2 }, TH(ui_asset_family_token(it->kind)), 1.5f, 0);
     if (sel) ImDrawList_AddRect(dl, (ImVec2){ x, y }, (ImVec2){ x + tile, y + row_h - 6.0f }, TH(TK_ACCENT), 4.0f, 2.0f, 0);
+    if (!folder && F.nfav && fav_index(it->vpath) >= 0) draw_star(dl, x + 10.0f, y + 10.0f, 6.0f, TH(TK_AMBER)); // (a favorite)
     { // (B14) its Git state: a dot in the top right corner (green new, yellow modified, red deleted) as Unreal's checkmarks
         int scs = it->kind != ASSET_FOLDER ? sc_state(it->vpath) : SC_NONE;
         if (scs) {
@@ -1539,6 +1875,8 @@ bool content_draw(float x, float y, float w, float h, bool docked, bool* toggle_
 
     // Search and size, the tiles, the footer
     igBeginGroup();
+    filters_button();
+    igSameLine(0, 4);
     igSetNextItemWidth(-igGetFontSize() * 9.0f);
     char before[128];
     snprintf(before, sizeof before, "%s", S.filter);
@@ -1548,6 +1886,7 @@ bool content_draw(float x, float y, float w, float h, bool docked, bool* toggle_
     igSameLine(0, 6);
     igSetNextItemWidth(-1);
     igSliderFloat("##cb_size", &S.tile, 64.0f, 192.0f, TR("Size %.0f"), 0);
+    filter_chips();
 
     float footer = igGetFrameHeightWithSpacing();
     if (igBeginChild_Str("cb_tiles", (ImVec2){ 0, -footer }, 0, 0)) {
@@ -1570,7 +1909,7 @@ bool content_draw(float x, float y, float w, float h, bool docked, bool* toggle_
         igDummy((ImVec2){ avail, rows * row_h > 1 ? rows * row_h : 1 });
         if (S.nitems == 0) {
             igSetCursorScreenPos((ImVec2){ origin.x + 8, origin.y + 8 });
-            igTextDisabled("%s", S.filter[0] ? TR("No results.") : editable ? TR("This folder is empty. Drop files here from Explorer, or Import.") : TR("Empty."));
+            igTextDisabled("%s", S.filter[0] || filters_on() ? TR("No results.") : editable ? TR("This folder is empty. Drop files here from Explorer, or Import.") : TR("Empty."));
         }
         // a click on the background clears the selection; its menu makes folders and imports
         if (igIsWindowHovered(0) && !igIsAnyItemHovered() && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false))
@@ -1613,6 +1952,8 @@ bool content_draw(float x, float y, float w, float h, bool docked, bool* toggle_
     if (!docked && igIsKeyPressed_Bool(ImGuiKey_Escape, false) && !igGetIO_Nil()->WantTextInput) keep = false;
     igEnd();
 
+    if (g_open_item >= 0 && g_open_item < S.nitems && S.items[g_open_item].kind != ASSET_FOLDER)
+        recent_add(S.items[g_open_item].vpath); // (the Recently Opened filter)
     if (g_open_item >= 0 && g_open_item < S.nitems && S.items[g_open_item].kind >= ASSET_BLUEPRINT &&
         S.items[g_open_item].kind <= ASSET_DATA_ASSET)
         bp_editor_open(S.items[g_open_item].vpath); // its editor (Unreal's double click)
@@ -1638,3 +1979,13 @@ bool content_draw(float x, float y, float w, float h, bool docked, bool* toggle_
     }
     return keep;
 }
+
+// (2026-11-24) The tests' listing: the folder read now with the filters and the search, as the panel would
+int content_test_list(const char* folder_vpath, const char* search) {
+    if (!S.items) return 0;
+    snprintf(S.cur, VPATH, "%s", folder_vpath);
+    snprintf(S.filter, sizeof S.filter, "%s", search ? search : "");
+    scan_items();
+    return S.nitems;
+}
+const char* content_test_item(int i) { return S.items && i >= 0 && i < S.nitems ? S.items[i].vpath : ""; }

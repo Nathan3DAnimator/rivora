@@ -1,6 +1,6 @@
 id: ragdoll
 kind: recipe
-title: Ragdoll e Physics Asset: ossos com física | Ragdoll and Physics Asset: bones with physics
+title: Ragdoll e Physics Asset: ossos com física | Ragdoll and Physics Asset: bones with physics | Ragdoll y Physics Asset: huesos con física
 keys: ragdoll, boneco de pano, physics asset, fisica dos ossos, bone physics, colisao dos ossos, bone collision, corpos, bodies, capsula, capsule, constraint, junta, joint, swing, twist, morrer, death, cair, fall, set simulate physics, set all bodies below simulate physics, physics blend weight, add impulse to bone, animacao fisica, physical animation, cabelo, hair, cauda, tail, braço solto, jiggle, balançar, hit reaction, reacao a golpe
 --- pt
 ```diagram steps
@@ -58,3 +58,31 @@ class Enemy extends Actor
         AddImpulseToBone(Vector(0, 300, 200), "spine_03")
 ```
 In the editor, **Simulate** drops the skeleton in the preview (Ctrl + click gives it a push). See also [IK Rig](article:ik-rig).
+--- es
+```diagram steps
+Explorador de contenidos > Añadir > IK Rig and Physics > Physics Asset for: (la Skeletal Mesh) | Cuerpos hechos a partir de los huesos (cápsulas, esferas, cajas) | Ajusta cuerpos y articulaciones (Swing, Twist), prueba con Simulate | Detalles de la Skeletal Mesh > Physics Asset | Set Simulate Physics (Ragdoll) en un Blueprint
+```
+## Cómo funciona
+El **Physics Asset** (`.rphys`, como el Physics Asset Editor de Unreal) es la parte separada que dice **cómo colisionan los huesos**:
+- **Cuerpos**: una cápsula, esfera o caja por hueso, con su tamaño, desfase y masa. *Generate Bodies* los crea a partir de los huesos: uno por hueso largo, la pelvis y el pecho como esferas, los dedos y los huesos de torsión van con el cuerpo de arriba.
+- **Articulaciones**: el límite *Swing* (el cono: un codo ~70°, la columna ~20°) y el *Twist* (el giro alrededor del hueso).
+- **Simulado** o **cinemático**: un cuerpo cinemático sigue la animación y los demás cuelgan de él.
+- **Animación física**: *Physical Animation* tira del cuerpo hacia la pose animada: se balancea con los golpes sin desplomarse.
+
+La simulación es XPBD en subpasos (como la física moderna de Unreal): articulaciones firmes que ni se estiran ni explotan, colisiones con el suelo, las cajas del nivel, los landscapes y entre sus propios cuerpos (no los vecinos). 9 ragdolls cuestan cerca de 0,5 ms.
+
+Tres modos (Detalles de la Skeletal Mesh > *Simulate Physics*, o nodos):
+- **Ragdoll**: todos los cuerpos.
+- **Cuerpos bajo un hueso**: una cola, el pelo, un brazo golpeado; el resto sigue animándose.
+- **Physics Blend Weight**: mezcla física y animación (de 1 a 0 para volver a ponerse de pie).
+
+```blueprint
+Event BeginPlay -> Set Simulate Physics (Ragdoll) ( true ) -> Add Impulse to Bone ( Impulse, Bone Name )
+```
+```real
+class Enemy extends Actor
+    event BeginPlay()
+        SetSimulatePhysicsRagdoll(true)
+        AddImpulseToBone(Vector(0, 300, 200), "spine_03")
+```
+En el editor, **Simulate** suelta el esqueleto en la vista previa (Ctrl + clic le da un empujón). Mira también [IK Rig](article:ik-rig).

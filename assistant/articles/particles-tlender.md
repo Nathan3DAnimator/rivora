@@ -1,6 +1,6 @@
 id: particles-tlender
 kind: howto
-title: Partículas do Tlender numa malha | Tlender particles on a mesh
+title: Partículas do Tlender numa malha | Tlender particles on a mesh | Partículas del Tlender (emitir desde la malla)
 keys: particulas tlender, tlender particles, blender particles, particulas do blender, emitir da malha, emit from faces, emit from verts, volume, halo, render as object, instanciar objeto, particle properties, numero de particulas, frame start, lifetime, newtonian, gravidade, cabelo, hair, chuva de objetos
 --- pt
 ```diagram steps
@@ -22,3 +22,13 @@ The **Tlender's** particle system (Blender's): a number of particles are born be
 - **Render As Object**: a mesh at each particle (Instance Object), shadowed.
 - **Loop** makes them born again after the end. In **Local Space** the particles move with the actor.
 It runs on the same GPU simulation as the Particle Systems: millions, in real time.
+--- es
+```diagram steps
+Selecciona un actor con malla | Detalles > Añadir > Particles (Tlender) | Número, fotogramas, vida, emitir desde caras/vértices/volumen | Halo (brillante o iluminado) u Object (una malla)
+```
+## Qué es
+El sistema de partículas del **Tlender** (el de Blender): un número de partículas nace entre **Frame Start** y **End**, desde las **caras**, los **vértices** o el **volumen** de la malla del actor, con velocidad según la **Normal**, aleatoria y del objeto; física **Newtonian** (gravedad, arrastre, browniano).
+- **Render As Halo**: sprites que brillan (Glow en nits) o iluminados por el sol y el cielo.
+- **Render As Object**: una malla en cada partícula (Instance Object), con sombras.
+- **Loop** las hace nacer de nuevo después del final. En **Local Space** las partículas se mueven con el actor.
+Funciona sobre la misma simulación en GPU de los Particle Systems: millones, en tiempo real.

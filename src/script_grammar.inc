@@ -3,7 +3,7 @@
 
 // --- Expressions ---
 static bool is_type_name(P* p, Tok* t) {
-    return t->kind == TK_IDENT && (s_type_named(t->s) != ST_UNKNOWN || s_struct_type(p->c, t->s) != ST_UNKNOWN);
+    return t->kind == TK_IDENT && (s_type_named(t->s) != ST_UNKNOWN || s_struct_type(p->c, t->s) != ST_UNKNOWN || s_asset_ref_named(t->s));
 }
 
 static Expr* parse_unary(P* p);
@@ -24,6 +24,20 @@ static Expr* parse_primary(P* p) {
         if (!strcmp(s, "null") || !strcmp(s, "None") || !strcmp(s, "nullptr") || !strcmp(s, "NULL") || !strcmp(s, "nil"))
             return p->i++, mk(p, EX_NONE, t);
         if (!strcmp(s, "self") || !strcmp(s, "this")) return p->i++, mk(p, EX_SELF, t);
+        if (p->c->lang == SL_CPP && (!strcmp(s, "static_cast") || !strcmp(s, "float") || !strcmp(s, "int") || !strcmp(s, "bool")) &&
+            is_op(ahead(p, 1), "<") && !strcmp(s, "static_cast")) { // (C++) static_cast<int>(x) -> int(x)
+            p->i += 2;
+            Tok* ty = cur(p);
+            if (ty->kind == TK_IDENT) p->i++;
+            expect_op(p, ">");
+            e = mk(p, EX_CALL, ty);
+            e->s = ty->kind == TK_IDENT ? ty->s : "float";
+            expect_op(p, "(");
+            e->args = sa_alloc(&p->c->arena, sizeof(Expr*));
+            if (e->args) e->args[0] = parse_expr(p), e->nargs = 1;
+            expect_op(p, ")");
+            return e;
+        }
         if (!strcmp(s, "new") && p->c->lang == SL_CSHARP) { // new Vector3(1, 2, 3): its constructor
             p->i++;
             e = mk(p, EX_CALL, t);
@@ -52,7 +66,7 @@ static Expr* parse_primary(P* p) {
     case TK_OP:
         if (is_op(t, "(")) {
             // C's / C#'s cast: (float)x -> float(x)
-            if ((p->c->lang == SL_C || p->c->lang == SL_CSHARP) && is_type_name(p, ahead(p, 1)) && is_op(ahead(p, 2), ")") &&
+            if ((p->c->lang == SL_C || p->c->lang == SL_CSHARP || p->c->lang == SL_CPP) && is_type_name(p, ahead(p, 1)) && is_op(ahead(p, 2), ")") &&
                 (ahead(p, 3)->kind == TK_IDENT || ahead(p, 3)->kind == TK_INT || ahead(p, 3)->kind == TK_FLOAT || is_op(ahead(p, 3), "(") ||
                  is_op(ahead(p, 3), "-"))) {
                 Tok* ty = ahead(p, 1);
@@ -223,9 +237,12 @@ static Expr* parse_expr(P* p) {
     return e;
 }
 
+// (2026-11-24) the last type parsed was an asset reference (Level, Sound...): its class (the field takes it), else NULL
+static const char* g_pt_asset;
 // A type as written: Real "float", "int[]", "array<int>"; Python "float", "list[int]"; C# "float", "List<int>", "int[]"
 static uint8_t parse_type(P* p) {
     Tok* t = cur(p);
+    g_pt_asset = NULL;
     if (t->kind != TK_IDENT) {
         s_diag(p->c, t->line, t->col, true, "Expected a type here");
         return ST_UNKNOWN;
@@ -242,6 +259,8 @@ static uint8_t parse_type(P* p) {
     while (is_op(cur(p), "[") && is_op(ahead(p, 1), "]")) p->i += 2, arr = ST_ARRAY;
     if (accept_op(p, "?")) {} // (C#'s nullable)
     if (accept_op(p, "*")) ty = ST_ACTOR; // (C's pointer: an actor's handle)
+    if (accept_op(p, "&") || accept_op(p, "&&")) {} // (C++'s reference: the value; a parameter by reference is read only here)
+    if (ty == ST_UNKNOWN && !container && (g_pt_asset = s_asset_ref_named(t->s)) != NULL) ty = ST_STRING; // (an asset reference: its name)
     if (ty == ST_UNKNOWN && !container) ty = s_struct_type(p->c, t->s); // a structure (the script's or the project's)
     if (ty == ST_UNKNOWN && !container) {
         // a class of the project (an actor): its reference
@@ -518,6 +537,14 @@ static Stmt** iblock(P* p, int* n) { // NEWLINE INDENT stmts DEDENT (a ':' befor
 }
 
 static Stmt* simple_stmt(P* p, Tok* t) { // an assignment or an expression (the line's end not taken)
+    if ((is_op(cur(p), "++") || is_op(cur(p), "--")) && p->c->lang != SL_PYTHON && p->c->lang != SL_REAL) { // (++i; as i++;)
+        Tok* o = cur(p);
+        p->i++;
+        Stmt* s = mks(p, SS_ASSIGN, t);
+        snprintf(s->op, sizeof s->op, "%s", is_op(o, "++") ? "+=" : "-=");
+        s->target = parse_expr(p), s->e = mk(p, EX_INT, o), s->e->num = 1;
+        return s;
+    }
     Expr* lhs = parse_expr(p);
     Tok* o = cur(p);
     static const char* const aops[] = { "=", "+=", "-=", "*=", "/=", "%=" };
@@ -839,7 +866,7 @@ static void parse_indent_class(P* p) {
             uint8_t ty = ST_UNKNOWN;
             if (accept_op(p, ":")) ty = parse_type(p);
             Expr* init = accept_op(p, "=") ? parse_expr(p) : NULL;
-            if (f) f->type = ty, f->init = init, f->editable = editable, f->save_game = g_save_attr;
+            if (f) f->type = ty, f->init = init, f->editable = editable, f->save_game = g_save_attr, f->asset_ref = ty == ST_STRING ? g_pt_asset : NULL;
             editable = false, g_save_attr = false;
             end_line(p);
             continue;
@@ -875,7 +902,7 @@ static void sync_semi(P* p) { // (recovery: past the next ';' or '}' at this dep
 static bool skip_modifiers(P* p) { // public, private, static, readonly, const, override, virtual, unsafe...
     static const char* const mods[] = { "public", "private", "protected", "internal", "static", "readonly", "const", "override",
                                         "virtual", "sealed", "abstract", "partial", "unsafe", "extern", "inline", "volatile",
-                                        "async", "new" };
+                                        "async", "new", "constexpr", "mutable", "explicit", "friend", "final" };
     bool any = false;
     for (;;) {
         bool hit = false;
@@ -1026,6 +1053,37 @@ static Stmt* bstmt(P* p) {
         return s;
     }
     if (accept_id(p, "for")) { // for (init; cond; post): a range when it reads as one
+        if (p->c->lang == SL_CPP && is_op(cur(p), "(")) { // (C++) for (auto x : xs) / for (const T& x : xs): a for each
+            int k = p->i + 1, depth = 0;
+            bool range = false;
+            for (; k < p->n && !is_op(&p->t[k], ";"); k++) {
+                if (is_op(&p->t[k], "(") || is_op(&p->t[k], "<")) depth++;
+                if (is_op(&p->t[k], ")") || is_op(&p->t[k], ">")) {
+                    if (!depth) break;
+                    depth--;
+                }
+                if (!depth && is_op(&p->t[k], ":")) {
+                    range = true;
+                    break;
+                }
+            }
+            if (range) {
+                Stmt* s = mks(p, SS_FOR_EACH, t);
+                expect_op(p, "(");
+                skip_modifiers(p);
+                if (!accept_id(p, "var")) parse_type(p);
+                accept_op(p, "&");
+                Tok* nt = cur(p);
+                s->name = expect_ident(p, "the loop's variable");
+                expect_op(p, ":");
+                s->lo = parse_expr(p);
+                expect_op(p, ")");
+                if (s->name) add_local(p, s->name, ST_UNKNOWN, nt->line, nt->col);
+                int n;
+                s->body = bblock(p, &n), s->nbody = n;
+                return s;
+            }
+        }
         Stmt* s = mks(p, SS_FOR_C, t);
         expect_op(p, "(");
         Tok* it = cur(p);
@@ -1175,6 +1233,10 @@ static void parse_brace_members(P* p, bool c_file) {
             sync_semi(p);
             continue;
         }
+        if (p->c->lang == SL_CPP && (is_id(t, "public") || is_id(t, "private") || is_id(t, "protected")) && is_op(ahead(p, 1), ":")) {
+            p->i += 2; // (C++'s access labels: every member is the class's)
+            continue;
+        }
         g_save_attr = false; // ([SaveGame] on this declaration only)
         bool ed = skip_attributes(p);
         skip_modifiers(p);
@@ -1228,6 +1290,13 @@ static void parse_brace_members(P* p, bool c_file) {
                     break;
                 }
             }
+            while (is_id(cur(p), "const") || is_id(cur(p), "override") || is_id(cur(p), "final") || is_id(cur(p), "noexcept")) p->i++; // (C++)
+            if (is_op(cur(p), "=") && p->c->lang == SL_CPP) { // (= default; = 0;: nothing to run)
+                sync_semi(p);
+                p->cls->nmethods--;
+                p->m = NULL;
+                continue;
+            }
             if (accept_op(p, ";")) { // (a prototype: C)
                 p->cls->nmethods--;
                 p->m = NULL;
@@ -1244,7 +1313,7 @@ static void parse_brace_members(P* p, bool c_file) {
         // field(s): T a = 1, b;
         for (;;) {
             SField* f = new_field(p, nt, nm);
-            if (f) f->type = ty, f->editable = ed || c_file, f->save_game = g_save_attr;
+            if (f) f->type = ty, f->editable = ed || c_file || p->c->lang == SL_CPP, f->save_game = g_save_attr, f->asset_ref = (ty & 0x7F) == ST_STRING ? g_pt_asset : NULL;
             if (accept_op(p, "=")) {
                 Expr* v = parse_expr(p);
                 if (f) f->init = v;
@@ -1289,12 +1358,14 @@ static void parse_brace_file(P* p) {
             p->cls->name = expect_ident(p, "the class's name");
             p->cls->line = ct->line;
             if (accept_op(p, ":") && cur(p)->kind == TK_IDENT) {
+                if (is_id(cur(p), "public") || is_id(cur(p), "protected") || is_id(cur(p), "private") || is_id(cur(p), "virtual")) p->i++; // (C++)
                 p->cls->parent = p->t[p->i++].s;
                 while (accept_op(p, ",")) p->i++; // (interfaces)
             }
             if (expect_op(p, "{")) {
                 parse_brace_members(p, false);
                 expect_op(p, "}");
+                accept_op(p, ";"); // (C++'s class ends with "};")
             }
             accept_op(p, "}"); // (the namespace's)
             while (is_id(cur(p), "public") || is_id(cur(p), "internal") || is_id(cur(p), "struct")) { // (structures after the class)

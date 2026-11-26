@@ -1,6 +1,6 @@
 id: background-tasks
 kind: concept
-title: Tarefas em segundo plano (os cartões) | Background tasks (the cards)
+title: Tarefas em segundo plano (os cartões) | Background tasks (the cards) | Tareas en segundo plano (las tarjetas)
 keys: travando, carregando, barra de progresso, cartao, tarefa, cancelar importacao, demora, async, loading, editor travou, congelou
 --- pt
 ```diagram steps
@@ -18,3 +18,11 @@ The editor doesn't stop while it works: importing, reloading meshes, compiling m
 - Each task shows as a **card at the bottom right**: what it does, its bar, the time and what's left.
 - **Drag the header** to move the cards; the header's button makes them all **thin** (only the bar).
 - The **X** cancels a task while it runs (and closes the card after).
+--- es
+```diagram steps
+Importas, horneas o empaquetas | Un worker hace el trabajo | La tarjeta muestra el progreso | Listo: el resultado entra al editor
+```
+El editor no se detiene mientras trabaja: importar, recargar mallas, compilar materiales, hornear luz y empaquetar se ejecutan en segundo plano.
+- Cada tarea aparece como una **tarjeta abajo a la derecha**: qué hace, su barra, el tiempo y lo que falta.
+- **Arrastra el encabezado** para mover las tarjetas; el botón del encabezado las vuelve todas **finas** (solo la barra).
+- La **X** cancela una tarea mientras se ejecuta (y cierra la tarjeta después).

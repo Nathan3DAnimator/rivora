@@ -90,7 +90,11 @@ typedef struct BpPin {
     BpValue lit;            // an unconnected input's value
     char slit[64];
     uint8_t cont, vtype;    // BpContainer; a Map's value type
-    uint8_t sub;            // a part of a split pin (1 + its index), 0: a whole pin
+    uint8_t sub;            // a part of a split pin (1 + its index among the whole's pins), 0: a whole pin
+    // (2026-11-24) a part split again (Transform -> Location -> X): part, the part's index in the whole (0-based); sub2,
+    // 1 + the component's index in that part (0: the part isn't split); ptype2 / pref2, the part's type and ref
+    uint8_t part, sub2, ptype2;
+    char pref2[BP_NAME];
     uint8_t ptype;          // the split pin's type
     char pname[BP_NAME];    // the split pin's name
     char pref[BP_NAME];     // the split pin's ref (a structure)
@@ -119,6 +123,7 @@ typedef struct BpNode {
     uint8_t wtype, wcont, wtype2;
     char wref[BP_NAME];
     uint16_t split;         // bit i: the node's i-th pin (as its spec makes them) is split
+    uint64_t split2;        // (2026-11-24) bit i * 4 + k: that split pin's part k is split again
     uint8_t extra;          // pins added (Sequence's outputs, Make Array's inputs)
     uint8_t net;            // a Custom Event's Replicates (BP_NET_*)
 } BpNode;
@@ -310,6 +315,14 @@ bool bp_kind_gameplay(uint32_t kind);
 // ... and its components (COMP_HEALTH .. COMP_HUD_LAYOUT)
 #define BP_COMP_GAMEPLAY(c) ((c) >= COMP_HEALTH && (c) <= COMP_HUD_LAYOUT)
 const BpNodeDesc* bp_node_desc(uint32_t kind);
+// (2026-11-25, item 13) the engine's enumerations on int pins ("int(EName)"): an entry's index by its name (or an old
+// spelling, or its digit; -1: none) and its name by the index ("": none)
+const char* const* bp_builtin_enum(const char* name, int* count);
+int bp_builtin_enum_index(const char* name, const char* text);
+int bp_builtin_enum_count(void);
+const char* bp_builtin_enum_name(int i);
+const char* bp_builtin_enum_entry(const char* name, int index);
+const char* bp_node_pin_spec(uint32_t kind); // (2026-11-25) its pins as the engine writes them ("i:float:A,o:float:Return Value")
 // (2026-11-10) the name of the input pin that names a node's asset (Play Sequence's Sequence, Play Sound's Sound, a
 // widget's name, a Blackboard key...): NULL when the node has none (its text is a function, an event, a variable)
 const char* bp_asset_pin(uint32_t kind);
@@ -324,6 +337,9 @@ bool bp_types_compatible(const BpPin* from, const BpPin* to);
 void bp_refresh_pins(BpAsset* a, BpGraph* g, BpNode* n); // after a variable / struct / enum changed (links follow by name)
 // Unreal's Split Struct Pin (a vector, rotator, color, transform, structure in its parts) and Recombine
 bool bp_split_pin(BpAsset* a, BpGraph* g, BpNode* n, uint8_t pin, bool split);
+// (2026-11-24) a .rbp read into an asset of its own (not cached: the tests compare what was saved); freed by bp_free_copy
+BpAsset* bp_read_copy(const char* vpath);
+void bp_free_copy(BpAsset* a);
 // Macros (graphs of kind BPG_MACRO in a class or a Macro Library), interface functions (an interface's graphs)
 const BpGraph* bp_find_macro(const BpAsset* a, const char* name, const char* lib);
 const BpGraph* bp_interface_function(const char* iface, const char* func);
@@ -358,6 +374,7 @@ bool bp_compile(BpAsset* a); // a->error / a->error_node when false
 // Play (PIE or the game): every actor with CBlueprint gets its instance, BeginPlay runs; Tick each frame; Stop frees
 void bp_begin_play(World* w);
 void bp_tick(World* w, float dt);
+double bp_game_time(void); // the Play's game clock (Get Game Time in Seconds: the frames' dt, each at most 0.1 s)
 void bp_end_play(World* w);
 // The editor's Construction Script (sugestão #64): run on one actor of the editor's world, only that actor and its
 // components change (no game runs); whether a class's does anything; every compile counted (they run again)
@@ -410,6 +427,8 @@ typedef struct BpLevelHooks {
     const char* (*current)(void);
 } BpLevelHooks;
 void bp_set_level_hooks(const BpLevelHooks* h);
+// (2026-11-24) a float pin's range (the load speeds: min 0.01 / 0, max 1); false: none
+bool bp_pin_range(int kind, const char* pin, float* lo, float* hi);
 // Statistics (the editor's stats line)
 typedef struct BpStats { uint32_t instances, ops_last_frame; double ms_last_frame; uint32_t overrides; } BpStats; // overrides: Instance Editable values applied since the start
 const BpStats* bp_stats(void);

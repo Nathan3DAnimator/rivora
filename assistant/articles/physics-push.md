@@ -1,6 +1,6 @@
 id: physics-push
 kind: recipe
-title: Empurrar com física | Push with physics
+title: Empurrar com física | Push with physics | Empujar con física
 keys: empurrar, impulso, explosao, chutar objeto, jogar longe, push, impulse, launch object, add impulse
 --- pt
 O ator precisa de **Simulate Physics** ligado. O impulso é aplicado uma vez.
@@ -34,3 +34,19 @@ class Popper extends Actor
 ```
 
 An explosion pushing everything around: `AddRadialImpulse(center, radius, strength)`.
+--- es
+El actor necesita **Simulate Physics** activado. El impulso se aplica una vez.
+
+```blueprint
+Event BeginPlay
+  -> Set Simulate Physics ( Target = self, Simulate = true )
+  -> Add Impulse ( Target = self, Impulse = Make Vector( 0, 0, 800 ), Vel Change = true )
+```
+```real
+class Popper extends Actor
+    event BeginPlay()
+        SetSimulatePhysics(true)
+        AddImpulse(Vector(0, 0, 800), true)
+```
+
+Una explosión que empuja todo a su alrededor: `AddRadialImpulse(center, radius, strength)`.

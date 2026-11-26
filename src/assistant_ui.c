@@ -50,7 +50,7 @@ static struct {
 // The variants an article's code comes in (its fences' tags): Blueprint, Real, C#, Python, C
 enum { V_BLUEPRINT, V_REAL, V_CS, V_PY, V_C, V_COUNT };
 static const char* const g_vtag[V_COUNT] = { "blueprint", "real", "cs", "py", "c" };
-static const char* const g_vname[V_COUNT] = { "Blueprint", "Real", "C#", "Python", "C" };
+static const char* const g_vname[V_COUNT] = { "Blueprint", "Rivora Script", "C#", "Python", "C" };
 static int tag_variant(const char* tag) { // ("```py", "```cs"...: -1 another tag, or none)
     for (int v = 0; v < V_COUNT; v++) {
         size_t n = strlen(g_vtag[v]);
@@ -88,9 +88,10 @@ void editor_prefs_changed(void);
 void assistant_ui_set_action(AssistantActionFn fn) { U.action = fn; }
 bool assistant_ui_is_open(void) { return U.open; }
 
-static int lang(void) { return i18n_language() == LANG_PT_BR ? 1 : 0; }
+static int lang(void) { return i18n_language() == LANG_PT_BR ? 1 : i18n_language() == LANG_ES ? 2 : 0; } // (2026-11-25: Spanish)
 
 static void search(void) {
+    assistant_relang(); // (2026-11-25: the editor's language changed since the index was built)
     U.asked_variant = detect_variant(U.q);
     U.nhits = assistant_search(U.q, U.hits, MAX_HITS, &U.weak);
     U.sel = U.nhits ? 0 : -1;
@@ -155,7 +156,9 @@ static void draw_highlight(void) {
     if (!GREHighlight) return;
     double now = igGetTime();
     if (now > U.hl_until) {
-        GREHighlight = 0, g_re_hl_nlabel = 0;
+        extern void (*g_ui_sweep_item_hook)(const char*, float, float, float, float); // (imgui_hooks.c)
+        if (!g_ui_sweep_item_hook) GREHighlight = 0; // (item 21: the UI sweep keeps every item offered, the whole frame)
+        g_re_hl_nlabel = 0;
         return;
     }
     ImDrawList* dl = igGetForegroundDrawList_ViewportPtr(igGetMainViewport());
@@ -212,6 +215,15 @@ static void plain(const char* s, char* out, size_t cap, Link* links, int* nlinks
         out[n++] = *s++;
     }
     out[n] = 0;
+    // (2026-11-25, the tester's block of item 13) "Blueprint" -> "Graph" / "Grafo" on screen, as every TR: the visible
+    // text and the links' labels; never the actions ("show:" paths are the editor's English labels)
+    const char* t = i18n_terms(out);
+    if (t != out) snprintf(out, cap, "%s", t);
+    if (links)
+        for (int i = 0; i < *nlinks; i++) {
+            const char* lt = i18n_terms(links[i].label);
+            if (lt != links[i].label) snprintf(links[i].label, sizeof links[i].label, "%s", lt);
+        }
 }
 
 static void link_buttons(Link* links, int n, int* uid) {
@@ -267,7 +279,22 @@ static void markdown(const char* text, int show) {
             }
             // a picture, not text: the Blueprint's node graph, the diagrams (assistant_draw.c)
             bool diagram = !strncmp(lang_, "diagram ", 8);
-            if ((diagram || var == V_BLUEPRINT) && assistant_draw_diagram(diagram ? lang_ + 8 : "blueprint", code, uid++, show_where)) continue;
+            if (diagram && strncmp(lang_ + 8, "layout", 6)) { // (its boxes are text on screen: the terms line by line,
+                // "Blueprint" -> "Grafo"; a layout's boxes are "Show me where" paths in the editor's English: as they are)
+                char shown[4096];
+                size_t sn = 0;
+                for (const char* c = code; *c && sn + 1 < sizeof shown;) {
+                    const char* ce = strchr(c, '\n');
+                    size_t cl = ce ? (size_t)(ce - c) : strlen(c);
+                    char one[1024];
+                    snprintf(one, sizeof one, "%.*s", (int)(cl < sizeof one ? cl : sizeof one - 1), c);
+                    sn += (size_t)snprintf(shown + sn, sizeof shown - sn, "%s%s", i18n_terms(one), ce ? "\n" : "");
+                    if (sn >= sizeof shown) sn = sizeof shown - 1;
+                    c = ce ? ce + 1 : c + cl;
+                }
+                shown[sn] = 0;
+                if (assistant_draw_diagram(lang_ + 8, shown, uid++, show_where)) continue;
+            } else if (var == V_BLUEPRINT && assistant_draw_diagram("blueprint", code, uid++, show_where)) continue;
             igPushStyleColor_Vec4(ImGuiCol_ChildBg, THV(TK_N3));
             float lines = 1.0f;
             for (const char* c = code; *c; c++) lines += *c == '\n';

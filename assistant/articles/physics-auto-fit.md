@@ -1,6 +1,6 @@
 id: physics-auto-fit
 kind: howto
-title: Física automática pela malha: corpos do tamanho certo, cauda, orelhas, correntes | Automatic physics from the mesh: right-sized bodies, tails, ears, chains
+title: Física automática pela malha: corpos do tamanho certo, cauda, orelhas, correntes | Automatic physics from the mesh: right-sized bodies, tails, ears, chains | Física automática desde la malla: cuerpos del tamaño justo, cola, orejas, cadenas
 keys: fisica automatica, física automática, gerar corpos, generate bodies, physics asset automatico, tamanho dos corpos, grossura da malha, mesh thickness, ragdoll automatico, corpos sobrepostos, bodies overlap, overlap, ragdoll explode, ragdoll tremendo, cauda fisica, tail physics, orelha de coelho, rabbit ear, bunny ear, corrente balançando, swinging chain, acessorio balançando, capa, saia, cape, skirt, ossos dinamicos, dynamic bones, predefinicoes de fisica, physics presets
 --- pt
 ```diagram steps
@@ -26,3 +26,15 @@ Create Physics Asset (or Generate Bodies) | Bodies by the rig's roles | Thicknes
 
 ## Presets (Dynamic Bones)
 - Select a bone in **Physics Asset > Dynamic Bones > + Chain on the selected bone** and pick: Earring, Hair, Tail, Strap / Pouch, Heavy Bag, **Ear**, **Chain**, **Cape / Skirt**. All collide with the character's bodies.
+--- es
+```diagram steps
+Create Physics Asset (o Generate Bodies) | Cuerpos según los roles del rig | Grosor medido en la malla | Separados donde se superponen | Cola, orejas, cadenas se vuelven Dynamic Bones
+```
+## Qué hace Generate Bodies
+- Crea los cuerpos según los **roles** del rig ([Detección de rig](article:rig-detection)): cadera y pecho como esferas, extremidades como cápsulas, pies tumbados en el suelo. Los **controles, IK handles, polos, twists, dedos y cadenas** no reciben cuerpo.
+- Mide el **grosor de cada parte en la malla**: los vértices que cada hueso mueve más dan el radio de su cápsula. El muslo de un personaje pesado sale grueso, el de uno delgado, fino.
+- **Evita que los cuerpos se superpongan** en la pose de reposo (los dos muslos, el brazo contra el pecho): los cuerpos no unidos por una junta se encogen lo necesario. El ragdoll ni explota ni tiembla al empezar.
+- Las **cadenas colgantes** se convierten en **Dynamic Bones** con el preset correcto: **Tail**, **Ear** (la de un conejo se levanta y se balancea), **Hair**, **Chain** (sin forma propia, se balancea libre), **Cape / Skirt** (el viento la lleva) y **Earring** para accesorios. Una cadena que ya ajustaste se conserva como está.
+
+## Presets (Dynamic Bones)
+- Selecciona un hueso en **Physics Asset > Dynamic Bones > + Chain on the selected bone** y elige: Earring, Hair, Tail, Strap / Pouch, Heavy Bag, **Ear**, **Chain**, **Cape / Skirt**. Todos colisionan con los cuerpos del personaje.

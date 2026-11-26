@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #define TOON_STOPS 4
+#define TOON_BANDS_MAX 255 // (2026-11-25) the bands' safe top (the Details' slider: 0..8; a typed number past it is kept)
 #define TOON_PATH 260
 
 typedef struct MatToon {

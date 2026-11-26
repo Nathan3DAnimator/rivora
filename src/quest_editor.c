@@ -1,6 +1,7 @@
 // The Quest editor (quest.h): the quest's texts in three languages, its stages (one after another or all at once) with
 // their objectives on the left, the picked objective's (or the quest's own) Details on the right, the rewards; a summary
 // line of what the quest asks. Also the Quest Log component's Details.
+#include "editor_docs.h"
 #include "quest.h"
 
 #include <stdio.h>
@@ -339,10 +340,24 @@ bool quest_ui_log(CQuestLog* c) {
         snprintf(wname, sizeof wname, "%s", wb ? wb->name : "");
         shown = c->widget, shown_for = c;
     }
-    if (igInputTextWithHint(PL(TR("Tracker Widget")), "WBP_QuestTracker", wname, sizeof wname, ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL)) {
+    if (igInputTextWithHint(PL(TR("Tracker Widget")), "WBP_QuestTracker", wname, sizeof wname, ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL)) { // i18n: none (an asset name)
         BpAsset* f = wname[0] ? bp_find_name(BPA_CLASS, wname) : NULL;
         c->widget = f ? f->hash : 0u, ch = true;
     }
     igSetItemTooltip("%s", TR("A Widget Blueprint of yours with the same widgets' names (Panel, Title, Stage, Objective1..8); empty: WBP_QuestTracker."));
     return ch;
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int quest_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    if (!E.q) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) return E.q = NULL, E.unsaved = false, 1;
+    if (!E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, E.q->name), 1;
+    bool ok = quest_save(E.q);
+    if (ok) E.unsaved = false;
+    return !ok;
 }

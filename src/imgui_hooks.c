@@ -58,7 +58,10 @@ int g_re_hl_nlabel;
 float g_re_hl_rect[8][4];
 int g_re_hl_nrect, g_re_hl_frame;
 
+// (item 21) the UI sweep's (ui_sweep.c sets it while it runs: every labeled item drawn)
+void (*g_ui_sweep_item_hook)(const char* label, float x0, float y0, float x1, float y1);
 void re_imgui_highlight_item(const char* label, float x0, float y0, float x1, float y1) {
+    if (g_ui_sweep_item_hook) g_ui_sweep_item_hook(label, x0, y0, x1, y1);
     const char* cut = strstr(label, "##");
     size_t n = cut ? (size_t)(cut - label) : strlen(label);
     while (n && label[n - 1] == ' ') n--;

@@ -5,6 +5,9 @@
 #include "weather_field.h" // (Q27.6) Add Storm, Get Rain At
 #include "city.h"          // (Q27.10) the city's clock and events
 #include "sublevels.h"
+// (2026-11-25, item 13) an enum pin's value (its entry's index) as the name the engine's own functions take
+#define ENUM_NAME(e, X) bp_builtin_enum_entry((e), (int)(X)->v[0])
+#include "loc.h" // (2026-11-24) the game's localization
 #include "level_preload.h" // (2026-11-23) Preload Level, the load speeds
 #include "bp_timeline.h"
 #include "audio.h"
@@ -19,6 +22,7 @@
 #include <string.h>
 
 #include "bp_internal.h"
+#include "groom.h"
 #include "plugins.h"
 #include "gameplay_tags.h"
 #include "bp_debug.h"
@@ -408,12 +412,21 @@ static uint16_t src_op(Cc* cc, BpNode* f, int fp) {
     while (first > 0 && f->pins[first].sub > 1) first--;
     uint16_t base = whole_src(cc, f, first);
     if (p->ptype == BPT_TRANSFORM || p->ptype == BPT_STRUCT) {
-        uint32_t off = 0;
-        for (int i = first; i < fp; i++) off += bp_pin_width(&f->pins[i]);
-        return (uint16_t)(base + off);
+        // (2026-11-24) the part's registers: the parts before it (a part split again counts once, by its own width)
+        uint32_t off = 0, inner = 0;
+        for (int i = first; i < fp; i++) {
+            const BpPin* q = &f->pins[i];
+            if (q->part != p->part) off += q->sub2 > 1 ? 0 : q->sub2 ? type_width(q->ptype2, q->pref2) : bp_pin_width(q);
+            else if (q->sub2) inner += bp_pin_width(q);
+        }
+        if (!p->sub2) return (uint16_t)(base + off);
+        if (p->ptype2 == BPT_TRANSFORM || p->ptype2 == BPT_STRUCT) return (uint16_t)(base + off + inner); // (a field of a field)
+        uint16_t t = alloc_regs(cc, 1); // (a component of a vector / rotator / color part)
+        emit(cc, OP_COMP, t, (uint16_t)(base + off), (uint16_t)(p->sub2 - 1), 0);
+        return t;
     }
     uint16_t t = alloc_regs(cc, 1);
-    emit(cc, OP_COMP, t, base, (uint16_t)(p->sub - 1), 0);
+    emit(cc, OP_COMP, t, base, (uint16_t)p->part, 0);
     return t;
 }
 
@@ -486,15 +499,34 @@ static uint16_t in_op(Cc* cc, BpNode* n, int p, uint8_t* src_type) {
     if (src_type) *src_type = pin->ptype;
     if (pin->ptype == BPT_TRANSFORM || pin->ptype == BPT_STRUCT) {
         uint32_t off = 0;
-        for (int i = p; i < n->npins && n->pins[i].sub && (i == p || n->pins[i].sub > 1); i++) {
-            uint32_t pw = bp_pin_width(&n->pins[i]);
+        for (int i = p; i < n->npins && n->pins[i].sub && (i == p || n->pins[i].sub > 1);) {
+            const BpPin* q = &n->pins[i];
+            if (q->sub2) { // (2026-11-24) a part split again: its pins assembled into the part, the part into the whole
+                uint32_t pw = type_width(q->ptype2, q->pref2);
+                bool vecish_part = q->ptype2 == BPT_VECTOR || q->ptype2 == BPT_ROTATOR || q->ptype2 == BPT_COLOR;
+                if (vecish_part) emit(cc, OP_MOVN, (uint16_t)(t + off), konst(cc, &(BpValue){ { 0, 0, 0, 0 } }), 1, 0);
+                uint32_t inner = 0;
+                uint8_t part = q->part;
+                for (; i < n->npins && n->pins[i].sub2 && n->pins[i].part == part && n->pins[i].sub > (i == p ? 0 : 1); i++) {
+                    if (vecish_part) emit(cc, OP_SETCOMP, (uint16_t)(t + off), in_single(cc, n, i, NULL), (uint16_t)(n->pins[i].sub2 - 1), 0);
+                    else {
+                        uint32_t iw = bp_pin_width(&n->pins[i]);
+                        emit(cc, OP_MOVN, (uint16_t)(t + off + inner), in_single(cc, n, i, NULL), (uint16_t)iw, 0);
+                        inner += iw;
+                    }
+                }
+                off += pw;
+                continue;
+            }
+            uint32_t pw = bp_pin_width(q);
             emit(cc, OP_MOVN, (uint16_t)(t + off), in_single(cc, n, i, NULL), (uint16_t)pw, 0);
             off += pw;
+            i++;
         }
     } else {
         emit(cc, OP_MOVN, t, konst(cc, &(BpValue){ { 0, 0, 0, 0 } }), 1, 0);
         for (int i = p; i < n->npins && n->pins[i].sub && (i == p || n->pins[i].sub > 1); i++)
-            emit(cc, OP_SETCOMP, t, in_single(cc, n, i, NULL), (uint16_t)(n->pins[i].sub - 1), 0);
+            emit(cc, OP_SETCOMP, t, in_single(cc, n, i, NULL), (uint16_t)n->pins[i].part, 0);
     }
     return t;
 }
@@ -975,9 +1007,43 @@ static void compile_exec(Cc* cc, BpNode* n, int in_pin) {
         if (cc->a->nlatent >= 255) cc_error(cc, n, "Too many latent actions (255)");
         data_inputs(cc, n, in, NULL, 3);
         if (n->kind == BPK_LOAD_STREAM) emit(cc, OP_NPARAM, 0, in[1], 0, 0);
+        // (2026-11-24) Loaded / Failed / Progress: Completed then Loaded on success, Completed then Failed on failure (a
+        // node saved before them has only Completed: as before)
+        int po = n->kind == BPK_LOAD_STREAM ? pin_of(n, 1, 0, 0) : -1;
+        bool ext = n->kind == BPK_LOAD_STREAM && pin_of(n, 1, 1, 1) >= 0;
+        uint32_t info = ext ? emit(cc, OP_LATENT_INFO, po >= 0 ? out_reg(gi, n, po) : 0xFFFF, 0, 0, 0) : 0;
         uint32_t lat = emit(cc, OP_LATENT2, (uint16_t)cc->a->nlatent++, in[0], 0, n->kind == BPK_LOAD_STREAM ? LAT_STREAM_LOAD : LAT_STREAM_UNLOAD);
         cc->a->code[lat].c = here(cc);
+        if (!ext) {
+            chain(cc, n, 0);
+            break;
+        }
+        uint32_t p1 = emit(cc, OP_PUSHRET, 0, 0, 0, 0);
         chain(cc, n, 0);
+        cc->a->code[p1].a = here(cc);
+        chain(cc, n, 1);
+        cc->a->code[info].b = here(cc);
+        uint32_t p2 = emit(cc, OP_PUSHRET, 0, 0, 0, 0);
+        chain(cc, n, 0);
+        cc->a->code[p2].a = here(cc);
+        chain(cc, n, 2);
+        break;
+    }
+    case BPK_PRELOAD_LEVEL: { // (2026-11-24) started, the first output at once; Loaded / Failed when it ends, Progress meanwhile
+        if (cc->a->nlatent >= 255) cc_error(cc, n, "Too many latent actions (255)");
+        int nin = data_inputs(cc, n, in, NULL, BP_MAX_PINS);
+        int po = pin_of(n, 1, 0, 0);
+        uint16_t preg = po >= 0 ? out_reg(gi, n, po) : 0xFFFF;
+        emit_native(cc, n, in, nin, po >= 0 ? preg : 0);
+        uint32_t info = emit(cc, OP_LATENT_INFO, preg, 0, 0, 0);
+        uint32_t push = emit(cc, OP_PUSHRET, 0, 0, 0, 0);
+        uint32_t lat = emit(cc, OP_LATENT2, (uint16_t)cc->a->nlatent++, in[0], 0, LAT_PRELOAD);
+        cc->a->code[push].a = here(cc);
+        chain(cc, n, 0);
+        cc->a->code[lat].c = here(cc);
+        chain(cc, n, 1);
+        cc->a->code[info].b = here(cc);
+        chain(cc, n, 2);
         break;
     }
     case BPK_DISPATCH_CALL: { // the inputs staged, then every bound event runs with them
@@ -1430,6 +1496,7 @@ static BpGraph* expand_macros(Cc* cc, const BpAsset* owner, const BpGraph* src) 
 }
 
 uint32_t g_bp_compiles; // (every compile: the editor's Construction Scripts run again with the new code)
+static void warn_recompile_playing(const BpAsset* a); // (below the VM's state)
 static BpOp dbg_hit(uint32_t ii, uint32_t pc, const uint32_t* stack, uint32_t sp); // (the debugger, at the end)
 bool bp_compile(BpAsset* a) {
     if (bp_debug_paused()) return a->compiled; // (paused at a breakpoint: its code is running; compiled after the Play)
@@ -1439,6 +1506,7 @@ bool bp_compile(BpAsset* a) {
         a->compiled = true;
         return true;
     }
+    warn_recompile_playing(a);
     Cc* cc = calloc(1, sizeof *cc); // compiling, not a frame
     if (!cc) return false;
     cc->a = a;
@@ -1811,8 +1879,11 @@ typedef struct Box { float mn[3], mx[3]; uint32_t moving; Entity e; float d[3]; 
 // place and yaw when last read (its moves: the carry of whoever stands on it)
 typedef struct BoxTrack { uint32_t box; Entity e; float c[3], h[3]; float loc[3], yaw; } BoxTrack;
 typedef struct BpTimer { uint32_t inst, pc; float period, t; bool loop; } BpTimer;
-typedef struct BpStream { uint32_t inst, req; uint16_t slot; } BpStream;
+// (2026-11-24) info: the node has Loaded / Failed / Progress (fail_pc: where Failed goes on, prog_reg: its Progress
+// register, 0xFFFF none); name: a Preload Level's level
+typedef struct BpStream { uint32_t inst, req; uint16_t slot, fail_pc, prog_reg; bool info; char name[96]; } BpStream;
 #define BP_REQ_LIGHTING 0xFFFFFFF0u // (Q16) a Build Lighting (Async) waiting for the bake (not a streamed level's request)
+#define BP_REQ_PRELOAD 0xFFFFFFF1u  // (2026-11-24) a Preload Level waiting for its level (level_preload_state)
 
 #define MAX_INST (1u << 16)
 #define GRID_BUCKETS 65536u
@@ -1877,6 +1948,7 @@ static struct {
     BpLevelHooks hooks;
     BpStream streams[64];
     uint32_t nstreams;
+    struct { uint16_t prog_reg, fail_pc; bool set; } li; // (2026-11-24) OP_LATENT_INFO's, for the next OP_LATENT2
     // the runs going on (the debugger's call stack, bp_debug.h): each depth's instance and the op it is at when it calls
     // deeper (a native, another actor's event, an interface)
     struct { uint32_t inst; const BpOp* op; } fr[4];
@@ -2956,7 +3028,7 @@ static bool native_more(Inst* in, const BpOp* o, BpValue* r, const BpValue* A, c
     // --- the active ragdoll (2026-11-16, ikrig.h PHYS_ACTIVE) ---
     case BPK_ACR_SET: phys_set_simulate(anim_mesh_entity(w, ent_of(A) ? ent_of(A) : in->e), B->v[0] != 0.0f ? PHYS_ACTIVE : PHYS_OFF, NULL); return true;
     case BPK_ACR_STRENGTH: phys_set_active_strength(anim_mesh_entity(w, ent_of(A) ? ent_of(A) : in->e), str_of(in, B), C->v[0], V.np[0].v[0]); return true;
-    case BPK_ACR_PROFILE: res.v[0] = phys_set_muscle_profile(anim_mesh_entity(w, ent_of(A) ? ent_of(A) : in->e), str_of(in, B)) ? 1.0f : 0.0f; break;
+    case BPK_ACR_PROFILE: res.v[0] = phys_set_muscle_profile(anim_mesh_entity(w, ent_of(A) ? ent_of(A) : in->e), ENUM_NAME("EMuscleProfile", B)) ? 1.0f : 0.0f; break;
     case BPK_ACR_HIT: phys_hit_reaction(anim_mesh_entity(w, ent_of(A) ? ent_of(A) : in->e), str_of(in, B), C->v, V.np[0].v[0], V.np[1].v[0]); return true;
     case BPK_ACR_BALANCE: res.v[0] = (float)phys_balance_state(anim_mesh_entity(w, ent_of(A) ? ent_of(A) : in->e)); break;
     case BPK_ACR_IS_BALANCED: res.v[0] = phys_balance_state(anim_mesh_entity(w, ent_of(A) ? ent_of(A) : in->e)) == BAL_BALANCED ? 1.0f : 0.0f; break;
@@ -2989,7 +3061,7 @@ static bool native_more(Inst* in, const BpOp* o, BpValue* r, const BpValue* A, c
     case BPK_FP_RECOIL: fpcam_add_recoil(w, ent_of(A), B->v[0], C->v[0], V.np[0].v[0]); return true;
     case BPK_FP_FOCUS_TARGET: fpcam_set_focus_target(w, ent_of(A), ent_of(B)); return true;
     case BPK_FP_FOCUS_DISTANCE: res.v[0] = fpcam_get_focus_distance(w, ent_of(A)); break;
-    case BPK_FP_PRESET: res.v[0] = fpcam_set_preset(w, ent_of(A), str_of(in, B)) ? 1.0f : 0.0f; break;
+    case BPK_FP_PRESET: res.v[0] = fpcam_set_preset(w, ent_of(A), ENUM_NAME("EFirstPersonPreset", B)) ? 1.0f : 0.0f; break;
     case BPK_SHAKE_START: res.v[0] = (float)fpcam_start_shake(str_of(in, A), B->v[0], 0); break;
     case BPK_SHAKE_STOP: fpcam_stop_shake((uint32_t)A->v[0], B->v[0] != 0.0f); return true;
     case BPK_SHAKE_STOP_ALL: fpcam_stop_all_shakes(A->v[0] != 0.0f); return true;
@@ -3015,6 +3087,27 @@ static bool native_more(Inst* in, const BpOp* o, BpValue* r, const BpValue* A, c
     }
     case BPK_SET_ACTOR_OUTLINE: toon_actor_set_outline(w, ent_of(A) ? ent_of(A) : in->e, B->v[0] != 0.0f ? OUTLINE_ACTOR_ON : OUTLINE_ACTOR_OFF, C->v, N0->v[0]); return true;
     case BPK_SET_LIGHT_TOON: toon_light_set_mode(w, ent_of(A) ? ent_of(A) : in->e, (int)lroundf(B->v[0])); return true;
+    // --- (2026-11-25, item 16) the actor's Groom (groom.c groom_of): the Target or self ---
+    case BPK_SET_GROOM_VISIBLE: {
+        CGroom* gm = groom_of(w, ent_of(A) ? ent_of(A) : in->e);
+        if (gm) gm->visible = B->v[0] != 0.0f ? 1u : 0u;
+        return true;
+    }
+    case BPK_SET_GROOM_SIMULATE: {
+        CGroom* gm = groom_of(w, ent_of(A) ? ent_of(A) : in->e);
+        if (gm) gm->dynamic = B->v[0] != 0.0f ? 1u : 0u;
+        return true;
+    }
+    case BPK_GET_GROOM_VISIBLE: {
+        const CGroom* gm = groom_of(w, ent_of(A) ? ent_of(A) : in->e);
+        res.v[0] = gm && gm->visible ? 1.0f : 0.0f;
+        break;
+    }
+    case BPK_GET_GROOM_SIMULATE: {
+        const CGroom* gm = groom_of(w, ent_of(A) ? ent_of(A) : in->e);
+        res.v[0] = gm && gm->dynamic ? 1.0f : 0.0f;
+        break;
+    }
     case BPK_VR_ACTIVE: res.v[0] = xr_active() ? 1.0f : 0.0f; break;
     case BPK_VR_HEAD: {
         float p[3], f[3], u[3];
@@ -3096,11 +3189,11 @@ static bool native_more(Inst* in, const BpOp* o, BpValue* r, const BpValue* A, c
     case BPK_RAIN_GET: res.v[0] = water_rain_intensity(); break;
     case BPK_RAIN_PROP_SET: res.v[0] = water_set_rain_prop(w, str_of(in, A), B->v[0]) ? 1.0f : 0.0f; break;
     case BPK_RAIN_PROP_GET: res.v[0] = water_get_rain_prop(w, str_of(in, A)); break;
-    case BPK_RAIN_PRESET: res.v[0] = water_set_rain_preset(w, str_of(in, A)) ? 1.0f : 0.0f; break;
+    case BPK_RAIN_PRESET: res.v[0] = water_set_rain_preset(w, ENUM_NAME("ERainPreset", A)) ? 1.0f : 0.0f; break;
     case BPK_RAIN_DROP_COLOR:
         water_set_rain_prop(w, "Drop Color R", A->v[0]), water_set_rain_prop(w, "Drop Color G", A->v[1]), water_set_rain_prop(w, "Drop Color B", A->v[2]);
         return true;
-    case BPK_RAIN_SHADING: res.v[0] = water_set_rain_shading_style(w, str_of(in, A)) ? 1.0f : 0.0f; break;
+    case BPK_RAIN_SHADING: res.v[0] = water_set_rain_shading_style(w, ENUM_NAME("ERainShading", A)) ? 1.0f : 0.0f; break;
     case BPK_RAIN_PUDDLE_COLOR:
         water_set_rain_prop(w, "Puddle Color R", A->v[0]), water_set_rain_prop(w, "Puddle Color G", A->v[1]), water_set_rain_prop(w, "Puddle Color B", A->v[2]);
         return true;
@@ -3536,8 +3629,8 @@ static bool native_more(Inst* in, const BpOp* o, BpValue* r, const BpValue* A, c
     }
     case BPK_INV_ITEM_INFO: { // Display Name, Description, Weight, Max Stack, Value, Equip Slot
         const ItemDef* it = inv_item_by_name(str_of(in, A));
-        set_str(&res, it ? it->display : "");
-        set_str(&D[1], it ? it->description : "");
+        set_str(&res, it ? loc_item(it, false) : ""); // (2026-11-24: in the culture, loc.h)
+        set_str(&D[1], it ? loc_item(it, true) : "");
         D[2].v[0] = it ? it->weight : 0.0f, D[3].v[0] = it ? (float)it->max_stack : 0.0f, D[4].v[0] = it ? (float)it->value : 0.0f;
         set_str(&D[5], it && it->equip >= 0 ? g_inv_equip_names[it->equip] : "None");
         break;
@@ -3671,7 +3764,7 @@ static bool native_more(Inst* in, const BpOp* o, BpValue* r, const BpValue* A, c
     case BPK_GET_VISITORS: res.v[0] = (float)city_visitors(ent_of(A) ? ent_of(A) : in->e); break;
     case BPK_SET_LOCO_STYLE: { // (Q27.11) Target, Style
         static const char* const names[ANIM_STYLE_COUNT] = { "Normal", "Injured", "Tired", "Drunk", "Carrying" };
-        const char* sn = str_of(in, B);
+        const char* sn = ENUM_NAME("ELocomotionStyle", B);
         int st = -1;
         for (int k = 0; k < ANIM_STYLE_COUNT; k++)
             if (sn && (!_stricmp(sn, names[k]) || (k == ANIM_STYLE_CARRY && !_stricmp(sn, "Carry")))) st = k;
@@ -3710,6 +3803,36 @@ static bool native_more(Inst* in, const BpOp* o, BpValue* r, const BpValue* A, c
         float pr = 0.0f;
         PreloadState st = level_preload_state(str_of(in, A), &pr);
         res.v[0] = pr, D[1].v[0] = st == PRE_READY ? 1.0f : 0.0f, D[2].v[0] = st != PRE_NONE && st != PRE_FAILED ? 1.0f : 0.0f;
+        D[3].v[0] = st == PRE_FAILED ? 1.0f : 0.0f; // (2026-11-24) Failed
+        break;
+    }
+    case BPK_SET_CULTURE: { // (2026-11-24, loc.h) the game's texts in another culture, live; kept in the player's settings
+        if (V.editor_cs) return true;
+        const char* c = str_of(in, A);
+        bool ok = loc_switch(c);
+        if (B->v[0] != 0.0f) gus_set("Culture", 0.0f, c), gus_apply_live(), gus_save();
+        res.v[0] = ok ? 1.0f : 0.0f;
+        break;
+    }
+    case BPK_GET_CULTURE: set_str(&res, loc_culture()); break;
+    case BPK_GET_CULTURES: {
+        Arr* out = arr_get(D);
+        if (out) {
+            out->count = 0;
+            const char* cs[LOC_MAX_CULTURES + 1];
+            int nc = loc_cultures(cs, LOC_MAX_CULTURES + 1);
+            for (int i = 0; i < nc; i++) {
+                BpValue v;
+                set_str(&v, cs[i]);
+                arr_push(in, out, &v);
+            }
+        }
+        return true;
+    }
+    case BPK_GET_STREAM_STATE: { // (2026-11-24) a Load Stream Level's Progress, Loaded, Failed by name
+        int sr = 0;
+        float pr = level_stream_state(str_of(in, A), &sr);
+        res.v[0] = pr, D[1].v[0] = sr == 1 ? 1.0f : 0.0f, D[2].v[0] = sr == 2 ? 1.0f : 0.0f;
         break;
     }
     case BPK_CANCEL_PRELOAD:
@@ -3878,8 +4001,11 @@ static void native(Inst* in, const BpOp* o, BpValue* r, const BpValue* k) {
         static struct { const char* s; int fi; } cache[64]; // (by the name's address: the class's text table)
         const char* name = in->cls->strings[o->a];
         uint32_t h = (uint32_t)(((uintptr_t)name >> 4) & 63);
-        if (cache[h].s != name) cache[h].s = name, cache[h].fi = plugin_fn_find(name);
-        const PluginFn* f = plugin_fn_at(cache[h].fi < 0 ? 0xFFFFFFFFu : (uint32_t)cache[h].fi);
+        const PluginFn* f = cache[h].s == name && cache[h].fi >= 0 ? plugin_fn_at((uint32_t)cache[h].fi) : NULL;
+        // (2026-11-25, bug-fixer) the name checked too: another class's text at a freed one's address, or the plugins
+        // changed (a project switch unloads its plugins), gave another function's index
+        if (cache[h].s != name || (cache[h].fi >= 0 && (!f || strcmp(f->name, name)))) cache[h].s = name, cache[h].fi = plugin_fn_find(name);
+        f = plugin_fn_at(cache[h].fi < 0 ? 0xFFFFFFFFu : (uint32_t)cache[h].fi);
         float res4[4][4];
         uint32_t nout = f ? f->nout : 0;
         plugin_fn_call(cache[h].fi, (const float(*)[4])V.np, o->b, res4, nout);
@@ -4031,7 +4157,8 @@ static void native(Inst* in, const BpOp* o, BpValue* r, const BpValue* k) {
             }
             break;
         case BPK_MAT_SCALAR:
-        case BPK_MAT_VECTOR: { // the actor's dynamic material instance (made on first use): baked again before the frame
+        case BPK_MAT_VECTOR: { // the actor's dynamic material instance (made on first use): a value that folds (2026-11-24: the
+            // affine fold, the Emission Intensity) writes its slot only; one the bake reads bakes it again before the frame
             CStaticMesh* m = alive ? ecs_get(w, e, COMP_STATIC_MESH) : NULL;
             Material* mat = m && m->material ? mat_find_hash(m->material) : NULL;
             if (!mat) break;
@@ -4300,6 +4427,7 @@ static void run(uint32_t ii, uint32_t pc) {
             break;
         }
         case OP_JGE: if (RD(o->a)->v[0] >= RD(o->b)->v[0]) pc = o->c; break;
+        case OP_LATENT_INFO: V.li.prog_reg = o->a, V.li.fail_pc = o->b, V.li.set = true; break; // (2026-11-24)
         case OP_LATENT2: {
             uint32_t slot = o->a;
             if (o->d == LAT_RETRIGGER) in->lat_t[slot] = RD(o->b)->v[0], in->lat_pc[slot] = (uint32_t)o->c + 1u;
@@ -4313,11 +4441,19 @@ static void run(uint32_t ii, uint32_t pc) {
                 if (o->d == LAT_STREAM_LOAD || o->d == LAT_STREAM_UNLOAD) {
                     uint32_t req = V.hooks.stream ? V.hooks.stream(str_of(in, RD(o->b)), o->d == LAT_STREAM_LOAD, V.np[0].v[0] != 0.0f) : 0;
                     if (req && V.nstreams < 64) {
-                        V.streams[V.nstreams++] = (BpStream){ (uint32_t)(in - insts()), req, (uint16_t)slot };
+                        V.streams[V.nstreams++] = (BpStream){ (uint32_t)(in - insts()), req, (uint16_t)slot, V.li.fail_pc, V.li.prog_reg, V.li.set, "" };
                         in->lat_t[slot] = 1e30f; // until the level is in (bp_tick polls)
-                    }
+                    } else if (V.li.set && V.li.fail_pc) // (2026-11-24) no request: Failed next frame
+                        in->lat_pc[slot] = (uint32_t)V.li.fail_pc + 1u;
+                }
+                if (o->d == LAT_PRELOAD && V.nstreams < 64) { // (2026-11-24) until its level is ready or failed (bp_tick polls)
+                    BpStream* st = &V.streams[V.nstreams++];
+                    *st = (BpStream){ (uint32_t)(in - insts()), BP_REQ_PRELOAD, (uint16_t)slot, V.li.fail_pc, V.li.prog_reg, true, "" };
+                    snprintf(st->name, sizeof st->name, "%s", str_of(in, RD(o->b)));
+                    in->lat_t[slot] = 1e30f;
                 }
             }
+            V.li.set = false;
             if (!sp) goto done;
             pc = stack[--sp];
             break;
@@ -5525,6 +5661,17 @@ static void overlaps_update(World* w) {
     g_ov_nprev = g_ov_ncur;
 }
 
+double bp_game_time(void) { return V.playing ? V.time : 0.0; }
+
+// (2026-11-25, bug-fixer: the blueprints test's Timeline read Value 2 with Pings and Done 0) a class compiled again while
+// its instances play: they keep the old code's registers. Told (the cause to find)
+static void warn_recompile_playing(const BpAsset* a) {
+    if (!V.playing) return;
+    uint32_t live = 0;
+    for (uint32_t i = 0; i < V.ninst; i++) live += insts()[i].alive && insts()[i].cls == a;
+    if (live) printf("[RealEngine] aviso: Blueprint %s compiled again while %u of its instances play (game time %.2f s)\n", a->name, live, V.time);
+}
+
 static void tick_body(World* w, float dt) { // (bp_tick, at the end: on the debugger's fiber while debugging)
     if (!V.playing || V.w != w) return;
     double t0 = re_time_seconds();
@@ -5566,11 +5713,28 @@ static void tick_body(World* w, float dt) { // (bp_tick, at the end: on the debu
         double p0 = V.profile ? re_time_seconds() : 0.0;
         uint32_t ops0 = V.ops;
         for (uint32_t s = 0; s < V.nstreams;) { // a streamed level that is in (or out): its node goes on
-            bool due = V.streams[s].req == BP_REQ_LIGHTING ? !rtl_busy() : !V.hooks.stream_done || V.hooks.stream_done(V.streams[s].req);
-            if (V.streams[s].inst == i && due) {
-                in->lat_t[V.streams[s].slot] = 0.0f;
-                V.streams[s] = V.streams[--V.nstreams];
-            } else s++;
+            BpStream* st = &V.streams[s];
+            if (st->inst != i) {
+                s++;
+                continue;
+            }
+            // (2026-11-24) res: 0 going on, 1 done / loaded, 2 failed; the Progress pin follows it each frame
+            int res = 0;
+            float pr = 0.0f;
+            if (st->req == BP_REQ_LIGHTING) res = rtl_busy() ? 0 : 1;
+            else if (st->req == BP_REQ_PRELOAD) {
+                PreloadState ps = level_preload_state(st->name, &pr);
+                res = ps == PRE_READY ? 1 : (ps == PRE_FAILED || ps == PRE_NONE) ? 2 : 0;
+            } else if (st->info) pr = level_stream_progress(st->req, &res);
+            else res = !V.hooks.stream_done || V.hooks.stream_done(st->req) ? 1 : 0;
+            if (st->info && st->prog_reg != 0xFFFF) in->r[st->prog_reg].v[0] = res == 1 ? 1.0f : pr;
+            if (!res) {
+                s++;
+                continue;
+            }
+            if (res == 2 && st->info && st->fail_pc) in->lat_pc[st->slot] = (uint32_t)st->fail_pc + 1u;
+            in->lat_t[st->slot] = 0.0f;
+            *st = V.streams[--V.nstreams];
         }
         for (uint32_t l = 0; l < in->cls->nlatent; l++) // the Delays that are due
             if (in->lat_pc[l] && (in->lat_t[l] -= dt) <= 0.0f) {
@@ -5946,6 +6110,10 @@ int bp_debug_instance(Entity e, int* alive, int* inputs) { // (the tests' diagno
 
 // (the tests' diagnostics: an instance's class code, entries and registers, on a failure of --bp-test)
 void bp_debug_dump(Entity e, const char* label) {
+    if (!V.playing || !V.w) { // (no Play: its setup failed; nothing to read, and no world to look in)
+        printf("[RealEngine] dump %s: no Play\n", label);
+        return;
+    }
     uint32_t ii = inst_index_of(e);
     if (ii == UINT32_MAX) {
         printf("[RealEngine] dump %s: no instance\n", label);
@@ -5960,6 +6128,13 @@ void bp_debug_dump(Entity e, const char* label) {
         printf("[RealEngine]   %3u: op %u a %u b %u c %u d %u\n", i, a->code[i].op, a->code[i].a, a->code[i].b, a->code[i].c, a->code[i].d);
     for (uint32_t s = 0; s < a->nslots; s++)
         printf("[RealEngine]   r%u = %g %g %g %g\n", s, in->r[s].v[0], in->r[s].v[1], in->r[s].v[2], in->r[s].v[3]);
+    for (uint32_t k = 0; k < a->ntlc; k++) { // (2026-11-25) its Timelines: where they are, their outputs' code
+        const struct BpTlCode* tc = &a->tlc[k];
+        printf("[RealEngine]   timeline %u: t %g dir %g playing %u; update pc %d, finished pc %d, events %d %d %d, tracks %u, jit %s, depth %u\n", k,
+               in->tls[k].t, in->tls[k].dir, in->tls[k].playing, tc->pc_update, tc->pc_finished, tc->pc_event[0], tc->pc_event[1], tc->pc_event[2],
+               tc->tl ? tc->tl->ntracks : 0u, a->jit ? "yes" : "no", V.depth);
+    }
+    for (uint32_t s = 0; s < a->nvars; s++) printf("[RealEngine]   var %s slot %u\n", a->vars[s].name, a->var_slot[s]);
 }
 
 // --- online.c and the saves: the possessed pawn, an instance's variables, events of a kind fired from outside ---------
@@ -7069,20 +7244,20 @@ static bool terror_native(Inst* in, uint32_t kind, const BpValue* A, const BpVal
     case BPK_ADD_TENSION: terror_add_tension(A->v[0], B->v[0]); return true;
     case BPK_GET_TENSION: res.v[0] = terror_tension(); break;
     case BPK_TRIGGER_FILTER: {
-        int f = terror_filter_by_name(str_of(in, A));
+        int f = terror_filter_by_name(ENUM_NAME("EHorrorFilter", A));
         if (f >= 0) terror_filter_trigger(f, B->v[0], C->v[0], V.np[0].v[0], V.np[1].v[0]);
-        else printf("[RealEngine] Trigger Horror Filter: no filter \"%s\"\n", str_of(in, A));
+        else printf("[RealEngine] Trigger Horror Filter: no filter %d\n", (int)A->v[0]);
         res.v[0] = f >= 0 ? 1.0f : 0.0f;
         break;
     }
     case BPK_SET_FILTER: {
-        int f = terror_filter_by_name(str_of(in, A));
+        int f = terror_filter_by_name(ENUM_NAME("EHorrorFilter", A));
         if (f >= 0) terror_filter_set(f, B->v[0], C->v[0]);
         res.v[0] = f >= 0 ? 1.0f : 0.0f;
         break;
     }
     case BPK_CLEAR_FILTERS: terror_filter_clear(A->v[0]); return true;
-    case BPK_GET_FILTER: res.v[0] = terror_filter_value(terror_filter_by_name(str_of(in, A))); break;
+    case BPK_GET_FILTER: res.v[0] = terror_filter_value(terror_filter_by_name(ENUM_NAME("EHorrorFilter", A))); break;
     case BPK_SET_LETTERBOX: terror_set_letterbox(A->v[0], B->v[0]); return true;
     case BPK_DIP_BLACK: case BPK_DIP_WHITE: {
         const float c[3] = { kind == BPK_DIP_WHITE ? 1.0f : 0.0f, kind == BPK_DIP_WHITE ? 1.0f : 0.0f, kind == BPK_DIP_WHITE ? 1.0f : 0.0f };
@@ -7090,7 +7265,7 @@ static bool terror_native(Inst* in, uint32_t kind, const BpValue* A, const BpVal
         return true;
     }
     case BPK_SCARE_RIG: {
-        int r = terror_rig_by_name(str_of(in, A));
+        int r = terror_rig_by_name(ENUM_NAME("EScareRig", A));
         if (r >= 0) terror_scare_rig(r, B->v[0], C->v[0]);
         res.v[0] = r >= 0 ? 1.0f : 0.0f;
         break;
@@ -7098,7 +7273,7 @@ static bool terror_native(Inst* in, uint32_t kind, const BpValue* A, const BpVal
     case BPK_SET_LIGHT_FLICKER: {
         Entity le = ENTITY_NONE;
         CLight* l = light_of(w, ent_of(A) ? ent_of(A) : in->e, &le);
-        const char* pn = str_of(in, B);
+        const char* pn = ENUM_NAME("ELightFlicker", B);
         int p = -1;
         for (int k = 0; k < FLICKER_COUNT; k++)
             if (!_stricmp(pn, light_flicker_name(k))) p = k;
@@ -7185,7 +7360,7 @@ static bool spline_native(Inst* in, uint32_t kind, const BpValue* A, const BpVal
     case BPK_SPLINE_CLEAR: spline_bp_clear(w, e); return true;
     case BPK_SPLINE_SET_CLOSED: spline_bp_set_closed(w, e, B->v[0] != 0.0f); return true;
     case BPK_SPLINE_SET_TYPE: {
-        const char* tn = str_of(in, C);
+        const char* tn = ENUM_NAME("ESplinePointType", C);
         for (uint32_t t = 0; r && t < SPLINE_POINT_COUNT; t++)
             if (!_stricmp(tn, g_spline_point_names[t]) || (t == SPLINE_POINT_CUSTOM && !_stricmp(tn, "Custom"))) {
                 spline_set_point_type(r, (int)B->v[0], t);
@@ -7236,9 +7411,9 @@ static bool ingame_native(Inst* in, uint32_t kind, const BpValue* A, const BpVal
     BpValue res = { { 0 } };
     switch (kind) {
     case BPK_BUILD_LIGHTING: { // Mode, Quality, Budget ms -> Started
-        const char* m = str_of(in, A);
+        const char* m = ENUM_NAME("ELightingBuildMode", A);
         RtlMode mode = name_is(m, "Loading Screen", "0") || name_is(m, "LoadingScreen", "Blocking") ? RTL_LOADING_SCREEN : RTL_PROGRESSIVE;
-        int q = name_is(str_of(in, B), "Production", "1") ? 1 : 0;
+        int q = name_is(ENUM_NAME("ELightingQuality", B), "Production", "1") ? 1 : 0;
         res.v[0] = rtl_request(q, mode, C->v[0]) ? 1.0f : 0.0f;
         break;
     }

@@ -1,6 +1,6 @@
 id: actor-icons
 kind: howto
-title: Ícones dos atores (o modelo de cada um) | Actor icons (each one's model)
+title: Ícones dos atores (o modelo de cada um) | Actor icons (each one's model) | Íconos de los actores
 keys: icone, icon, icones, icons, esconder icone, hide icon, mostrar icone, show icon, icone do ator, actor icon, billboard, sprite do editor, miniatura, thumbnail, icone dinamico, dynamic icon, poluicao visual, clutter, organizador, outliner, t pose
 --- pt
 ```diagram steps
@@ -24,3 +24,14 @@ The icons follow the actor:
 - Lights, cameras, Player Start, sounds and the rest: the kind's icon (lights in their color). The basic shapes (cube, sphere...) have no viewport icon.
 
 Each actor chooses whether its icon shows: **Details > Transform > Show Icon**. For many at once, select them and use **Actor > Visibility > Hide Icons of Selected**. Turning an actor's icon off hides its parts' icons too. **G** hides them all (game view).
+--- es
+```diagram steps
+Outliner y ventana gráfica: el ícono es el propio modelo | Detalles > Transform > Show Icon (cada actor) | Actor > Visibility > Ocultar/Mostrar íconos de la selección | G: vista de juego, sin ningún ícono
+```
+## Cómo funciona
+Los íconos siguen al actor:
+- **Malla importada**: el ícono es el **propio modelo** (en el Outliner y en la ventana gráfica).
+- **Skeletal Mesh**: el modelo en su pose de reposo (su **pose en T**).
+- Luces, cámaras, Player Start, sonidos y el resto: el ícono del tipo (las luces en su color). Las formas básicas (cubo, esfera...) no tienen ícono en la ventana gráfica.
+
+Cada actor elige si muestra su ícono: **Detalles > Transform > Show Icon**. Para varios a la vez, selecciónalos y usa **Actor > Visibility > Ocultar íconos de la selección**. Apagar el ícono de un actor oculta también los íconos de sus partes. **G** los oculta todos (vista de juego).

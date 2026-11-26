@@ -3,6 +3,7 @@
 // Sequence and Delay, Alt + click on a pin breaks its wires, Delete, Ctrl+D, Ctrl+A, Home frames the graph, F7 compiles,
 // Ctrl+S saves. Variables are dragged from My Blueprint (Ctrl: Get, Alt: Set).
 #include <ctype.h>
+#include "editor_docs.h"
 #include "graph_layout.h"
 #include "graph_view.h" // (2026-11-23: gv_edge_scroll)
 #include <math.h>
@@ -15,7 +16,9 @@
 #include "graph_style.h"
 
 #include "theme.h"
+#include "ui_number.h"
 #include "bp_editor.h"
+#include "editor_host.h" // (item 9)
 #include "asset_picker.h"
 #include "graph_menu.h"
 #include "bp_internal.h"
@@ -67,6 +70,7 @@ typedef struct Win {
     BpAsset* a;
     bool open, focus;
     uint8_t placed; // (Q26) frames it was put over the viewport (the layout settles in the first ones)
+    bool host;      // (item 9) docks into the Editors window on its next frame (editor_host.h)
     uint32_t graph;
     uint32_t sel[MAX_SEL];
     uint32_t nsel;
@@ -215,81 +219,81 @@ static void node_title(const BpNode* n, char* out, size_t cap) {
     const BpNodeDesc* d = bp_node_desc(n->kind);
     switch (n->kind) {
     case BPK_VAR_GET: snprintf(out, cap, "%s", n->text); break;
-    case BPK_VAR_SET: snprintf(out, cap, "Set %s", n->text); break;
+    case BPK_VAR_SET: snprintf(out, cap, TR("Set %s"), n->text); break;
     case BPK_TIMELINE: snprintf(out, cap, "%s", n->text[0] ? n->text : "Timeline"); break; // (Unreal: the timeline's name)
     case BPK_EVENT_KEY: snprintf(out, cap, "%s", n->text); break;
-    case BPK_DISPATCH_CALL: snprintf(out, cap, "Call %s", n->text); break;
-    case BPK_DISPATCH_BIND: snprintf(out, cap, "Bind Event to %s", n->text); break;
-    case BPK_DISPATCH_UNBIND: snprintf(out, cap, "Unbind Event from %s", n->text); break;
-    case BPK_DISPATCH_UNBIND_ALL: snprintf(out, cap, "Unbind all Events from %s", n->text); break;
-    case BPK_EVENT_DISPATCH: snprintf(out, cap, "Event %s", n->text); break;
+    case BPK_DISPATCH_CALL: snprintf(out, cap, TR("Call %s"), n->text); break;
+    case BPK_DISPATCH_BIND: snprintf(out, cap, TR("Bind Event to %s"), n->text); break;
+    case BPK_DISPATCH_UNBIND: snprintf(out, cap, TR("Unbind Event from %s"), n->text); break;
+    case BPK_DISPATCH_UNBIND_ALL: snprintf(out, cap, TR("Unbind all Events from %s"), n->text); break;
+    case BPK_EVENT_DISPATCH: snprintf(out, cap, TR("Event %s"), n->text); break;
     case BPK_EVENT_BEGIN_OVERLAP: case BPK_EVENT_END_OVERLAP: case BPK_EVENT_OVERLAPPING:
         if (n->text[0]) snprintf(out, cap, "%s (%s)", n->kind == BPK_EVENT_BEGIN_OVERLAP ? "OnActorBeginOverlap" : n->kind == BPK_EVENT_END_OVERLAP ? "OnActorEndOverlap" : "OnActorOverlapping", n->text);
-        else snprintf(out, cap, "%s", d->name);
+        else snprintf(out, cap, "%s", TR(d->name));
         break;
     case BPK_EVENT_CUSTOM:
         if (n->net & 3) { // (Unreal's subtitle: where it runs)
             static const char* const nm[4] = { "", "Multicast", "Run on Server", "Run on owning Client" };
-            snprintf(out, cap, "%s (%s)", n->text, nm[n->net & 3]);
+            snprintf(out, cap, "%s (%s)", n->text, TR(nm[n->net & 3]));
         } else
             snprintf(out, cap, "%s", n->text);
         break;
     case BPK_GET_COMPONENT: snprintf(out, cap, "%s", n->text); break;
-    case BPK_CALL_CUSTOM: snprintf(out, cap, "Call %s", n->text); break;
-    case BPK_CAST: snprintf(out, cap, "Cast To %s", n->text); break;
+    case BPK_CALL_CUSTOM: snprintf(out, cap, TR("Call %s"), n->text); break;
+    case BPK_CAST: snprintf(out, cap, TR("Cast To %s"), n->text); break;
     case BPK_PLUGIN_PURE: case BPK_PLUGIN_CALL: snprintf(out, cap, "%s", n->text); break; // (B14c: the plugin's node's own name)
     case BPK_SPAWN:
     case BPK_SPAWN_ASYNC: {
         const char* cls = "";
         for (int p = 0; p < n->npins; p++)
             if (n->pins[p].type == BPT_CLASS && !n->pins[p].out) cls = n->pins[p].slit;
-        if (cls[0]) snprintf(out, cap, "Spawn Actor %s%s", cls, n->kind == BPK_SPAWN_ASYNC ? " (Async)" : "");
-        else snprintf(out, cap, "%s", d->name);
+        if (cls[0]) snprintf(out, cap, TR("Spawn Actor %s%s"), cls, n->kind == BPK_SPAWN_ASYNC ? TR(" (Async)") : "");
+        else snprintf(out, cap, "%s", TR(d->name));
         break;
     }
     case BPK_MACRO: snprintf(out, cap, "%s", n->text); break;
-    case BPK_TUNNEL_IN: snprintf(out, cap, "Inputs"); break;
-    case BPK_TUNNEL_OUT: snprintf(out, cap, "Outputs"); break;
-    case BPK_EVENT_INPUT_ACTION: snprintf(out, cap, "EnhancedInputAction %s", n->text[0] ? n->text : "?"); break;
-    case BPK_ADD_MAPPING_CONTEXT: snprintf(out, cap, "Add Mapping Context %s", n->text[0] ? n->text : "?"); break;
-    case BPK_REMOVE_MAPPING_CONTEXT: snprintf(out, cap, "Remove Mapping Context %s", n->text[0] ? n->text : "?"); break;
+    case BPK_TUNNEL_IN: snprintf(out, cap, TR("Inputs")); break;
+    case BPK_TUNNEL_OUT: snprintf(out, cap, TR("Outputs")); break;
+    case BPK_EVENT_INPUT_ACTION: snprintf(out, cap, TR("EnhancedInputAction %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_ADD_MAPPING_CONTEXT: snprintf(out, cap, TR("Add Mapping Context %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_REMOVE_MAPPING_CONTEXT: snprintf(out, cap, TR("Remove Mapping Context %s"), n->text[0] ? n->text : "?"); break;
     case BPK_GET_ACTION_VALUE: snprintf(out, cap, "%s", n->text[0] ? n->text : "Get Action Value"); break;
-    case BPK_SET_TIMER: snprintf(out, cap, "Set Timer by Event %s", n->text[0] ? n->text : "?"); break;
-    case BPK_NET_RPC_SERVER: snprintf(out, cap, "Run on Server: %s", n->text[0] ? n->text : "?"); break;
-    case BPK_NET_RPC_MULTICAST: snprintf(out, cap, "Multicast: %s", n->text[0] ? n->text : "?"); break;
-    case BPK_NET_RPC_OWNER: snprintf(out, cap, "Run on Owning Client: %s", n->text[0] ? n->text : "?"); break;
-    case BPK_NET_REPLICATE_VAR: snprintf(out, cap, "Replicate %s", n->text[0] ? n->text : "?"); break;
-    case BPK_CLEAR_TIMER: snprintf(out, cap, "Clear Timer %s", n->text[0] ? n->text : "?"); break;
+    case BPK_SET_TIMER: snprintf(out, cap, TR("Set Timer by Event %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_NET_RPC_SERVER: snprintf(out, cap, TR("Run on Server: %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_NET_RPC_MULTICAST: snprintf(out, cap, TR("Multicast: %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_NET_RPC_OWNER: snprintf(out, cap, TR("Run on Owning Client: %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_NET_REPLICATE_VAR: snprintf(out, cap, TR("Replicate %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_CLEAR_TIMER: snprintf(out, cap, TR("Clear Timer %s"), n->text[0] ? n->text : "?"); break;
     case BPK_CALL_FUNCTION:
     case BPK_FUNC_ENTRY:
     case BPK_AXIS: snprintf(out, cap, "%s", n->text); break;
-    case BPK_KEY_DOWN: snprintf(out, cap, "Is %s Down", n->text); break;
-    case BPK_MAKE_STRUCT: snprintf(out, cap, "Make %s", n->text); break;
-    case BPK_BREAK_STRUCT: snprintf(out, cap, "Break %s", n->text); break;
-    case BPK_SWITCH_ENUM: snprintf(out, cap, "Switch on %s", n->text); break;
+    case BPK_KEY_DOWN: snprintf(out, cap, TR("Is %s Down"), n->text); break;
+    case BPK_MAKE_STRUCT: snprintf(out, cap, TR("Make %s"), n->text); break;
+    case BPK_BREAK_STRUCT: snprintf(out, cap, TR("Break %s"), n->text); break;
+    case BPK_SWITCH_ENUM: snprintf(out, cap, TR("Switch on %s"), n->text); break;
     case BPK_ENUM_LITERAL: snprintf(out, cap, "%s::%s", n->text, n->text2); break;
     case BPK_DATA_GET: snprintf(out, cap, "%s.%s", n->text, n->text2); break;
-    case BPK_EVENT_INTERFACE: snprintf(out, cap, "Event %s", n->text); break;
-    case BPK_CALL_INTERFACE: snprintf(out, cap, "%s (Message)", n->text2[0] ? n->text2 : n->text); break;
-    case BPK_DOES_IMPLEMENT: snprintf(out, cap, "Does Implement %s", n->text); break;
+    case BPK_EVENT_INTERFACE: snprintf(out, cap, TR("Event %s"), n->text); break;
+    case BPK_CALL_INTERFACE: snprintf(out, cap, TR("%s (Message)"), n->text2[0] ? n->text2 : n->text); break;
+    case BPK_DOES_IMPLEMENT: snprintf(out, cap, TR("Does Implement %s"), n->text); break;
     case BPK_MAT_SCALAR:
-    case BPK_MAT_VECTOR: snprintf(out, cap, "Set %s (%s)", n->text[0] ? n->text : "?", n->kind == BPK_MAT_SCALAR ? "Scalar" : "Vector"); break;
-    case BPK_PLAY_MONTAGE: snprintf(out, cap, "Play Montage %s", n->text[0] ? n->text : "?"); break;
-    case BPK_PP_SET_FLOAT: snprintf(out, cap, "Set %s (Post Process)", n->text[0] ? n->text : "?"); break;
-    case BPK_WIDGET_SET_TEXT: snprintf(out, cap, "Set Text %s", n->text[0] ? n->text : "?"); break;
-    case BPK_WIDGET_SET_PERCENT: snprintf(out, cap, "Set Percent %s", n->text[0] ? n->text : "?"); break;
-    case BPK_WIDGET_SET_VISIBLE: snprintf(out, cap, "Set Visible %s", n->text[0] ? n->text : "?"); break;
-    case BPK_WIDGET_SET_COLOR: snprintf(out, cap, "Set Color %s", n->text[0] ? n->text : "?"); break;
-    case BPK_WIDGET_SET_VALUE: snprintf(out, cap, "Set Value %s", n->text[0] ? n->text : "?"); break;
-    case BPK_WIDGET_GET_VALUE: snprintf(out, cap, "Get Value %s", n->text[0] ? n->text : "?"); break;
-    case BPK_WIDGET_GET_TEXT: snprintf(out, cap, "Get Text %s", n->text[0] ? n->text : "?"); break;
-    case BPK_WIDGET_SET_ENABLED: snprintf(out, cap, "Set Is Enabled %s", n->text[0] ? n->text : "?"); break;
-    case BPK_PLAY_WIDGET_ANIM: snprintf(out, cap, "Play Animation %s", n->text[0] ? n->text : "?"); break;
-    case BPK_STOP_WIDGET_ANIM: snprintf(out, cap, "Stop Animation %s", n->text[0] ? n->text : "?"); break;
+    case BPK_MAT_VECTOR: snprintf(out, cap, TR("Set %s (%s)"), n->text[0] ? n->text : "?", n->kind == BPK_MAT_SCALAR ? TR("Scalar") : TR("Vector")); break;
+    case BPK_PLAY_MONTAGE: snprintf(out, cap, TR("Play Montage %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_PP_SET_FLOAT: snprintf(out, cap, TR("Set %s (Post Process)"), n->text[0] ? n->text : "?"); break;
+    case BPK_WIDGET_SET_TEXT: snprintf(out, cap, TR("Set Text %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_WIDGET_SET_PERCENT: snprintf(out, cap, TR("Set Percent %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_WIDGET_SET_VISIBLE: snprintf(out, cap, TR("Set Visible %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_WIDGET_SET_COLOR: snprintf(out, cap, TR("Set Color %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_WIDGET_SET_VALUE: snprintf(out, cap, TR("Set Value %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_WIDGET_GET_VALUE: snprintf(out, cap, TR("Get Value %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_WIDGET_GET_TEXT: snprintf(out, cap, TR("Get Text %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_WIDGET_SET_ENABLED: snprintf(out, cap, TR("Set Is Enabled %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_PLAY_WIDGET_ANIM: snprintf(out, cap, TR("Play Animation %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_STOP_WIDGET_ANIM: snprintf(out, cap, TR("Stop Animation %s"), n->text[0] ? n->text : "?"); break;
     case BPK_PLAY_SOUND_2D: case BPK_PLAY_SOUND_AT: case BPK_SPAWN_SOUND_2D: case BPK_SPAWN_SOUND_AT: case BPK_SPAWN_SOUND_ATTACHED:
     case BPK_AUDIO_SET_SOUND: case BPK_PUSH_SOUND_MIX: case BPK_POP_SOUND_MIX: case BPK_SET_BASE_SOUND_MIX: case BPK_SET_CLASS_VOLUME:
     case BPK_PS_SPAWN: case BPK_SPAWN_DECAL:
-        snprintf(out, cap, "%s %s", bp_node_desc(n->kind)->name, n->text[0] ? n->text : "?"); // (the asset's name, as Unreal shows it)
+        snprintf(out, cap, "%s %s", TR(bp_node_desc(n->kind)->name), n->text[0] ? n->text : "?"); // (the asset's name, as Unreal shows it)
         break;
     case BPK_PLAY_SEQUENCE:
     case BPK_STOP_SEQUENCE:
@@ -304,14 +308,14 @@ static void node_title(const BpNode* n, char* out, size_t cap) {
         break;
     }
     case BPK_BB_GET_FLOAT: case BPK_BB_GET_BOOL: case BPK_BB_GET_VECTOR: case BPK_BB_GET_ACTOR:
-        snprintf(out, cap, "Get BB %s", n->text[0] ? n->text : "?");
+        snprintf(out, cap, TR("Get BB %s"), n->text[0] ? n->text : "?");
         break;
     case BPK_BB_SET_FLOAT: case BPK_BB_SET_BOOL: case BPK_BB_SET_VECTOR: case BPK_BB_SET_ACTOR:
-        snprintf(out, cap, "Set BB %s", n->text[0] ? n->text : "?");
+        snprintf(out, cap, TR("Set BB %s"), n->text[0] ? n->text : "?");
         break;
-    case BPK_RUN_BT: snprintf(out, cap, "Run Behavior Tree %s", n->text[0] ? n->text : "?"); break;
-    case BPK_PLAY_ANIMATION: snprintf(out, cap, "Play Animation %s", n->text[0] ? n->text : "?"); break;
-    default: snprintf(out, cap, "%s", d->name); break;
+    case BPK_RUN_BT: snprintf(out, cap, TR("Run Behavior Tree %s"), n->text[0] ? n->text : "?"); break;
+    case BPK_PLAY_ANIMATION: snprintf(out, cap, TR("Play Animation %s"), n->text[0] ? n->text : "?"); break;
+    default: snprintf(out, cap, "%s", TR(d->name)); break;
     }
 }
 
@@ -355,7 +359,7 @@ void bp_editor_open(const char* vpath) {
     Win* w = &g_win[free_i];
     memset(w, 0, sizeof *w);
     w->a = a;
-    w->open = w->focus = true;
+    w->open = w->focus = w->host = true;
     w->var = w->func = -1;
     if (getenv("REALENGINE_OPEN_TIMELINE")) // (the screenshots: its first Timeline node's editor open)
         for (uint32_t i = 0; a->ngraphs && i < a->graphs[0].nnodes; i++)
@@ -602,8 +606,81 @@ static void touch(Win* w) {
 
 static bool deletable(const Win* w, const BpNode* n) { return !(n->kind == BPK_FUNC_ENTRY && w->graph > 0); }
 
+// (2026-11-24, item 14) The graph's undo (Ctrl+Z / Ctrl+Y over the Blueprint editor's graph): its nodes and links as
+// they were before a change of its structure (Split / Recombine Struct Pin, Delete, Organize Nodes); 32 steps
+typedef struct GraphStep { const BpAsset* a; int graph; BpNode* nodes; uint32_t nnodes, next_id; BpLink* links; uint32_t nlinks; } GraphStep;
+#define GSTEP_MAX 32
+static GraphStep g_gundo[GSTEP_MAX], g_gredo[GSTEP_MAX];
+static int g_ngundo, g_ngredo;
+static void gstep_free(GraphStep* s) {
+    free(s->nodes), free(s->links);
+    memset(s, 0, sizeof *s);
+}
+static bool gstep_take(const BpAsset* a, int gi, GraphStep* s) {
+    const BpGraph* g = &a->graphs[gi];
+    memset(s, 0, sizeof *s);
+    s->a = a, s->graph = gi, s->nnodes = g->nnodes, s->nlinks = g->nlinks, s->next_id = g->next_id;
+    s->nodes = malloc(sizeof(BpNode) * (g->nnodes ? g->nnodes : 1));
+    s->links = malloc(sizeof(BpLink) * (g->nlinks ? g->nlinks : 1));
+    if (!s->nodes || !s->links) return gstep_free(s), false;
+    memcpy(s->nodes, g->nodes, sizeof(BpNode) * g->nnodes);
+    memcpy(s->links, g->links, sizeof(BpLink) * g->nlinks);
+    return true;
+}
+static bool gstep_apply(BpAsset* a, const GraphStep* s) {
+    BpGraph* g = &a->graphs[s->graph];
+    if (g->cap_nodes < s->nnodes) {
+        BpNode* nn = realloc(g->nodes, sizeof(BpNode) * s->nnodes);
+        if (!nn) return false;
+        g->nodes = nn, g->cap_nodes = s->nnodes;
+    }
+    if (g->cap_links < s->nlinks) {
+        BpLink* nl = realloc(g->links, sizeof(BpLink) * s->nlinks);
+        if (!nl) return false;
+        g->links = nl, g->cap_links = s->nlinks;
+    }
+    memcpy(g->nodes, s->nodes, sizeof(BpNode) * s->nnodes);
+    memcpy(g->links, s->links, sizeof(BpLink) * s->nlinks);
+    g->nnodes = s->nnodes, g->nlinks = s->nlinks, g->next_id = s->next_id;
+    a->dirty = true, a->compiled = false;
+    return true;
+}
+static void gstep_push(GraphStep* st, int* n, GraphStep* s) {
+    if (*n == GSTEP_MAX) {
+        gstep_free(&st[0]);
+        memmove(&st[0], &st[1], sizeof st[0] * (GSTEP_MAX - 1));
+        (*n)--;
+    }
+    st[(*n)++] = *s;
+}
+void bp_graph_undo_push(BpAsset* a, int gi) {
+    GraphStep s;
+    if (!a || gi < 0 || gi >= (int)a->ngraphs || !gstep_take(a, gi, &s)) return;
+    gstep_push(g_gundo, &g_ngundo, &s);
+    while (g_ngredo) gstep_free(&g_gredo[--g_ngredo]);
+}
+// The last step of this asset (the steps of other assets stay); false: none
+bool bp_graph_undo(BpAsset* a, bool redo) {
+    GraphStep* from = redo ? g_gredo : g_gundo;
+    int* nf = redo ? &g_ngredo : &g_ngundo;
+    for (int i = *nf - 1; i >= 0; i--) {
+        if (from[i].a != a) continue;
+        GraphStep cur;
+        if (!gstep_take(a, from[i].graph, &cur)) return false;
+        bool ok = gstep_apply(a, &from[i]);
+        gstep_free(&from[i]);
+        memmove(&from[i], &from[i + 1], sizeof from[0] * (size_t)(*nf - i - 1));
+        (*nf)--;
+        if (redo) gstep_push(g_gundo, &g_ngundo, &cur);
+        else gstep_push(g_gredo, &g_ngredo, &cur);
+        return ok;
+    }
+    return false;
+}
+
 static void delete_selected(Win* w) {
     BpGraph* g = &w->a->graphs[w->graph];
+    bp_graph_undo_push(w->a, w->graph); // (2026-11-24: Ctrl+Z brings them back)
     for (uint32_t i = 0; i < w->nsel; i++) {
         BpNode* n = bp_node(g, w->sel[i]);
         if (n && deletable(w, n)) bp_remove_node(g, w->sel[i]);
@@ -1038,7 +1115,7 @@ static bool menu_top(Win* w) {
             igPopStyleColor(1);
         }
         igPushID_Str("recent"), igPushID_Int(shown);
-        if (igSelectable_Bool(e->label, false, 0, (ImVec2){ 0, 0 })) place(w, e), placed = true;
+        if (igSelectable_Bool(TR(e->label), false, 0, (ImVec2){ 0, 0 })) place(w, e), placed = true;
         igPopID(), igPopID();
         u.shown[u.nshown++] = e, shown++;
     }
@@ -1054,7 +1131,7 @@ static bool menu_top(Win* w) {
             igPopStyleColor(1);
         }
         igPushID_Str("recommended"), igPushID_Int(i);
-        if (igSelectable_Bool(e->label, false, 0, (ImVec2){ 0, 0 })) place(w, e), placed = true;
+        if (igSelectable_Bool(TR(e->label), false, 0, (ImVec2){ 0, 0 })) place(w, e), placed = true;
         if (ctx[0]) igSetItemTooltip(TR("Recommended after %s"), ctx);
         igPopID(), igPopID();
     }
@@ -1096,8 +1173,15 @@ static void action_menu(Win* w) {
     bool open[8], pushed[8];
     for (uint32_t i = 0; i < g_nmenu; i++) {
         MenuEntry* e = &g_menu[i];
-        char hay[160];
-        snprintf(hay, sizeof hay, "%s %s", e->label, e->cat);
+        char hay[400]; // (2026-11-25, item 12) found by its English name and category, and by the editor's language's
+        int hl = snprintf(hay, sizeof hay, "%s %s %s", e->label, e->cat, TR(e->label));
+        for (const char* c = e->cat; *c && hl > 0 && hl < (int)sizeof hay - 2;) {
+            const char* bar = strchr(c, '|');
+            char part[64];
+            snprintf(part, sizeof part, "%.*s", (int)(bar ? (size_t)(bar - c) : strlen(c)), c);
+            hl += snprintf(hay + hl, sizeof hay - (size_t)hl, " %s", TR(part));
+            c = bar ? bar + 1 : c + strlen(c);
+        }
         if (w->search[0] && !str_has(hay, w->search)) continue;
         if (e->group != group) { // the sections: Compatible, Recently Used, All Actions
             while (npath > 0)
@@ -1129,7 +1213,7 @@ static void action_menu(Win* w) {
                 if (w->search[0]) igSetNextItemOpen(true, ImGuiCond_Always);
                 else if (group == 0) igSetNextItemOpen(true, ImGuiCond_Appearing); // (what fits the wire: open)
                 char lab[80];
-                snprintf(lab, sizeof lab, "%s##g%d", parts[npath], group);
+                snprintf(lab, sizeof lab, "%s##g%d_%s", TR(parts[npath]), group, parts[npath]); // (the id stays English)
                 igPushStyleColor_U32(ImGuiCol_Header, npath ? THEME_NONE : TH(TK_N7));
                 igPushStyleColor_U32(ImGuiCol_Text, npath ? TH(TK_N14) : TH(TK_N15));
                 o = igTreeNodeEx_Str(lab, ImGuiTreeNodeFlags_SpanAvailWidth | (npath ? 0 : ImGuiTreeNodeFlags_Framed));
@@ -1142,14 +1226,14 @@ static void action_menu(Win* w) {
         if (np && !open[np - 1]) continue; // (inside a closed box)
         igPushID_Int((int)i);
         bool first = shown == 0 && w->search[0];
-        if (igSelectable_Bool(e->label, first, 0, (ImVec2){ 0, 0 }) || (enter && shown == 0)) {
+        if (igSelectable_Bool(TR(e->label), first, 0, (ImVec2){ 0, 0 }) || (enter && shown == 0)) {
             place(w, e);
             igCloseCurrentPopup();
             igPopID();
             break;
         }
         const BpNodeDesc* d = bp_node_desc(e->kind);
-        if (d && d->tooltip) igSetItemTooltip("%s", d->tooltip);
+        if (d && d->tooltip) igSetItemTooltip("%s", TR(d->tooltip));
         igPopID();
         shown++;
     }
@@ -1261,7 +1345,7 @@ static void node_geo(const BpGraph* g, const BpNode* n, ImVec2 o, const float pa
     int nin = 0, nout = 0;
     for (uint8_t p = 0; p < n->npins; p++) {
         const BpPin* q = &n->pins[p];
-        float lw = q->name[0] ? igCalcTextSize(q->name, NULL, false, -1).x : 0.0f;
+        float lw = q->name[0] ? igCalcTextSize(TR(q->name), NULL, false, -1).x : 0.0f;
         out->lit_w[p] = 0.0f;
         if (q->delegate && q->out && header > 0) continue; // (in the header, as in Unreal)
         if (q->out) {
@@ -1289,7 +1373,7 @@ static void node_geo(const BpGraph* g, const BpNode* n, ImVec2 o, const float pa
         int r = q->out ? oi++ : ii++;
         float y = out->pos.y + header + r * row + row * 0.5f;
         out->pin[p] = (ImVec2){ q->out ? out->pos.x + w : out->pos.x, y };
-        float lw = q->name[0] ? igCalcTextSize(q->name, NULL, false, -1).x : 0.0f;
+        float lw = q->name[0] ? igCalcTextSize(TR(q->name), NULL, false, -1).x : 0.0f;
         out->label_x[p] = q->out ? out->pos.x + w - 12.0f * z - lw : out->pos.x + 14.0f * z;
     }
 }
@@ -1457,7 +1541,7 @@ static bool lit_widget(Win* w, BpPin* p, float width) {
         break;
     }
     case BPT_BYTE:
-        if (igDragFloat("##l", &p->lit.v[0], 0.2f, 0, 255, "%.0f", ImGuiSliderFlags_AlwaysClamp)) p->lit.v[0] = roundf(p->lit.v[0]), ch = true;
+        if (ui_num_float("##l", &p->lit.v[0], 0.2f, 0, 255, 0, 255, "%.0f", 0)) p->lit.v[0] = roundf(p->lit.v[0]), ch = true; // (a byte: 0..255, the type's own limit)
         break;
     case BPT_INT64: {
         double d;
@@ -1466,7 +1550,15 @@ static bool lit_widget(Win* w, BpPin* p, float width) {
         if (igDragScalar("##l", ImGuiDataType_S64, &x, 0.2f, NULL, NULL, "%lld", 0)) d = (double)x, memcpy(p->lit.v, &d, 8), ch = true;
         break;
     }
-    case BPT_FLOAT: ch = igDragFloat("##l", &p->lit.v[0], 0.05f, 0, 0, "%.3g", 0); break;
+    case BPT_FLOAT: {
+        float lo = 0.0f, hi = 0.0f; // (2026-11-24) a pin with a range (the load speeds): clamped, the range in its tooltip
+        if (bp_pin_range(g_lit_kind, p->name, &lo, &hi)) {
+            ch = ui_num_float("##l", &p->lit.v[0], 0.005f, lo, hi, lo, hi, "%.3g", 0); // (a real limit: held typed too)
+            if (igIsItemHovered(0)) igSetTooltip(TR("Min %g, max %g"), lo, hi);
+        } else
+            ch = igDragFloat("##l", &p->lit.v[0], 0.05f, 0, 0, "%.3g", 0);
+        break;
+    }
     case BPT_VECTOR:
     case BPT_ROTATOR: ch = igDragFloat3("##l", p->lit.v, 0.5f, 0, 0, "%.3g", 0); break;
     case BPT_COLOR: ch = igColorEdit4("##l", p->lit.v, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR); break;
@@ -1475,7 +1567,7 @@ static bool lit_widget(Win* w, BpPin* p, float width) {
     case BPT_TEXT: ch = igInputText("##l", p->slit, sizeof p->slit, 0, NULL, NULL); break;
     case BPT_CLASS:
         if (igBeginCombo("##l", p->slit[0] ? p->slit : TR("Select Class"), 0)) {
-            if (igSelectable_Bool("None", !p->slit[0], 0, (ImVec2){ 0, 0 })) p->slit[0] = 0, ch = true;
+            if (igSelectable_Bool(TR("None"), !p->slit[0], 0, (ImVec2){ 0, 0 })) p->slit[0] = 0, ch = true;
             for (uint32_t i = 0; i < bp_asset_count(); i++) {
                 const BpAsset* c = bp_asset_at(i);
                 if (c->kind == BPA_CLASS && igSelectable_Bool(c->name, !strcmp(p->slit, c->name), 0, (ImVec2){ 0, 0 }))
@@ -1517,6 +1609,15 @@ static void frame_all(Win* w, BpGraph* g, ImVec2 size) {
     g->pan[1] = size.y * 0.5f / g->zoom - (mn[1] + mx[1]) * 0.5f;
     (void)w;
 }
+
+// (2026-11-25, the tester's photos) --show bp-pin:<vpath>[:<pin>] / bp-var:<vpath>:<var> (bp_editor_show)
+static struct {
+    BpAsset* a;
+    char pin[BP_NAME], var[BP_NAME];
+    bool pin_pending, var_pending, place;
+    int frames;
+    ImVec2 at; // (the menu's place: the pin's)
+} g_show;
 
 static void draw_graph(Win* w, float height) {
     BpAsset* a = w->a;
@@ -1844,7 +1945,7 @@ static void draw_graph(Win* w, float height) {
             bool linked = bp_pin_linked(g, n->id, p);
             draw_pin(dl, ge->pin[p], q, linked, z);
             if (q->name[0] && !cpt && !(q->delegate && q->out && ge->header > 0))
-                ImDrawList_AddText_Vec2(dl, (ImVec2){ ge->label_x[p], ge->pin[p].y - fs * 0.5f }, TH(TK_N14), q->name, NULL);
+                ImDrawList_AddText_Vec2(dl, (ImVec2){ ge->label_x[p], ge->pin[p].y - fs * 0.5f }, TH(TK_N14), TR(q->name), NULL);
             igPushID_Int(p);
             float pr = 8.0f * z;
             igSetCursorScreenPos((ImVec2){ ge->pin[p].x - pr, ge->pin[p].y - pr });
@@ -1855,9 +1956,9 @@ static void draw_graph(Win* w, float height) {
                 char tl[BP_NAME * 2 + 32], val[256];
                 type_label(q->type, q->ref, q->cont, q->vtype, tl, sizeof tl);
                 if (g_dbg_trace && q->type != BPT_EXEC && bp_debug_pin_text(a, w->graph, n->id, p, ENTITY_NONE, val, sizeof val)) // (the debugger: its value now)
-                    igSetItemTooltip("%s (%s)\n= %s", q->name[0] ? q->name : bp_node_desc(n->kind)->name, tl, val);
+                    igSetItemTooltip("%s (%s)\n= %s", TR(q->name[0] ? q->name : bp_node_desc(n->kind)->name), tl, val);
                 else
-                    igSetItemTooltip("%s (%s)%s", q->name[0] ? q->name : bp_node_desc(n->kind)->name, tl,
+                    igSetItemTooltip("%s (%s)%s", TR(q->name[0] ? q->name : bp_node_desc(n->kind)->name), tl,
                                      bp_type_splittable(q->type) && !q->cont ? TR("  -  right click: Split") : "");
             }
             if (igIsItemClicked(ImGuiMouseButton_Right)) pin_menu = true, pin_menu_node = n->id, pin_menu_pin = p;
@@ -1872,7 +1973,7 @@ static void draw_graph(Win* w, float height) {
                 }
             }
             if (ge->lit_w[p] > 0.0f) { // the value typed in an unconnected input
-                float lw = q->name[0] ? igCalcTextSize(q->name, NULL, false, -1).x + 6.0f * z : 0.0f;
+                float lw = q->name[0] ? igCalcTextSize(TR(q->name), NULL, false, -1).x + 6.0f * z : 0.0f;
                 igSetCursorScreenPos((ImVec2){ ge->label_x[p] + lw, ge->pin[p].y - igGetFrameHeight() * 0.5f });
                 g_lit_kind = n->kind;
                 if (q->asset) snprintf(q->slit, sizeof q->slit, "%s", n->text); // (the asset pin: the node's text)
@@ -1952,18 +2053,35 @@ static void draw_graph(Win* w, float height) {
         }
     }
     if (w->mode == MODE_MOVE && !igIsMouseDown_Nil(ImGuiMouseButton_Left)) w->mode = MODE_NONE;
+    if (g_show.pin_pending && g_show.a == a && w->graph == 0 && ++g_show.frames == 400) // (none in 400 frames: said once)
+        printf("[RealEngine] --show bp-pin: %s's Event Graph has no splittable pin%s%s\n", a->name, g_show.pin[0] ? " named " : "", g_show.pin);
+    if (g_show.pin_pending && g_show.a == a && w->graph == 0 && g_show.frames > 10) // (--show bp-pin: the layout settled first)
+        for (uint32_t i = 0; i < g->nnodes && g_show.pin_pending; i++)
+            for (int p = 0; p < g->nodes[i].npins; p++) {
+                const BpPin* q = &g->nodes[i].pins[p];
+                if (q->sub2 || q->cont || !bp_type_splittable(q->type) || (g_show.pin[0] && _stricmp(q->name, g_show.pin))) continue;
+                pin_menu = true, pin_menu_node = g->nodes[i].id, pin_menu_pin = p, g_show.pin_pending = false;
+                w->want_tab = -1, w->want_hold = 0; // (no tab brought forward again: its focus would close the menu)
+                g_show.at = g_geo[i].pin[p], g_show.place = true; // (at the pin, not where the real mouse is: another monitor)
+                printf("[RealEngine] --show bp-pin: the menu of %s's pin %s\n", bp_node_desc(g->nodes[i].kind)->name, q->name);
+                break;
+            }
     if (pin_menu) igOpenPopup_Str("pin_menu", 0);
+    if (g_show.place && pin_menu) igSetNextWindowPos(g_show.at, ImGuiCond_Always, (ImVec2){ 0, 0 }), g_show.place = false;
     if (popup_begin("pin_menu")) { // Unreal's pin actions
         BpNode* n = bp_node(g, pin_menu_node);
         if (n && pin_menu_pin >= 0 && pin_menu_pin < n->npins) {
             BpPin* q = &n->pins[pin_menu_pin];
-            igTextDisabled("%s", q->name[0] ? q->name : bp_node_desc(n->kind)->name);
+            igTextDisabled("%s", TR(q->name[0] ? q->name : bp_node_desc(n->kind)->name));
             igSeparator();
-            if (!q->sub && !q->cont && bp_type_splittable(q->type) && ui_menu_item(ICON_STRUCT, TR("Split Struct Pin"), NULL, false, true)) {
+            // (2026-11-24) a part split again too (Transform -> Location -> X); each one a step of Ctrl+Z
+            if (!q->sub2 && !q->cont && bp_type_splittable(q->type) && ui_menu_item(ICON_STRUCT, TR("Split Struct Pin"), NULL, false, true)) {
+                bp_graph_undo_push(a, w->graph);
                 bp_split_pin(a, g, n, (uint8_t)pin_menu_pin, true);
                 touch(w);
             }
             if (q->sub && ui_menu_item(ICON_STRUCT, TR("Recombine Struct Pin"), NULL, false, true)) {
+                bp_graph_undo_push(a, w->graph);
                 bp_split_pin(a, g, n, (uint8_t)pin_menu_pin, false);
                 touch(w);
             }
@@ -2054,6 +2172,8 @@ static void draw_graph(Win* w, float height) {
         }
         if (igIsKeyPressed_Bool(ImGuiKey_Home, false)) w->frame = true;
         if (!io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_Q, false)) organize_nodes(w); // (2026-11-23)
+        if (igIsKeyChordPressed_Nil(ImGuiMod_Ctrl | ImGuiKey_Z) && bp_graph_undo(w->a, false)) w->nsel = 0; // (2026-11-24)
+        if (igIsKeyChordPressed_Nil(ImGuiMod_Ctrl | ImGuiKey_Y) && bp_graph_undo(w->a, true)) w->nsel = 0;
     }
     // the hints and the graph's name
     ImDrawList_AddText_Vec2(dl, (ImVec2){ o.x + 10, o.y + size.y - igGetFontSize() - 8 }, TH(TK_N11),
@@ -2087,15 +2207,21 @@ static bool stristr_ascii(const char* h, const char* n) { // (the type search: c
 // references as variable types: a Name holding the asset's name (what the nodes' asset pins take: Play Sequence's
 // Sequence, Play Animation's Animation, Play Sound's Sound, Spawn System's System...), its class in ref; the default
 // picked from the project's assets of that class
-typedef struct AssetRefType { const char* label; const char* ext[3]; } AssetRefType;
+// (2026-11-24, item 11) each with the Content kinds the asset picker lists for it (Unreal's soft object references:
+// Level = World, Level Sequence...); the value stays the asset's name, what the nodes' name and asset pins take
+typedef struct AssetRefType { const char* label; uint64_t kinds; } AssetRefType;
 static const AssetRefType g_asset_refs[] = {
-    { "Level Sequence", { ".rseq" } }, { "Animation Sequence", { ".ranim" } }, { "Anim Montage", { ".rmontage" } },
-    { "Sound", { ".rsound", ".rscue", ".rmsnd" } }, { "Sound Mix", { ".rsmix" } }, { "Sound Class", { ".rsclass" } },
-    { "Material", { ".rmat", ".rmi" } }, { "Texture", { ".png", ".jpg", ".tga" } }, { "Static Mesh", { ".rmesh" } },
-    { "Skeletal Mesh", { ".rskm" } }, { "Particle System", { ".rparticle" } }, { "Behavior Tree", { ".rbt" } },
-    { "Data Asset", { ".rdata" } }, { "Dialogue", { ".rdlg" } }, { "Quest", { ".rquest" } }, { "Input Action", { ".rinputaction" } },
-    { "Input Mapping Context", { ".rimc" } }, { "Level", { ".rlevel" } }, { "Vehicle", { ".rvehicle" } },
-    { "Physics Asset", { ".rphys" } }, { "IK Rig", { ".rikrig" } },
+    { "Level Sequence", AK(ASSET_LEVEL_SEQUENCE) }, { "Animation Sequence", AK(ASSET_ANIMATION) }, { "Anim Montage", AK(ASSET_ANIM_MONTAGE) },
+    { "Sound", AK(ASSET_SOUND_WAVE) | AK(ASSET_SOUND_CUE) | AK(ASSET_METASOUND) }, { "Sound Mix", AK(ASSET_SOUND_MIX) }, { "Sound Class", AK(ASSET_SOUND_CLASS) },
+    { "Material", AK(ASSET_MATERIAL) | AK(ASSET_MATERIAL_INSTANCE) }, { "Texture", AK(ASSET_TEXTURE_SOURCE) }, { "Static Mesh", AK(ASSET_STATIC_MESH) },
+    { "Skeletal Mesh", AK(ASSET_SKELETAL_MESH) }, { "Particle System", AK(ASSET_PARTICLE_SYSTEM) }, { "Behavior Tree", AK(ASSET_BEHAVIOR_TREE) },
+    { "Data Asset", AK(ASSET_DATA_ASSET) }, { "Dialogue", AK(ASSET_DIALOGUE) }, { "Quest", AK(ASSET_QUEST) }, { "Input Action", AK(ASSET_INPUT_ACTION) },
+    { "Input Mapping Context", AK(ASSET_INPUT_CONTEXT) }, { "Level", AK(ASSET_LEVEL) }, { "Vehicle", AK(ASSET_VEHICLE) },
+    { "Physics Asset", AK(ASSET_PHYSICS_ASSET) }, { "IK Rig", AK(ASSET_IK_RIG) },
+    // (2026-11-24) the rest the Content knows
+    { "Camera Shake", AK(ASSET_CAMERA_SHAKE) }, { "PCG Graph", AK(ASSET_PCG_GRAPH) }, { "Physical Material", AK(ASSET_PHYS_MATERIAL) },
+    { "Sound Attenuation", AK(ASSET_SOUND_ATTENUATION) }, { "Sound Concurrency", AK(ASSET_SOUND_CONCURRENCY) }, { "Submix", AK(ASSET_SUBMIX) },
+    { "AI Brain", AK(ASSET_BRAIN) },
 };
 #define NASSET_REFS (int)(sizeof g_asset_refs / sizeof g_asset_refs[0])
 static int asset_ref_index(uint8_t type, const char* ref) {
@@ -2104,27 +2230,19 @@ static int asset_ref_index(uint8_t type, const char* ref) {
         if (!strcmp(g_asset_refs[i].label, ref)) return i;
     return -1;
 }
-// The asset reference's default: one of the project's assets of its class (by name, as the nodes keep it)
+// The asset reference's value: one of the project's assets of its class (by name, as the nodes keep it), picked in the
+// asset picker filtered by its kinds (2026-11-24: Unreal's asset field, thumbnail and search; it was a list of names)
 static bool asset_ref_pick(const char* label, int ar, char* s, size_t scap) {
-    bool ch = false;
-    if (!igBeginCombo(label, s[0] ? s : "None", ImGuiComboFlags_HeightLarge)) return false;
-    if (igSelectable_Bool("None", !s[0], 0, (ImVec2){ 0, 0 })) s[0] = 0, ch = true;
-    static char found[256][512];
-    for (int e = 0; e < 3 && g_asset_refs[ar].ext[e]; e++) {
-        int nf = content_search(g_asset_refs[ar].ext[e], found, 256);
-        for (int i = 0; i < nf; i++) {
-            const char* b = strrchr(found[i], '/');
-            char nm[BP_NAME];
-            snprintf(nm, sizeof nm, "%s", b ? b + 1 : found[i]);
-            char* dot = strrchr(nm, '.');
-            if (!dot || _stricmp(dot, g_asset_refs[ar].ext[e]) != 0) continue;
-            *dot = 0;
-            if (igSelectable_Bool(nm, !strcmp(s, nm), 0, (ImVec2){ 0, 0 })) snprintf(s, scap, "%s", nm), ch = true;
-            igSetItemTooltip("%s", found[i]);
-        }
-    }
-    igEndCombo();
-    return ch;
+    if (g_show.var_pending && ++g_show.frames > 10) asset_field_open_next(), g_show.var_pending = false; // (--show bp-var)
+    int kind = 0;
+    while (kind < 63 && !(g_asset_refs[ar].kinds & (1ull << kind))) kind++;
+    char out[512] = "";
+    if (asset_field(label, s[0] ? s : "None", NULL, kind, g_asset_refs[ar].kinds, true, out, sizeof out) != ASSET_FIELD_PICKED) return false;
+    const char* b = strrchr(out, '/');
+    snprintf(s, scap, "%s", b ? b + 1 : out);
+    char* dot = strrchr(s, '.');
+    if (dot) *dot = 0;
+    return true;
 }
 
 static bool type_combo_ex(const char* label, uint8_t* type, char* ref, bool exec) {
@@ -2246,7 +2364,7 @@ bool bp_value_edit(const char* label, unsigned char type, const char* ref, struc
 static bool value_edit(const char* label, uint8_t type, const char* ref, BpValue* v, char* s, size_t scap) {
     switch (type) {
     case BPT_BYTE:
-        if (igDragFloat(label, &v->v[0], 0.2f, 0, 255, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
+        if (ui_num_float(label, &v->v[0], 0.2f, 0, 255, 0, 255, "%.0f", 0)) { // (a byte: the type's own limit)
             v->v[0] = roundf(v->v[0]);
             return true;
         }
@@ -2271,8 +2389,8 @@ static bool value_edit(const char* label, uint8_t type, const char* ref, BpValue
     case BPT_TEXT: return s && igInputText(label, s, scap, 0, NULL, NULL);
     case BPT_CLASS: {
         bool ch = false;
-        if (s && igBeginCombo(label, s[0] ? s : "None", 0)) {
-            if (igSelectable_Bool("None", !s[0], 0, (ImVec2){ 0, 0 })) s[0] = 0, ch = true;
+        if (s && igBeginCombo(label, s[0] ? s : TR("None"), 0)) {
+            if (igSelectable_Bool(TR("None"), !s[0], 0, (ImVec2){ 0, 0 })) s[0] = 0, ch = true;
             for (uint32_t i = 0; i < bp_asset_count(); i++) {
                 const BpAsset* c = bp_asset_at(i);
                 if (c->kind == BPA_CLASS && (!ref || !ref[0] || bp_is_child_of(c, ref)) && igSelectable_Bool(c->name, !strcmp(s, c->name), 0, (ImVec2){ 0, 0 }))
@@ -2311,7 +2429,7 @@ static bool value_edit(const char* label, uint8_t type, const char* ref, BpValue
         }
         return ch;
     }
-    default: igTextDisabled("%s", type == BPT_ACTOR ? "None" : TR("(the fields' defaults)")); return false;
+    default: igTextDisabled("%s", type == BPT_ACTOR ? TR("None") : TR("(the fields' defaults)")); return false;
     }
 }
 
@@ -3469,7 +3587,7 @@ static void components_panel(Win* w) {
                     select_scs(w, (int)j);
                 if (igBeginDragDropSource(0)) { // dropped on the graph: Get <component>
                     igSetDragDropPayload("RE_BP_COMP", n->name, BP_NAME, ImGuiCond_Once);
-                    igText("Get %s", n->name);
+                    igText(TR("Get %s"), n->name);
                     igEndDragDropSource();
                 }
                 if (igBeginPopupContextItem("scs_menu", ImGuiPopupFlags_MouseButtonRight)) {
@@ -4435,11 +4553,12 @@ static void timeline_window(Win* w) {
 static void draw_window(Win* w, Editor* ed) {
     BpAsset* a = w->a;
     char title[160];
-    snprintf(title, sizeof title, "%s - %s###bpwin%u", a->name, g_bp_asset_names[a->kind], a->hash);
+    snprintf(title, sizeof title, "%s - %s###bpwin%u", a->name, TR(g_bp_asset_names[a->kind]), a->hash); // (the tab: translated, "Graph Class")
     const ImGuiViewport* mv = igGetMainViewport(); // a class: most of the screen, centered (Unreal opens it as a tab)
     ImVec2 ws = a->kind == BPA_CLASS || a->kind == BPA_INTERFACE || a->kind == BPA_MACROLIB ? (ImVec2){ mv->Size.x * 0.8f, mv->Size.y * 0.8f }
                                                                               : (ImVec2){ fminf(980.0f, mv->Size.x * 0.6f), fminf(620.0f, mv->Size.y * 0.6f) };
     float vr[4]; // (Q26, the mockups) a class opens over the viewport, the level editor's panels around it, like a tab
+    if (w->host) w->placed = 4; // (item 9: going into the Editors window, which takes that place; a SetNextWindowPos undocks)
     if ((a->kind == BPA_CLASS || a->kind == BPA_INTERFACE || a->kind == BPA_MACROLIB) && w->placed < 4 && dock_panel_rect(DP_VIEWPORT, vr) && vr[2] > 600.0f && vr[3] > 400.0f) {
         w->placed++; // (its first frames: the docked panels around the viewport take their places meanwhile)
         igSetNextWindowSize((ImVec2){ vr[2], vr[3] }, ImGuiCond_Always);
@@ -4448,6 +4567,7 @@ static void draw_window(Win* w, Editor* ed) {
         igSetNextWindowSize(ws, ImGuiCond_FirstUseEver);
         igSetNextWindowPos((ImVec2){ mv->Pos.x + (mv->Size.x - ws.x) * 0.5f, mv->Pos.y + (mv->Size.y - ws.y) * 0.5f }, ImGuiCond_FirstUseEver, (ImVec2){ 0, 0 });
     }
+    edhost_doc(&w->host); // (item 9) a tab of the Editors window, beside the other editors (any kind)
     if (w->focus) igSetNextWindowFocus(), w->focus = false;
     bool open = true;
     igPushStyleColor_U32(ImGuiCol_WindowBg, TH(TK_N3));
@@ -4856,7 +4976,7 @@ static void dbg_window(Editor* ed) {
                 igTableNextColumn();
                 char title[128];
                 node_title(n, title, sizeof title);
-                igText("%s.%s", title, n->pins[q->pin].name[0] ? n->pins[q->pin].name : "Return Value");
+                igText("%s.%s", title, n->pins[q->pin].name[0] ? n->pins[q->pin].name : TR("Return Value"));
                 igTableNextColumn();
                 char val[256];
                 if (bp_debug_pin_text(q->owner, q->graph, q->node, q->pin, ENTITY_NONE, val, sizeof val)) igTextWrapped("%s", val);
@@ -4952,6 +5072,9 @@ static void dbg_frame(Editor* ed) {
 void bp_editor_draw(Editor* ed, double now) {
     (void)now;
     g_focused = false;
+    if (g_show.pin_pending) // (--show bp-pin: its Event Graph kept in front until the menu opens; the tabs dock first)
+        for (int i = 0; i < MAX_WIN; i++)
+            if (g_win[i].open && g_win[i].a == g_show.a) g_win[i].want_tab = 1, g_win[i].want_hold = 1;
     for (int i = 0; i < MAX_WIN; i++)
         if (g_win[i].open) draw_window(&g_win[i], ed);
         else if (g_win[i].a && ed->playing) bp_debug_watch(g_win[i].a, false); // (closed: its traces off)
@@ -4971,6 +5094,7 @@ void bp_editor_open_viewport(const char* vpath) {
 static void organize_nodes(Win* w) {
     BpGraph* g = &w->a->graphs[w->graph];
     if (g->nnodes < 2) return;
+    bp_graph_undo_push(w->a, w->graph); // (2026-11-24: its Ctrl+Z)
     GlNode* nodes = malloc(sizeof(GlNode) * g->nnodes);
     GlEdge* edges = malloc(sizeof(GlEdge) * (g->nlinks + 1));
     bool* only = malloc(sizeof(bool) * g->nnodes);
@@ -5002,3 +5126,60 @@ static void organize_nodes(Win* w) {
     free(nodes), free(edges), free(only);
 }
 
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+// (2026-11-25, item 9) the Blueprints open, for the layout (editor_host.h: reopened with the project)
+void bp_editor_doc_paths(void (*cb)(const char* path, void* user), void* user) {
+    for (int i = 0; i < MAX_WIN; i++)
+        if (g_win[i].open && g_win[i].a && g_win[i].a->path[0]) cb(g_win[i].a->path, user);
+}
+
+int bp_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    int n = 0;
+    for (int i = 0; i < MAX_WIN; i++) {
+        Win* w = &g_win[i];
+        if (op == DOCS_CLOSE) { // (a closed window's asset too: bp_editor_draw watches it while playing)
+            if (w->a && ed && ed->playing) bp_debug_watch(w->a, false);
+            n += w->open;
+            memset(w, 0, sizeof *w);
+            continue;
+        }
+        if (!w->open || !w->a) continue;
+        if (op == DOCS_OPEN) n++;
+        else if (op == DOCS_UNSAVED && w->a->dirty) n++, editor_docs_add_name(names, cap, w->a->name);
+        else if (op == DOCS_SAVE && w->a->dirty) {
+            save(w, ed);
+            n += w->a->dirty; // (still unsaved: its status says why)
+        }
+    }
+    if (op == DOCS_CLOSE) g_focused = false;
+    return n;
+}
+
+// (2026-11-25, the tester's photos) A Blueprint open for a screenshot: pin: its Event Graph with the menu of its first
+// splittable pin (or the one named) open (Split Struct Pin); var: that variable in the Details with its value's asset
+// picker open (a Level variable's: the levels). What isn't there is said on the console
+void bp_editor_show(const char* vpath, const char* pin, const char* var) {
+    bp_editor_open(vpath);
+    BpAsset* a = bp_load(vpath);
+    if (!a) {
+        printf("[RealEngine] --show: no Blueprint %s\n", vpath);
+        return;
+    }
+    memset(&g_show, 0, sizeof g_show);
+    g_show.a = a;
+    for (int i = 0; i < MAX_WIN; i++) {
+        Win* w = &g_win[i];
+        if (!w->open || w->a != a) continue;
+        if (pin) {
+            snprintf(g_show.pin, sizeof g_show.pin, "%s", pin);
+            g_show.pin_pending = true, w->want_tab = 1, w->want_hold = 4; // (its Event Graph)
+        }
+        if (var) {
+            int vi = bp_var_index(a, var);
+            if (vi < 0) printf("[RealEngine] --show: %s has no variable %s\n", a->name, var);
+            else snprintf(g_show.var, sizeof g_show.var, "%s", var), g_show.var_pending = true, w->var = vi, w->details = DET_VAR;
+        }
+    }
+}

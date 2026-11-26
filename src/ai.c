@@ -1,6 +1,7 @@
 // Artificial intelligence (ai.h, notas-dev/ia.md): the assets (Behavior Trees, Brains), the navigation grid, the
 // agents' perception, Blackboards, trees and brains, and the movement they ask of their pawns.
 #include "ai.h"
+#include "i18n.h" // (item 21: the example Brains' names)
 #include "landscape.h"
 
 #include <ctype.h>
@@ -491,6 +492,16 @@ static BtNode* bt_add(BehaviorTree* t, uint8_t kind, int parent, float x, float 
     return n;
 }
 
+// (2026-11-25, item 21) the example Brains' behaviour names (data: the user renames them) in the editor's language when
+// they are made; the actions and inputs show through TR anyway
+static void example_names(Brain* b) {
+    for (uint32_t i = 0; i < b->nbehaviors; i++) {
+        char t[AI_NAME];
+        snprintf(t, sizeof t, "%s", TR(b->behaviors[i].name));
+        snprintf(b->behaviors[i].name, sizeof b->behaviors[i].name, "%s", t);
+    }
+}
+
 static void make_defaults(void) {
     char dir[700], path[800];
     snprintf(dir, sizeof dir, "%s/AI", S.root);
@@ -543,6 +554,7 @@ static void make_defaults(void) {
             hear->cons[0] = (Consideration){ BRAIN_IN_HEARD_NOISE, CURVE_STEP, "", 0, 1, 0.5f, false };
             BrainBehavior* idle = &b->behaviors[b->nbehaviors++];
             *idle = (BrainBehavior){ "Rest", BRAIN_ACT_IDLE, 0, 0.1f, 0.0f, 0.0f, 0.0f, "", { { 0 } } };
+            example_names(b); // (item 21: the example's behaviours named in the editor's language)
             ai_brain_save(b);
         }
     }
@@ -569,6 +581,7 @@ static void make_defaults(void) {
             x->cons[0] = (Consideration){ BRAIN_IN_HAS_TARGET, CURVE_STEP, "", 0, 1, 0.5f, false };
             x->cons[1] = (Consideration){ BRAIN_IN_DISTANCE, CURVE_STEP, "", 0, 1000, 0.42f, true }; // (under 4.2 m)
             b->momentum = 0.15f;
+            example_names(b); // (item 21: the example's behaviours named in the editor's language; "Attack", the event, stays)
             ai_brain_save(b);
         }
     }

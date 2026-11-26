@@ -75,7 +75,7 @@ typedef struct SMethod {
     Stmt** body;
     int nbody;
 } SMethod;
-typedef struct SField { const char* name; uint8_t type; Expr* init; int line, col; bool editable, save_game; } SField;
+typedef struct SField { const char* name; uint8_t type; Expr* init; int line, col; bool editable, save_game; const char* asset_ref; } SField; // (asset_ref: 2026-11-24, a Level / Sound... typed reference)
 // A structure declared in the script (Real's struct, C#'s / C's struct, Python's @dataclass): its fields, in order
 #define S_MAX_SFIELDS 24
 typedef struct SStruct { const char* name; int line, col; SField fields[S_MAX_SFIELDS]; int nfields; } SStruct;
@@ -119,6 +119,8 @@ Tok* s_lex(SCtx* c, const char* src, size_t len, int* ntok);
 SClass* s_parse(SCtx* c, Tok* t, int n); // by c->lang
 // Types by name in any language ("float", "Vector3", "List<int>", "str"...): ST_UNKNOWN if none
 uint8_t s_type_named(const char* name);
+// (2026-11-24) an asset reference's type (Level, LevelSequence, Sound...): its class as the Blueprint variables name it; NULL: none
+const char* s_asset_ref_named(const char* name);
 // A structure's type by name: the script's (declared) or a Blueprint structure of the project (ST_UNKNOWN: none)
 uint8_t s_struct_type(SCtx* c, const char* name);
 const char* s_ty_name(SCtx* c, uint8_t ty); // a type's name (structures by theirs; arrays without the [])

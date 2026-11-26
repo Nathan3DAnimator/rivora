@@ -1,6 +1,6 @@
 id: physics-constraint
 kind: recipe
-title: Juntas de física: porta, pêndulo, corrente, trilho | Physics joints: door, pendulum, chain, rail
+title: Juntas de física: porta, pêndulo, corrente, trilho | Physics joints: door, pendulum, chain, rail | Articulaciones de física: puerta, péndulo, cadena, riel
 keys: physics constraint, restricao fisica, junta, joint, dobradica, hinge, porta que abre, door, pendulo, pendulum, corrente, chain, corda de caixas, ponte, bridge, trilho, rail, slider, prismatica, prismatic, motor, quebrar junta, break constraint, set constraint motor, fixa, fixed, ball socket, esfera
 --- pt
 Como o **Physics Constraint** da Unreal: segura dois atores com física um no outro (ou um no mundo).
@@ -36,6 +36,31 @@ Like Unreal's **Physics Constraint**: holds two actors with physics to each othe
 
 ```diagram steps
 Door with Simulate Physics | Actor with Physics Constraint at its side, X up | Joint: Hinge, Limit 90° | Actor 1: the door, Actor 2: empty | Push: the door turns and stops at 90°
+```
+```blueprint
+Event BeginPlay -> Set Constraint Motor ( Target = self, Enable = true, Speed = 45 )
+Event Tick -> Branch ( Is Valid ( self ) ) -> Print String ( "opening" )
+```
+```real
+class Elevator extends Actor
+    event BeginPlay()
+        SetConstraintMotor(true, 50.0)
+
+    event Stop()
+        SetConstraintMotor(false, 0.0)
+
+    event Explode()
+        BreakConstraint()
+```
+--- es
+Como el **Physics Constraint** de Unreal: sujeta dos actores con física entre sí (o uno al mundo).
+1. Los actores necesitan **Simulate Physics** (Detalles > Añadir > Physics).
+2. En un actor vacío o en cualquier otro: **Detalles > Añadir > Physics Constraint**. La articulación está **donde está ese actor**; su **eje X** es el eje de la bisagra o del riel (gira el actor para apuntarlo).
+3. **Constraint Actor 1** y **2** (2 vacío = sujeto al mundo) y el **Joint**: **Fixed** (pegado), **Hinge** (gira solo alrededor de X; Angle Limit), **Ball and Socket** (gira en cualquier dirección: péndulo, cadena), **Prismatic** (se desliza solo a lo largo de X; Slide Limit).
+4. **Motor** (bisagra o riel): velocidad en grados/s o cm/s. **Break Force**: si se tira con más fuerza que eso, se suelta. **Disable Collision**: los dos no chocan entre sí (por defecto).
+
+```diagram steps
+Puerta con Simulate Physics | Actor con Physics Constraint a su lado, X hacia arriba | Joint: Hinge, Límite 90° | Actor 1: la puerta, Actor 2: vacío | Empuja: la puerta gira y se detiene a 90°
 ```
 ```blueprint
 Event BeginPlay -> Set Constraint Motor ( Target = self, Enable = true, Speed = 45 )

@@ -27,6 +27,7 @@ struct VkCtx;
 #define MAT_NAME 64
 #define MAT_PATH 260
 #define MAT_MAX_PARAMS 32
+#define MAT_EMISSION_INTENSITY "Emission Intensity" // (2026-11-24) every glowing material's parameter (Material.emission_intensity)
 
 typedef enum MatSockType { MSOCK_FLOAT, MSOCK_VECTOR, MSOCK_COLOR, MSOCK_SHADER } MatSockType;
 enum {
@@ -215,6 +216,10 @@ typedef struct Material {
     float avg_emis[3];
     float emissive_light;
     bool emissive_shadows; // (its light's shadows by ray: off by default, the many lights' sampling costs ~1 ms)
+    // (2026-11-24) Emission Intensity: the emission (the Principled's, an Emission node's) times it, at run time (not baked):
+    // the parameter MAT_EMISSION_INTENSITY of every glowing material, a Material Instance's and a Blueprint's Set Scalar
+    // Parameter Value change it without a bake (1: as baked; Unreal's emissive multiplier)
+    float emission_intensity;
     double bake_ms, compile_ms;
     uint32_t ninstr, nstatic, ndynamic, nslots;
     bool animated;        // compiled with a Time node: a flipbook
@@ -284,6 +289,7 @@ uint32_t mat_vpath_hash(const char* vpath); // a material's id from its "/Conten
 bool mat_reload_file(const char* path);     // written by someone else (a background import): read again if loaded
 void mat_mark_dirty(Material* m);               // the graph or a parameter changed
 bool mat_live_selftest(void); // (2026-11-24, #180) --mat-live-test: a 4096 material edited 60 times reuses its textures
+bool mat_param_selftest(void); // (2026-11-24) --mat-param-test: parameters set without a bake, the fold against a full bake
 const char* mat_default_path(void);             // the basic textured material (the engine's grid material)
 
 // The materials' GPU work before a frame (compiles and bakes the dirty ones; the renderer's command buffer)
@@ -311,11 +317,22 @@ uint64_t mat_params_address(void);
 // A dynamic instance for an actor (a Blueprint's Create Dynamic Material Instance / Set ... Parameter Value): its slot
 uint32_t mat_dynamic_for(Entity e, Material* m);
 bool mat_set_param(uint32_t slot, const char* name, const float v[4]);
+// (2026-11-24) a slot's emission mean as it draws (x100: nits; its Emission Intensity and folded parameters applied): false
+// for no slot
+bool mat_slot_emission(uint32_t slot, float out[3]);
+// (2026-11-24) the size of the base texture a material draws with now (0: its placeholder, nothing baked yet: the tests)
+uint32_t mat_baked_size(const Material* m);
+// (2026-11-24) no bake for the next frames (0: bakes again): the mat_first_frame test's first frame before any bake
+void mat_hold_bakes(uint32_t frames);
 void mat_end_play(void); // the dynamic instances dropped (PIE ends)
 
 // The baked textures of a material or instance (0 base color, 1 normal / roughness / metallic, 2 emission) for
 // previews; VK_NULL_HANDLE: none yet
 VkImageView mat_preview_view(const Material* m, int which);
+// (2026-11-25) How the base color thumbnail shows (the affine fold's roots in the texture, its slot's coefficients make the
+// color): MAT_PREVIEW_IMAGE the image times tint, MAT_PREVIEW_SOLID the color solid (linear)
+enum { MAT_PREVIEW_IMAGE = 0, MAT_PREVIEW_SOLID = 1 };
+int mat_preview_base(const Material* m, float tint[3], float solid[3]);
 // An animated material's frame's base color (the editor's preview plays them; NULL: still or not baked)
 VkImageView mat_preview_frame_view(const Material* m, int which, uint32_t frame); // which: 0 base, 2 emission
 // Every compile's statistics are in the Material (ninstr, bake_ms...). Stats for the Debug Viewer
@@ -333,12 +350,17 @@ typedef struct MatStats {
     double stream_gpu_ms, stream_gpu_max; // the last bake tile's GPU time (timestamps; 0: none that frame), the worst
     uint32_t stream_tile;   // texels a frame the tiles are sized to (ST_TILE_MS of GPU)
     uint32_t stream_texels; // baked this frame
+    uint32_t climb_hq, climb_blit; // (2026-11-25) the forced climbs' ends (a first bake, a live edit): with the Kaiser mips, with blits
     // (Q18) the UDIM tiles (material_udim.inc): how many, how many above the least (seen), their bytes, the halvings
     // so they fit, the climbs and descents done, the sources' tiles uploaded
     uint32_t udim_tiles, udim_resident, udim_bias, udim_ups, udim_downs, udim_src_uploads;
     uint64_t udim_bytes;
     // a one-tile .rudim's last bake: the size baked and the least size its sources' tile had then (2026-11-23: was 64)
     uint32_t udim_lone_res, udim_lone_src;
+    // (2026-11-24) the affine fold and the bakes: compiles that only wrote the slots (no bake), parameters set without a bake,
+    // bakes recorded into a frame (no wait), the live 256 bakes, the parameters' and programs' room left (vec4, words)
+    uint32_t live_writes, live_params, frame_bakes, live_bakes;
+    uint32_t params_free, prog_free;
 } MatStats;
 const MatStats* mat_stats(void);
 

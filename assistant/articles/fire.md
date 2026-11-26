@@ -1,6 +1,6 @@
 id: fire
 kind: concept
-title: Fogo de verdade (simulado) | Real fire (simulated)
+title: Fogo de verdade (simulado) | Real fire (simulated) | Fuego de verdad (simulado)
 keys: fogo, fire, fazer fogueira, fogueira com fumaca, fogueira com fumaça, simulated fire, fire like niagara, niagara fluids fire, fire fluid simulation, chama, flame, fogueira, campfire, tocha, torch, vela, candle, fumaça, fumaca, smoke, incendio, queimar, burn, niagara fluids, fluido, gas, simulação de fogo, fire simulation, labareda, brasa, luz do fogo tremendo, flicker, REALENGINE_NO_FIRE
 --- pt
 ```diagram steps
@@ -32,3 +32,18 @@ The flame glows by its temperature; the actor's light flickers with it
 - **Cost** (RTX 3060, Epic): ~0.8 ms for a campfire 40 cells across.
 - **Not yet:** the fire doesn't spread over objects by itself nor react to the weather's wind or the player.
 - To compare without it: `REALENGINE_NO_FIRE=1`. Test scene: `fire`.
+--- es
+```diagram steps
+Añade el actor Fire (Añadir > Visual Effects)
+El combustible en su base se quema en calor y humo
+El calor sube y se arremolina (una simulación de gas en la GPU)
+La llama brilla según su temperatura; la luz del actor parpadea con ella
+```
+**Fire** es fuego **realmente simulado**, como los Niagara Fluids de Unreal: un gas en una grilla 3D en la GPU, no una animación enlatada.
+- **Cómo usarlo:** **Añadir > Visual Effects > Fire**. Viene con una **luz** que parpadea con la llama y proyecta sombras. Elige un **Preset** (Campfire, Torch, Bonfire, Candle) y ajusta.
+- **Forma:** **Width** y **Height** (la caja del fuego; el actor queda dentro de la llama), **Emitter Radius** (la base que arde), **Fuel** (0 lo apaga), **Burn Rate**, **Heat**, **Buoyancy** (cuánto sube), **Vorticity** y **Turbulence** (las lenguas y los remolinos).
+- **Aspecto:** **Brightness** (la llama en nits), **Smoke**, **Smoke Fade**, **Smoke Density** y **Smoke Albedo** (hollín oscuro ... vapor claro). La llama tiene el color de su calor (rojo oscuro, naranja, amarillo); el humo oscurece lo que hay detrás y recibe su propia sombra bajo el sol.
+- **Calidad:** **Resolution** (celdas de ancho) y **Pressure Iterations**: más fino cuesta más.
+- **Costo** (RTX 3060, Epic): ~0,8 ms para una fogata de 40 celdas de ancho.
+- **Todavía no:** el fuego no se propaga solo por los objetos ni reacciona al viento del clima ni al jugador.
+- Para comparar sin él: `REALENGINE_NO_FIRE=1`. Escena de prueba: `fire`.

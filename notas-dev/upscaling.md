@@ -181,3 +181,10 @@ padrão: Predefinição, sem resolução dinâmica).
   abaixo de 50%.
 - O `budget_heavy_dynres` falhava desde o piso de 50% (a heavy no Épico a 50% dá 10,5–10,8 ms). Agora usa 35%:
   67 → 35%, GPU 9,08 ms de 10.
+
+## As escolhas do Upscaler num thread (2026-11-25, bug-fixer)
+- A 1ª pergunta a cada runtime (DLSS: o NGX, ~1,2 s) vinha no começo do Play (`gus_warm`, Q22) e travava o quadro do
+  Play (1224 ms no escopo, 1284 ms na varredura). Agora `ups_vendor_warm_async` pergunta num thread próprio (prioridade
+  baixa); `ups_vendor_usable` tem uma trava: quem perguntar no thread principal antes da resposta espera, como antes.
+  O `ups_vendor_shutdown` espera o thread. Teste `play_hitch` (pior quadro do Play 1266 -> 127 ms num Terceira Pessoa
+  novo; o que sobra é o 1º quadro de jogo).

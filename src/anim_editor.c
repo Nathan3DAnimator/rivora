@@ -3,7 +3,10 @@
 // (asset_viewport.h, Q7: the mesh drawn by the GPU in any view mode, the bones, sockets, the light, the camera); the
 // window's tabs (Model, Skeleton, Animation, Physics, IK Rig) switch what it edits without closing it: the Physics and
 // IK Rig tabs hand the same window (###asset_persona) to the IK Rig / Physics Asset editor. Nothing runs while closed.
+#include "editor_docs.h"
+#include "editor_host.h" // (item 9)
 #include "anim_editor.h"
+#include "ui_number.h" // (2026-11-25, item 20: a typed value past the slider is kept)
 #include "asset_picker.h"
 #include "theme.h"
 #include "audio.h"
@@ -35,6 +38,7 @@
 #include "components.h"
 #include "content.h"
 #include "i18n.h"
+#include "material.h"
 #include "render.h"
 #include "ui_icons.h"
 
@@ -256,8 +260,19 @@ bool anim_editor_add_menu(const char* folder_vpath) {
 
 // --- The Skeletal Mesh Editor ---
 
+static char g_bone_find[64]; // (2026-11-24) the Skeleton Tree's filter (Unreal's Search Bones)
 static void skeleton_tree(SkelMesh* m) {
+    igSetNextItemWidth(-1);
+    igInputTextWithHint("##bone_find", TR("Search Bones"), g_bone_find, sizeof g_bone_find, 0, NULL, NULL);
     for (uint32_t b = 0; b < m->nbones; b++) {
+        if (g_bone_find[0]) { // (a bone whose name has it, or a socket of it that has it)
+            bool hit = false;
+            for (const char* q = m->bones[b].name; *q && !hit; q++) hit = !_strnicmp(q, g_bone_find, strlen(g_bone_find));
+            for (uint32_t k = 0; k < m->nsockets && !hit; k++)
+                if (m->sockets[k].bone == (int)b)
+                    for (const char* q = m->sockets[k].name; *q && !hit; q++) hit = !_strnicmp(q, g_bone_find, strlen(g_bone_find));
+            if (!hit) continue;
+        }
         int depth = 0;
         for (int p = m->bones[b].parent; p >= 0 && depth < 30; p = m->bones[p].parent) depth++;
         igPushID_Int((int)b);
@@ -514,7 +529,7 @@ static void timeline(AnimSeq* s, float width) {
     igSameLine(0, 6);
     if (igCheckbox(PL(TR("Loop")), &s->loop)) s->dirty = E.unsaved = true;
     igSameLine(0, 12);
-    igText("%.2f / %.2f s  (%u frames, %.0f fps)", E.time, len, s->nframes, s->fps);
+    igText(TR("%.2f / %.2f s  (%u frames, %.0f fps)"), E.time, len, s->nframes, s->fps);
     // the track: the time ruler with the notifies as diamonds (drag to move, right click to delete)
     ImDrawList* dl = igGetWindowDrawList();
     ImVec2 p = igGetCursorScreenPos();
@@ -665,6 +680,8 @@ static void skeleton_details(SkelMesh* m) {
     if (avp_socket_panel(&E.vp, m, E.bone)) E.unsaved = true;
 }
 
+#include "anim_editor_details.inc" // (2026-11-24, item 8) the Details' search and sections
+
 // --- The window ---
 
 void anim_editor_draw(struct Editor* ed, double now) {
@@ -672,13 +689,19 @@ void anim_editor_draw(struct Editor* ed, double now) {
     mm_editor_draw(); // (its own window: the Motion Matching editor)
     bs_draw();        // (its own window: the Blend Space editor)
     tr_draw();        // (its own window: a transition's rule)
-    if (E.kind == ED_NONE) return;
+    static bool was, to_host; // (item 9) shown again: a tab of the Editors window
+    if (E.kind == ED_NONE) {
+        was = false;
+        return;
+    }
+    if (!was) to_host = was = true;
     const char* name = E.kind == ED_MESH ? E.mesh->name : E.kind == ED_SEQ ? E.seq->name : E.montage->name;
     const char* what = E.kind == ED_MESH ? (E.skeleton_tab ? TR("Skeleton") : TR("Skeletal Mesh")) : E.kind == ED_SEQ ? TR("Animation Sequence") : TR("Anim Montage");
     if (E.kind == ED_SEQ && E.seq) E.last_seq = E.seq;
     char title[200];
     snprintf(title, sizeof title, "%s%s - %s###asset_persona", name, E.unsaved ? "*" : "", what); // (Q7: the IK Rig / Physics editor's window too)
     igSetNextWindowSize((ImVec2){ igGetFontSize() * 74, igGetFontSize() * 42 }, ImGuiCond_FirstUseEver);
+    edhost_doc(&to_host);
     bool open = true;
     int pending_tab = -1;
     if (igBegin(title, &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
@@ -716,7 +739,7 @@ void anim_editor_draw(struct Editor* ed, double now) {
         if (E.mesh) pending_tab = avp_tabs_bar(anim_persona_tabs(E.mesh), current_tab()); // (Q7) Unreal's top right
         ImVec2 avail = igGetContentRegionAvail();
         static float side_w, right_w; // (the bars between the panels drag them; double-click: back)
-        float side_def = igGetFontSize() * 17.0f, right_def = igGetFontSize() * 19.0f;
+        float side_def = igGetFontSize() * 17.0f, right_def = igGetFontSize() * 22.0f;
         if (side_w <= 0.0f) side_w = side_def;
         if (right_w <= 0.0f) right_w = right_def;
         side_w = fminf(side_w, fmaxf(avail.x - right_w - 240.0f, 120.0f));
@@ -770,10 +793,11 @@ void anim_editor_draw(struct Editor* ed, double now) {
         igBeginChild_Str("an_right", (ImVec2){ right, avail.y }, ImGuiChildFlags_Borders, 0);
         igPushItemWidth(-igGetFontSize() * 6.0f);
         if (E.kind == ED_MESH && E.mesh && E.skeleton_tab) {
-            skeleton_details(E.mesh);
+            skeleton_panel(E.mesh);
             if (E.unsaved) E.mesh->dirty = true;
         } else if (E.kind == ED_MESH && E.mesh) {
-            mesh_details(E.mesh);
+            int want = mesh_asset_panel(E.mesh);
+            if (want >= 0) pending_tab = want;
             if (E.unsaved) E.mesh->dirty = true;
             if (E.mesh) {
                 igSpacing();
@@ -788,11 +812,8 @@ void anim_editor_draw(struct Editor* ed, double now) {
                 }
             }
         } else if (E.kind == ED_SEQ && E.seq) {
-            igSeparatorText(TR("Animation"));
-            igText(TR("Skeleton: %s"), E.seq->skeleton);
-            igText(TR("%u tracks, %.2f s"), E.seq->ntracks, E.seq->length);
-            if (E.notify >= 0 && E.notify < (int)E.seq->nnotifies) {
-                igSeparatorText(TR("Notify"));
+            sequence_panel(E.seq);
+            if (E.notify >= 0 && E.notify < (int)E.seq->nnotifies && av_section("Notify", "notify sound time attach follow volume pitch")) {
                 AnimNotify* n = &E.seq->notifies[E.notify];
                 if (igInputText(PL(TR("Name")), n->name, sizeof n->name, 0, NULL, NULL)) E.unsaved = E.seq->dirty = true;
                 if (igDragFloat(PL(TR("Time")), &n->time, 0.01f, 0.0f, E.seq->length, "%.2f s", 0)) E.unsaved = E.seq->dirty = true;
@@ -815,6 +836,7 @@ void anim_editor_draw(struct Editor* ed, double now) {
                 }
                 if (c) E.unsaved = E.seq->dirty = true;
             }
+            av_details_end();
         } else if (E.kind == ED_MONTAGE && E.montage) {
             AnimMontage* m = E.montage;
             igSeparatorText(TR("Montage"));
@@ -1092,4 +1114,25 @@ void anim_transition_open_asset(const char* vpath) {
     BpAsset* a = bp_load(vpath);
     AnimGraph* g = a ? anim_graph_of(a, false) : NULL;
     if (g && g->ntrans) tw_open(a, 0);
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int anim_editor_docs(int op, struct Editor* ed, char* names, size_t cap) { // (the Persona and its Motion Matching, Blend Space and rule windows)
+    (void)ed;
+    int n = (E.kind != ED_NONE) + M.open + BS.open + TW.open;
+    if (op == DOCS_OPEN) return n;
+    if (op == DOCS_CLOSE) { // (M.a: a Blueprint bp_shutdown frees)
+        E.kind = ED_NONE, E.mesh = NULL, E.seq = E.last_seq = NULL, E.montage = NULL, E.graph_of = NULL, E.unsaved = false;
+        M.open = M.playing = false, M.a = NULL;
+        BS.open = TW.open = false;
+        AP.hash = 0;
+        return n;
+    }
+    if (E.kind == ED_NONE || !E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, E.kind == ED_MESH ? E.mesh->name : E.kind == ED_SEQ ? E.seq->name : E.montage->name), 1;
+    bool ok = E.kind == ED_MESH ? anim_mesh_save(E.mesh) : E.kind == ED_SEQ ? anim_seq_save(E.seq) : anim_montage_save(E.montage);
+    if (E.kind == ED_MONTAGE && E.seq && E.seq->dirty) ok = anim_seq_save(E.seq) && ok;
+    if (ok) E.unsaved = false;
+    return !ok;
 }

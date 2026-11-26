@@ -1,6 +1,6 @@
 id: contact-shadows
 kind: concept
-title: Sombras de contato | Contact shadows
+title: Sombras de contato | Contact shadows | Sombras de contacto
 keys: sombra de contato, sombras de contato, contact shadow, contact shadows, sombra no pe do objeto, objeto flutuando, object floating, peter panning, sombra descolada, detached shadow, sombra fina, fine shadow detail, sombra pequena some, small shadow missing, sombra em tela, screen space shadow
 --- pt
 ```diagram steps
@@ -24,3 +24,14 @@ Something in the way: that pixel's share of sunlight darkens (only it; the sky a
 - **How they work:** after the main pass, in the same pass as the screen space AO, each sunlit pixel takes 12 steps toward the sun, over a distance that grows with the distance from the camera (8 cm near, up to 1.5 m far). If something on screen is in front, only that pixel's share of sunlight darkens.
 - **Cost:** within the measurement's noise on Low, because the screen space AO already reads the depth.
 - **Turn off** (a test or a comparison): `REALENGINE_NO_CONTACT=1`.
+--- es
+```diagram steps
+El mapa de sombras del sol: bueno de lejos, pero los detalles pequeños desaparecen (el objeto parece flotar)
+En cada píxel iluminado por el sol: unos pasos en pantalla hacia el sol, comparados con la profundidad
+Algo en el camino: la parte de luz solar de ese píxel se oscurece (solo él; el cielo y el resto de la luz se quedan)
+```
+Las **sombras de contacto** completan la sombra del sol en los detalles pequeños: la pata de una silla, una piedra en el suelo, los huecos de una valla. Sin ellas un objeto puede parecer flotar, porque el mapa de sombras no tiene resolución para el último centímetro.
+- **Cuándo se activan solas:** siempre que el sol se sombrea solo con su mapa. Eso ocurre en el preset **Low** y en tarjetas gráficas sin ray tracing. Desde Medium hacia arriba, en una tarjeta con ray tracing, un rayo ya encuentra los bloqueadores cercanos del sol (el híbrido), y el resultado es exacto.
+- **Cómo funcionan:** después del pase principal, en el mismo pase del AO en espacio de pantalla, cada píxel iluminado por el sol da 12 pasos hacia el sol, sobre una distancia que crece con la distancia a la cámara (8 cm cerca, hasta 1,5 m lejos). Si algo en pantalla está delante, solo la parte de luz solar de ese píxel se oscurece.
+- **Costo:** dentro del ruido de la medición en Low, porque el AO en espacio de pantalla ya lee la profundidad.
+- **Desactivar** (una prueba o una comparación): `REALENGINE_NO_CONTACT=1`.

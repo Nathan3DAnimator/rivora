@@ -140,6 +140,11 @@ bool volume_load(const CVolume* v, VolumeClip* clip) {
 }
 
 // the example: a puff of smoke rising and spreading from a hot core that dims (24 frames, meters, Z up)
+bool volume_examples_present(void) {
+    char p[1200];
+    snprintf(p, sizeof p, "%s/Volumes/Example_Puff_0001.vdb", mat_root());
+    return re_file_stat(p, NULL, NULL, NULL);
+}
 bool volume_examples(void) {
     char dir[1100], p[1200];
     snprintf(dir, sizeof dir, "%s/Volumes", mat_root());

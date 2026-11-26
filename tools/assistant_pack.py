@@ -46,13 +46,26 @@ def read_article(path):
     a = {
         'id': meta['id'],
         'kind': meta.get('kind', 'howto'),
-        'title': {'pt': titles[0], 'en': titles[1] if len(titles) > 1 else titles[0]},
+        'title': {'pt': titles[0], 'en': titles[1] if len(titles) > 1 else titles[0],
+                  'es': titles[2] if len(titles) > 2 else (titles[1] if len(titles) > 1 else titles[0])},  # (2026-11-25) a third title: Spanish
         'keys': [k.strip() for k in meta.get('keys', '').split(',') if k.strip()],
-        'body': {'pt': bodies.get('pt', ''), 'en': bodies.get('en', bodies.get('pt', ''))},
+        'body': {'pt': bodies.get('pt', ''), 'en': bodies.get('en', bodies.get('pt', '')),
+                 'es': bodies.get('es', bodies.get('en', bodies.get('pt', '')))},  # (no Spanish section: the English)
     }
+    # (2026-11-25, item 12) every article in Spanish too: its own section, the same code blocks (their languages) and the
+    # same links' targets as the English
+    if 'es' not in bodies:
+        if REQUIRE_ES: raise SystemExit('%s: no Spanish section (--- es)' % path)
+        bodies['es'] = a['body']['en']
+    fences = lambda t: re.findall(r'^```(\w*)', t, re.M)
+    links = lambda t: sorted(re.findall(r'\]\(((?:show|open|api|add|run|article|url):[^)]*)\)', t))
+    if REQUIRE_ES and fences(bodies['es']) != fences(a['body']['en']):
+        raise SystemExit('%s: the Spanish section\'s code blocks differ from the English (%s / %s)' % (path, fences(bodies['es']), fences(a['body']['en'])))
+    if REQUIRE_ES and links(bodies['es']) != links(a['body']['en']):
+        raise SystemExit('%s: the Spanish section\'s links differ from the English' % path)
     if meta.get('match'):
         a['match'] = [m.strip() for m in meta['match'].split('|') if m.strip()]
-    for lang in ('pt', 'en'):
+    for lang in ('pt', 'en', 'es'):
         for link in re.findall(r'\]\(([^)]+)\)', a['body'][lang]):
             if not re.match(r'^(show|open|api|add|run|article|url):', link):
                 raise SystemExit('%s: unknown action "%s"' % (path, link))
@@ -63,6 +76,7 @@ def read_article(path):
     return a
 
 
+REQUIRE_ES = True  # (2026-11-25: every article has its Spanish section)
 DIAGRAMS = {'blueprint', 'steps', 'keys', 'axes', 'layout', 'compare', 'bars'}
 
 
@@ -98,7 +112,7 @@ def main():
     if len(ids) != len(set(ids)):
         raise SystemExit('two articles with the same id')
     for a in arts:  # the article: links point to existing ones
-        for lang in ('pt', 'en'):
+        for lang in ('pt', 'en', 'es'):
             for ref in re.findall(r'\]\(article:([^)]+)\)', a['body'][lang]):
                 if ref not in ids:
                     raise SystemExit('%s: links to a missing article "%s"' % (a['id'], ref))

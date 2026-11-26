@@ -38,6 +38,7 @@ typedef struct GameUserSettings {
     float sensitivity;        // the look's, times the project's (0.1-4)
     bool invert_y;
     int language;             // Language (i18n.h); -1: the system's
+    char culture[16];         // (2026-11-24, loc.h) the project's localization culture ("": the native); the Language option picks it when the project has cultures
     bool auto_save;           // the game saves by itself (save_progress.h: the timed auto save, the level change; not the Checkpoints)
     int upscale_mode;         // upscale.h UPM_*: the render's share (Preset, Native, Quality, Balanced, Performance, Ultra Performance)
     bool dyn_res;             // the dynamic resolution: the share follows the GPU against the frame rate target (Project Settings)

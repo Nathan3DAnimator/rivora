@@ -10,6 +10,8 @@
 //     every emitter's spawning over time, the playhead dragged to scrub the preview.
 // 2026-11-08: rewritten from the three plain lists (whose modules showed only their checkbox: a negative width hid the
 // names), at the user's request ("make it like Niagara, in what it can do and in how the editor looks").
+#include "editor_docs.h"
+#include "editor_host.h" // (item 9)
 #include "particle_editor.h"
 #include "asset_viewport.h"
 #include "bp_preview.h"
@@ -992,7 +994,12 @@ static void play_pause_button(void) {
 }
 
 void particle_editor_draw(Editor* ed) {
-    if (!E.a) return;
+    static bool was, to_host; // (item 9) shown again: a tab of the Editors window
+    if (!E.a) {
+        was = false;
+        return;
+    }
+    if (!was) to_host = was = true;
     ParticleSystemAsset* a = E.a;
     if (E.emitter >= (int)a->nemitters) E.emitter = a->nemitters ? 0 : -1;
     ImGuiIO* io = igGetIO_Nil();
@@ -1006,6 +1013,7 @@ void particle_editor_draw(Editor* ed) {
     char title[160];
     snprintf(title, sizeof title, "%s%s - %s###particle_editor", a->name, E.unsaved ? "*" : "", TR("Particle System"));
     igSetNextWindowSize((ImVec2){ igGetFontSize() * 92, igGetFontSize() * 50 }, ImGuiCond_FirstUseEver);
+    edhost_doc(&to_host);
     bool open = true, ch = false;
     if (igBegin(title, &open, 0)) {
         float fs = igGetFontSize();
@@ -1102,3 +1110,20 @@ void particle_editor_draw(Editor* ed) {
 }
 
 void particle_editor_close(void) { E.a = NULL; }
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int particle_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    if (!E.a) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) { // (its preview in the level gone with it)
+        if (ed) preview(ed, false);
+        E.a = NULL, E.unsaved = false;
+        return 1;
+    }
+    if (!E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, E.a->name), 1;
+    bool ok = ps_save(E.a);
+    if (ok) E.unsaved = false;
+    return !ok;
+}

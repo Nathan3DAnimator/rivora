@@ -23,3 +23,9 @@ void mat_sphere_draw(ImDrawList* dl, ImVec2 o, float size, const struct Material
                      float pitch, int nu, int nv);
 #endif
 void mat_editor_close(void); // (Q7: the asset viewport test)
+int mat_editor_open_count(void); // (item 9) the materials open, each its own window (a tab of the Editors window)
+// (2026-11-25) the tests (emissive_test.c): the last frame the Emission Intensity field was drawn in a material's Details
+// and in an instance's (mi_scalar: as a number, not a color); how the base color thumbnail was drawn (0 the image times
+// tint, 1 a solid color: material.h MAT_PREVIEW_*)
+void mat_editor_test_ei(int* mat_frame, int* mi_frame, int* mi_scalar);
+void mat_editor_test_base(int* how, float tint[3], float solid[3]);

@@ -1,6 +1,6 @@
 id: render-styles
 kind: howto
-title: Estilo de render: estilizado, realista, fotorrealista, vídeo-realista | Render style: stylized, realistic, photorealistic, video-realistic
+title: Estilo de render: estilizado, realista, fotorrealista, vídeo-realista | Render style: stylized, realistic, photorealistic, video-realistic | Estilos de render (realista, fotorrealista, videorrealista, estilizado)
 keys: ruido, noise, granulado, grain, grao, denoise, reduzir ruido, ghosting, contorno, outline, toon shading, faixas, bands, stop motion, animacao em dois, on twos, sombra colorida, cel shading, preset estilizado, cara de filmado, parecer filmado, camera real, cara de cinema, cara de video, visual realista, estilo de render, render style, estilizado, stylized, toon, cel, realista, fotorrealista, photoreal, video realista, video realistic, agx, aces, tonemapper, tone mapping, mapeamento de tom, camera fisica, halation, grao de filme, film grain, distorcao de lente, lens distortion, flashback, camera de seguranca, bodycam, set render style, opcoes do estilo, style options, remover ruido das sombras, shadow denoise, sombra com ruido, noisy shadows, vinheta, vignette, franjas, fringes, aberracao cromatica
 --- pt
 ```diagram steps
@@ -23,7 +23,6 @@ Event BeginPlay -> Set Render Style ( Style = 3 )
 ```
 - **Ruído na imagem:** o Vídeo-realista põe **grão de filme** (muda a cada quadro, parece ruído). **Grão de Filme** (Configurações do Projeto > Rendering) regula: 0 deixa a imagem limpa. **Denoise** (Automático / Ligado / Desligado) filtra o ruído da luz por raio em qualquer estilo, só com o histórico do mesmo objeto, mesma direção e mesma profundidade (sem ghosting); precisa de ray tracing.
 - **Opções do Estilo** (Configurações do Projeto > Renderização, abaixo do Estilo de Render): **Remover Ruído das Sombras** (Baixo, Médio, Alto, Épico) filtra as sombras por raio das luzes locais numa janela maior e em mais quadros: no Épico ficam lisas, sem rastro. No **Video-realista**, cada efeito da lente tem o seu controle: **Distorção da Lente, Franjas da Lente, Halação e Vinheta** (1: como o estilo, 0: desligado). Lembre também do **Granulado** (0: imagem limpa).
-
 --- en
 ```diagram steps
 Project Settings > Rendering > Render Style
@@ -45,3 +44,24 @@ Event BeginPlay -> Set Render Style ( Style = 3 )
 ```
 - **Noise in the picture:** Video-realistic adds **film grain** (it changes every frame, it reads as noise). **Film Grain** (Project Settings > Rendering) sets it: 0 gives a clean picture. **Denoise** (Automatic / On / Off) filters the traced light's noise in any style, keeping only the history of the same object, facing the same way, at the same depth (no ghosting); it needs ray tracing.
 - **Style Options** (Project Settings > Rendering, under Render Style): **Shadow Denoise** (Low, Medium, High, Epic) filters the local lights' ray traced shadows over a wider window and more frames: Epic is smooth, with no ghosting. In **Video-realistic** each lens effect has its own control: **Lens Distortion, Lens Fringes, Halation and Vignette** (1: as the style, 0: off). Remember **Film Grain** too (0: a clean picture).
+--- es
+```diagram steps
+Project Settings > Rendering > Render Style
+Realistic: el aspecto de siempre (ACES), el predeterminado
+Photorealistic: el tone mapper AgX (la luz fuerte va al blanco, no a colores puros)
+Video-realistic: AgX y una cámara real (halación, grano, distorsión, franjas de color, viñeta)
+Stylized: luz en bandas planas y colores más fuertes
+```
+El **estilo** dice **cómo se ve el fotograma**; la **escalabilidad** (Bajo a Épico) dice **cuánto cuesta**. Las dos se combinan.
+- **Dónde:** Project Settings > Rendering > **Render Style**. La ventana gráfica del editor cambia al instante. [Abrir Project Settings](open:project)
+- **Realistic** es el aspecto que el motor siempre tuvo (ACES) y sigue siendo el predeterminado.
+- **Photorealistic** cambia el mapeo de tonos por **AgX** (el de Blender): el cielo y las luces fuertes van al blanco como en una foto, en vez de saturarse en amarillo o azul puros.
+- **Video-realistic** es AgX más la **cámara física**: el halo rojo de la película alrededor de las luces fuertes (halación), grano del sensor más fuerte en la oscuridad, la distorsión de barril de una lente real, franjas de color en los bordes y viñeta. Los valores del Post Process Volume siguen aplicándose y solo intensifican estos efectos.
+- **Stylized** dibuja la luz en bandas planas (conservando su color) y hace los colores más fuertes. Al elegirlo, aparece una sección **Stylized** con todo bajo tu control: **Start From Preset** (Cel, Comic, Painted, Stop-Motion, Toon), **Bands** (2 = solo luz y sombra), **Band Softness** (0 cel duro, 1 pintado), **Shadow Tint**, **Saturation**, **Outline** (grosor en px a 1440p, color, sensibilidad a la profundidad) y **Animation Frame Rate** (12 = stop-motion "a doses"; el juego mantiene su propia tasa de fotogramas).
+- **En el juego:** el nodo **Set Render Style** cambia el estilo mientras se ejecuta (un flashback estilizado, una cámara de seguridad videorrealista); **-1** vuelve al del proyecto. **Get Render Style** dice cuál está en uso. Al salir de Jugar, el editor vuelve al del proyecto.
+- **Costo:** el estilo solo cambia la composición final; AgX y los efectos de cámara cuestan menos de 0,05 ms a 1440p.
+```blueprint
+Event BeginPlay -> Set Render Style ( Style = 3 )
+```
+- **Ruido en la imagen:** Video-realistic añade **grano de película** (cambia en cada fotograma, se lee como ruido). **Film Grain** (Project Settings > Rendering) lo controla: 0 da una imagen limpia. **Denoise** (Automatic / On / Off) filtra el ruido de la luz trazada en cualquier estilo, conservando solo el historial del mismo objeto, orientado igual y a la misma profundidad (sin fantasmas); necesita trazado de rayos.
+- **Style Options** (Project Settings > Rendering, bajo Render Style): **Shadow Denoise** (Bajo, Medio, Alto, Épico) filtra las sombras por trazado de rayos de las luces locales en una ventana más amplia y con más fotogramas: Épico es suave, sin fantasmas. En **Video-realistic** cada efecto de lente tiene su propio control: **Lens Distortion, Lens Fringes, Halation y Vignette** (1: como el estilo, 0: apagado). Recuerda también **Film Grain** (0: una imagen limpia).

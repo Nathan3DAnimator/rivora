@@ -1,6 +1,6 @@
 id: levels-day-night-panel
 kind: howto
-title: Dia e noite com Lighting Levels, e o painel Níveis | Day and night with Lighting Levels, and the Levels panel
+title: Dia e noite com Lighting Levels, e o painel Níveis | Day and night with Lighting Levels, and the Levels panel | Día y noche con Lighting Levels, y el panel Niveles
 keys: dia e noite, day and night, ceu de dia, ceu de noite, predefinicao de ceu, sky preset, lighting level dia, lighting level noite, day lighting level, night lighting level, nao soma, does not add, nivel preto, black level, nivel escuro ao reabrir, level black after reopening, lightmap preto, black lightmap, neblina por nivel, fog per level, nuvens por nivel, clouds per level, post process por nivel, post process per level, sky atmosphere por nivel, remover subnivel, remove sublevel, apagar subnivel, delete sublevel, desfazer remover nivel, undo remove level, reordenar niveis, reorder levels, arrastar nivel, drag level, organizador por nivel, outliner by level, atores do nivel, level actors, todos os niveis, all levels, cor do nivel, level color, cartoes de nivel, level cards, nivel de dados, data level
 --- pt
 O caso clássico: um **nível persistente sem luz** (só a geometria) e dois Lighting Levels, **Day** e **Night**, cada um com o próprio céu. Ligue um, desligue o outro, ou misture os dois.
@@ -36,6 +36,26 @@ The classic case: a **persistent level with no light** (geometry only) and two L
 
 ```diagram steps
 Create New "Day" (Lighting) | Sky Preset Clear Day | Create New "Night" (Lighting) | Sky Preset Night | Build Lighting | the eye or the blend on each card
+```
+```blueprint
+Event Begin Play -> Set Lighting Level Visible ( Level Name = "Night", Visible = false )
+Event Key N -> Timeline ( Play from Start )
+Timeline.Update -> Set Lighting Level Blend ( Level Name = "Night", Blend = Timeline.Alpha )
+```
+--- es
+El caso clásico: un **nivel persistente sin luz** (solo geometría) y dos Lighting Levels, **Day** y **Night**, cada uno con su propio cielo. Enciende uno y apaga el otro, o mezcla los dos.
+1. **Ventana > Niveles > Create New...** con **Lighting Level** marcado: "Day". Pasa a ser el nivel **actual** (borde resaltado, "current" en su tarjeta).
+2. Con Day como actual, **Añadir > Visual Effects > Sky Preset > Clear Day**. El preset crea el sol, la Sky Light, la niebla y las nubes **en el nivel actual** (lo que ya existe **en ese nivel** se ajusta; nada de otro nivel se toca).
+3. Crea "Night" de la misma forma y aplica **Night (Moonlight)**: la luna, el cielo, la niebla y las nubes de la noche van a Night, y el sol de Day queda como estaba.
+4. **Build > Build Lighting**: un bake del nivel persistente y uno de cada Lighting Level **con solo lo que ilumina en él** (sus propias luces, cielo, nubes, niebla, volúmenes de niebla y Post Process Volumes).
+5. El **ojo** de la tarjeta lo enciende y apaga; el campo **blend** (0 a 2) es su peso. Todo lo que lleva el nivel sigue el peso a la vez: sus luces, su Sky Light, el sol que pinta el cielo, su niebla (las densidades se suman), sus nubes, sus Post Process Volumes y la luz horneada de las mallas.
+- **Reabrir** el proyecto muestra la misma mezcla (visibilidad y peso se guardan), y las mallas encuentran sus lightmaps incluso cuando los actores vuelven con otro identificador (los subniveles entran después del nivel persistente).
+- **Panel Niveles**: cada nivel es una **tarjeta** en su color (la franja de la izquierda), con su ojo, su icono de tipo (**sol** = Lighting Level, **datos** = nivel de datos; clic para cambiar), su nombre, su cantidad de actores, **At start**, el **candado**, su color y la **papelera**.
+- **Clic** en una tarjeta: el **Organizador** lista solo los actores de ese nivel, con "Level: Day" arriba (elige **All Levels** para verlo todo). **Doble clic**: pasa a ser el nivel actual. **Arrastra** una tarjeta a otro lugar para reordenar; **arrastra actores** del Organizador a una tarjeta para moverlos a ese nivel.
+- **Quitar**: la papelera de la tarjeta, el botón **Remove** de arriba, clic derecho > Remove Selected Level, o **Supr** con el panel enfocado. Siempre pregunta antes; los actores salen del mundo, el archivo `.rlevel` queda en el proyecto, y **Ctrl+Z** devuelve el nivel al mismo lugar (Ctrl+Y lo quita de nuevo).
+
+```diagram steps
+Create New "Day" (Lighting) | Sky Preset Clear Day | Create New "Night" (Lighting) | Sky Preset Night | Build Lighting | el ojo o el blend de cada tarjeta
 ```
 ```blueprint
 Event Begin Play -> Set Lighting Level Visible ( Level Name = "Night", Visible = false )

@@ -1,6 +1,6 @@
 id: mesh-concept
 kind: concept
-title: Malha estática e malha esquelética | Static mesh and skeletal mesh
+title: Malha estática e malha esquelética | Static mesh and skeletal mesh | Malla: Static Mesh y Skeletal Mesh
 keys: malha, mesh, modelo 3d, static mesh, skeletal mesh, esqueleto, ossos, rig, armature, diferenca entre malhas, modelo animado
 --- pt
 ```diagram compare
@@ -26,3 +26,15 @@ Animates | the whole actor | the bones
 - **Skeletal Mesh**: a model with a **skeleton** (bones) that deforms with animations (characters, animals).
 - Both come from an import (Tlender, FBX, glTF, OBJ). [Import](article:import-tlender)
 - Heavy meshes get LODs and clusters by themselves (the detail drops with distance without you doing anything).
+--- es
+```diagram compare
+ | Static Mesh | Skeletal Mesh
+Esqueleto | no | sí
+Se deforma | no | sí
+Ejemplos | roca, casa, mesa | personaje, animal
+Anima | el actor entero | los huesos
+```
+- **Static Mesh**: un modelo que no se deforma (una roca, una casa, una mesa). Puede moverse, pero entero.
+- **Skeletal Mesh**: un modelo con un **esqueleto** (huesos) que se deforma con las animaciones (personajes, animales).
+- Ambos vienen de una importación (Tlender, FBX, glTF, OBJ). [Importar](article:import-tlender)
+- Las mallas pesadas reciben LODs y clústeres por sí solas (el detalle baja con la distancia sin que hagas nada).

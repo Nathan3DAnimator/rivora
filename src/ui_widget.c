@@ -1,5 +1,6 @@
 // UMG's data and run time (ui_widget.h, notas-dev/umg.md): the designer tree, its JSON, the Widget Animations, the
 // live widgets of Play (created, shown, bound, animated, their events). No ImGui here (re_render: the game too).
+#include "loc.h" // (2026-11-24) ui_text_shown
 #include "ui_widget.h"
 
 #include <math.h>
@@ -694,6 +695,17 @@ float ui_get_value(Entity e, const char* widget) {
     if (!x) return 0.0f;
     return x->kind == UIW_CHECKBOX ? (float)x->checked : x->kind == UIW_PROGRESS ? x->percent : x->value;
 }
+// (2026-11-24) the text a widget shows now (the localized one when the culture has it): the localization test
+const char* ui_text_shown(Entity e, const char* widget) {
+    UiLive* l = live_of(e);
+    for (uint32_t i = 0; l && i < l->t.n; i++)
+        if (!strcmp(l->t.w[i].name, widget)) {
+            const char* t = loc_widget_text(l->cls, &l->t.w[i], (int)i);
+            return t ? t : l->t.w[i].text;
+        }
+    return NULL;
+}
+
 const char* ui_get_text(Entity e, const char* widget) {
     const UiWidget* x = widget_of(e, widget);
     if (!x) return "";
@@ -933,6 +945,24 @@ bool ui_test_shown(const char* widget) {
         if (k >= 0) return true;
     }
     return false;
+}
+
+// (2026-11-25, item 21: the UI sweep in Play) the names of the buttons shown now, of every live widget tree
+int ui_test_buttons(char (*names)[64], int cap) {
+    int n = 0;
+    for (uint32_t i = 0; i < U.nlive && n < cap; i++) {
+        const UiLive* l = &U.live[i];
+        if (!l->shown || l->hud_hidden) continue;
+        for (uint32_t k = 0; k < l->t.n && n < cap; k++) {
+            const UiWidget* x = &l->t.w[k];
+            if (x->kind != UIW_BUTTON || !x->name[0] || !x->enabled) continue;
+            bool vis = true;
+            for (int p = (int)k; p >= 0 && vis; p = l->t.w[p].parent)
+                vis = l->t.w[p].visible && l->t.w[p].vis_mode != UI_VIS_COLLAPSED;
+            if (vis) snprintf(names[n++], 64, "%s", x->name);
+        }
+    }
+    return n;
 }
 
 bool ui_test_bound(World* w, const char* setting, float value, const char* text) {

@@ -1,6 +1,6 @@
 id: real-language
 kind: concept
-title: A linguagem Real: guia rápido | The Real language: quick guide
+title: A linguagem Real: guia rápido | The Real language: quick guide | El lenguaje Real: guía rápida
 keys: linguagem real, real language, sintaxe real, var, func, event, extends, editable, elif, for in, intervalo, sintaxe, cheat sheet, guia da linguagem
 --- pt
 ```real
@@ -44,3 +44,24 @@ class Door extends Actor          # one script = one class
 - Blocks by indentation; `if` / `elif` / `else`, `while`, `for x in array`, `match` / `case`.
 - `and` / `or` / `not` (also `&&` `||` `!`); comments `#` and `//`; texts with `{interpolation}`.
 - Arrays `[1, 2, 3]`, structs with `struct`, the whole engine API as functions.
+--- es
+```real
+class Door extends Actor          # un script = una clase
+    @editable                     # aparece en Detalles
+    var speed: float = 90         # el tipo es opcional (se infiere)
+    var open = false
+
+    event BeginPlay()             # BeginPlay, Tick(dt), OnBeginOverlap(other)...
+        for i in 0..10            # 0..9 ("..=" incluye 10; "step 2")
+            print("i = {i}")
+        Toggle()
+
+    event Toggle()                # Custom Event (se llama por nombre)
+        open = not open
+
+    func Twice(x: int) -> int     # una función con retorno
+        return x * 2
+```
+- Bloques por indentación; `if` / `elif` / `else`, `while`, `for x in array`, `match` / `case`.
+- `and` / `or` / `not` (también `&&` `||` `!`); comentarios `#` y `//`; textos con `{interpolación}`.
+- Arrays `[1, 2, 3]`, structs con `struct`, toda la API de la engine como funciones.

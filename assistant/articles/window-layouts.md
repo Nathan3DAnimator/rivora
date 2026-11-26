@@ -1,6 +1,6 @@
 id: window-layouts
 kind: howto
-title: Janelas modulares e layouts | Modular windows and layouts
+title: Janelas modulares e layouts | Modular windows and layouts | Ventanas modulares y layouts
 keys: maximizar, maximize, maximizar janela, maximize window, clique duplo, duplo clique, double click, double-click, restaurar janela, restore window, modo janela, janela, janelas, window, windows, painel, painéis, paineis, panel, panels, acoplar, encaixar, dock, docking, desacoplar, undock, arrastar janela, drag window, layout, layouts, salvar layout, save layout, carregar layout, load layout, layout padrão, default layout, resetar layout, reset layout, outro monitor, second monitor, níveis ao lado, levels, organizador, outliner, detalhes, details, maximizar, maximize, fechar janela, close window, ventana, ventanas, acoplar ventana, diseño, guardar diseño, monitor secundario, panel
 --- pt
 ```diagram steps
@@ -56,14 +56,27 @@ In [Window > Layout](show:Window>Layout):
 The last layout comes back by itself when you open the editor or the project.
 --- es
 ```diagram steps
-Arrastra la pestaña de un panel | Aparecen los destinos: centro, lados, bordes y los huecos entre paneles | Suelta en un destino: el panel se acopla allí | Ventana > Diseño > Guardar Diseño Como
+Arrastra la pestaña de un panel | Aparecen los destinos: centro, lados, bordes y los espacios entre paneles | Suelta en un destino: el panel se acopla allí | Ventana > Layout > Save Layout As
 ```
 ## Mover los paneles
-Cada panel del editor (Colocar Actores, Organizador, Niveles, Detalles y el Explorador de Contenido acoplado) es una ventana. Arrastra su **pestaña**: mientras arrastras **aparecen todos los destinos** (el centro y los 4 lados de cada panel, los 4 bordes del editor y los **huecos entre dos paneles**). En el **centro** se une como pestaña; en un **lado** divide el panel; en un **borde** ocupa todo el alto o ancho; en un **hueco** crea un panel nuevo entre los dos. Fuera de un destino, flota; fuera de la ventana del motor, se vuelve una ventana propia (otro monitor).
+Cada panel del editor (Place Actors, Outliner, Levels, Detalles y el Explorador de contenidos acoplado) es una ventana. Arrastra su **pestaña** a otro lugar:
+- mientras arrastras, **se muestran todos los destinos**: el centro y los 4 lados de cada panel, los 4 bordes del editor y los **espacios entre dos paneles**;
+- soltar en el **centro** une el panel como una pestaña; en un **lado**, divide ese panel; en un **borde**, ocupa toda la altura o el ancho; en un **espacio**, crea un panel nuevo entre los dos;
+- soltado lejos de un destino, el panel flota. Arrastrado fuera de la ventana del motor, se convierte en una ventana propia (en otro monitor, por ejemplo).
 
-El diseño predeterminado (0.44): **Modos** y **Colocar Actores** a la izquierda, el viewport en el centro, el **Organizador** (con **Niveles** al lado) sobre **Detalles** a la derecha y, abajo, el **Explorador de Contenido** (con el **Registro de Salida**) y **Soporte de Plataformas** en la esquina. La **X** de un panel o de una ventana propia cierra solo esa ventana, nunca el motor (aunque esté maximizada).
+La ventana gráfica siempre queda en el centro: los paneles se acoplan a su alrededor.
 
-**Haz doble clic en la barra de título** (o en las pestañas) de una ventana suelta para **maximizarla**: fuera del editor ocupa el monitor; sobre el editor, el área de los paneles. Otro doble clic la devuelve a su tamaño y lugar.
+El layout por defecto (0.44): **Modes** y **Place Actors** a la izquierda, la ventana gráfica en el centro, el **Outliner** (con **Levels** en una pestaña a su lado) sobre **Detalles** a la derecha, y abajo el **Explorador de contenidos** (con el **Output Log** a su lado) y **Platform Support** en la esquina derecha. Todos se pueden cerrar, mover y volver a abrir desde el menú **Ventana**.
 
-## Diseños
-En [Ventana > Diseño](show:Window>Layout): **Guardar Diseño Como...** (de **Este proyecto** o de **Todos mis proyectos**), los guardados y **Diseño Predeterminado**. El último diseño vuelve solo al abrir el editor o el proyecto.
+## Cerrar y maximizar
+La **X** de un panel o de una ventana propia cierra solo esa ventana, nunca el motor (ni siquiera maximizada por Windows: Win+Arriba o el menú de la barra de tareas). Para abrirla de nuevo: el menú **Ventana**.
+
+**Doble clic en la barra de título** (o en las pestañas) de una ventana flotante para **maximizarla**: fuera del editor llena su monitor; sobre el editor, el área de los paneles (el menú y la barra de herramientas siguen a la vista). Otro doble clic la devuelve a su tamaño y lugar.
+
+## Layouts
+En [Ventana > Layout](show:Window>Layout):
+- **Save Layout As...**: ponle nombre y elige **This project** (guardado en el `Config/Layouts` del proyecto, va con el proyecto) o **All my projects** (guardado en `%APPDATA%\RealEngine\Layouts`);
+- haz clic en un layout guardado para cargarlo;
+- **Default Layout** vuelve a la disposición de fábrica.
+
+El último layout vuelve solo al abrir el editor o el proyecto.

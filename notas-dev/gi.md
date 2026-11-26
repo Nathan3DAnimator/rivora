@@ -138,6 +138,12 @@ de 64 raios disparava a resposta rápida (histerese 0,75) o tempo todo.
 - Teste `house_walk` (`--scene house --bp-walkview`: o personagem anda pela casa, câmera parada): 0,035%, 414 fps.
   Personagem parado 417 fps; casa 431 fps; jogo empacotado com Blueprints 396 fps (a primeira execução de um executável
   recém-empacotado é mais lenta: o driver compila os shaders; o teste mede 3 s).
+- (2026-11-25, item 19) **Ilhas do UV2 como paredes**: no template do quadro (`gi_cache.c template_make`) o vizinho do atlas
+  que é outra face (dobra acima de ~75 graus: o outro lado de uma caixa, outra ilha encostada) vira parede na direção dele
+  (`pad0`; `gi_cache.comp` e `lightmap_bake.comp` via `du.w` somam às paredes medidas). Antes, o raio das paredes saía pela
+  borda da caixa e não achava nada, e a leitura bilinear pegava a luz da face de cima ensolarada de uma laje de 20 cm no
+  teto embaixo dela. Efeito pequeno na instalação (manchas 0,0297 → 0,0271 na sala da entrada, vista só GI): as manchas que
+  ficam ali são do cache com texels de 30 cm (o orçamento do atlas de 1024 com 6 faces iguais por cubo), não de vazamento.
 - Sondas com a mesma média corrida (até 64) e as distâncias com essa história; ponto fora da grade lê a borda mais
   perto sem o teste de visibilidade (os 8 pesos esmagados faziam o horizonte piscar): 40 k atores 0,20% → 0,02%.
 
@@ -495,6 +501,60 @@ fatias). Detalhes e medidas: [em-jogo.md](em-jogo.md).
   Android); a construção 5-6 ms numa thread, fora do quadro. Teste `gi_fallback` (área gi): o volume construído, 200 fps.
 - Fica para depois: medir num celular e no Quest, o volume das malhas pela geometria (a caixa de uma casa oca é
   cheia: o interior sem céu é certo, mas uma casa aberta não), a cor do chão em vez de 0,2, o RT por hardware no Baixo.
+
+### O rebote das luzes locais no fallback (2026-11-25: a casa preta no Baixo)
+- **O bug**: no Baixo a cena `house` (fechada, sem céu nem sol, um Spot na parede do outro cômodo) saía quase toda preta,
+  só a parede iluminada pela porta (98,8 % da vista quase preta). Não era regressão: a 0.51 (≈ base 03a09ba) dava o mesmo.
+  O fallback acima só tinha o céu e o sol rebatido: numa sala fechada iluminada por lâmpadas a luz indireta era zero.
+- **O volume do rebote** (`gi_fallback.c build_fine`, na mesma thread, depois do AO): 64 × 64 × 16 células de 50 cm
+  (32 × 32 × 8 m; a grade anda de 4 m, de 2 m na altura), no mesmo buffer depois dos bytes do AO.
+  - **Faces bloqueadas, não células sólidas**: cada caixa bloqueia, em cada eixo, os planos de células dentro da sua
+    espessura (o mais perto do meio quando é mais fina que uma célula), nas faces que ela cobre pelo menos pela metade.
+    A 1ª versão marcava células sólidas: a parede de 20 cm virava 1 m sólido e o chão rente a ela só lia células sólidas
+    (faixas pretas ao pé e no alto das paredes).
+  - **Luz nas faces**: cada face bloqueada recebe, do lado de cada célula vizinha, a luz direta das luzes locais (até 32,
+    as mais fortes pela distância; queda, cone e face do Rect como no `mesh.frag`; sombra por DDA nas faces bloqueadas;
+    a luminária dela, uma caixa com menos de 1,5 m que contém a luz, não bloqueia nada - a 1ª regra, qualquer face a 75 cm
+    da luz aberta, deixava a lâmpada a 30 cm de uma parede de 5 cm iluminar o outro lado: `spec_leak_low` 448 nits) e devolve albedo × E / π (o `avg_base` do material, ou a cor; metal não).
+  - **O rebote**: cada célula a média das 6 vizinhas, uma parede valendo a sua luz + albedo × a da célula, fora do
+    volume escuro: `V (6 − Σ albedo) = vizinhas abertas + luz das paredes`, varreduras vermelho-preto sobre-relaxadas
+    (ω 1,8; 160 a frio, 40 a partir da anterior na mesma grade; para quando muda menos de 1e-4).
+- **Quando refaz**: a grade mudou (4 m de câmera), a cada 2 s, ou uma luz mudou (posição, cor, cone, alcance em passos
+  grossos; conferido 4 vezes por segundo, as fora de alcance descartadas pelas colunas do ECS antes do `lights_gpu`).
+- **No `mesh.frag`** (`gi_bounce`, só no fallback: `!gi`, variantes sem RT): as 8 células em volta do ponto + 25 cm pela
+  normal que a célula do ponto alcança sem cruzar face bloqueada (o outro lado de uma parede nunca é lido; sem face
+  bloqueada entre as 8, o caso comum, nem procura), inclinadas para onde a luz cresce pela normal (`m + 6 × dV/dn`,
+  entre 0,1 e 2,5 × m: a difusão não tem direção, e a parede ao lado da porta acesa ganhava um halo), apagando nas 2
+  últimas células do volume. `water[25].w`: a origem em células a partir da do AO (um byte por eixo); `water[26].w`:
+  afastamento × 16 + inclinação (25 cm e 6; `REALENGINE_GI_BOUNCE_OFS`/`_LEAN` para afinar). Escolha contra a foto do
+  Alto (diferença média): 25/1 31,3; 50/1 32,0; 25/3 27,6; **25/6 26,8**; 25/10 28,5 (degraus das células).
+  `REALENGINE_NO_GI_BOUNCE=1` mede sem. A linha `GI fallback bounce:` do `--bench` dá luzes, faces, varreduras, ms e a luz média.
+- **Medidas** (RTX 3060, 1440p, Baixo, casa): passe principal 0,270 → 0,323 ms (**+0,05 ms**), quadro ~830 → ~775 fps
+  (a 0.51: 745); CPU do quadro igual; a construção 3,3-3,7 ms numa thread (1 luz, 129 faces), 8 ms com 32 luzes
+  (`--stress-lights 5000`: 3169 faces; o fallback inteiro ~0,07 ms de GPU ali). Vista quase preta 98,8 % → 0,4 %.
+- **Teste**: `gi_bounce_house` (regressão: a casa no Baixo com no máximo 30 % da vista quase preta, `compare_png.py
+  --max-dark`, sem referência; falha com `REALENGINE_NO_GI_BOUNCE=1`) e o `render_ref_baixo` com o mesmo limite além da
+  referência. `gi_house`, `spec_leak`, `gi_fallback` passam.
+- Fica para depois: uma malha importada inteira (uma casa num arquivo) é uma caixa só, cheia (o mesmo limite do AO);
+  luz que se move é vista a cada reconstrução (até 0,25 s); medir no celular e no Quest.
+
+## Luz que muda: o cache de superfície esquece depressa (2026-11-25, o facility_leak)
+- **O sintoma**: a sala funda da instalação, com as lâmpadas apagadas, media 1,03 nit (02:10) e depois dois estados fixos,
+  1,46–1,55 e 1,97–2,01. Não era vazamento: as lâmpadas ficam acesas enquanto a instalação é construída e são apagadas
+  depois, e a média longa do cache (512 atualizações por texel) guardava o rebote delas por dezenas de segundos (0,73 nit
+  depois de 25 s). A queda da cauda é lenta demais para os testes de deriva (a amostra vem dos texels vizinhos, que
+  também caem devagar). O modo parado do item 4 (`C.quiet`, 1/4 das atualizações) a deixava 4 vezes mais lenta; os dois
+  estados eram ele ter começado antes ou depois da última realocação do atlas (a ordem das malhas carregadas).
+- **A correção** (`gi_cache.c light_seen`): uma tabela das luzes locais vistas (entidade com geração → hash de posição,
+  rotação, cor × intensidade, alcance, cone, escondida), alimentada pelo log de mudanças do ECS e, a cada mudança de
+  revisão, por todas as luzes. Uma luz nova só entra (as do nível ao carregar: os texels já são novos; a 1ª versão, por
+  qualquer mudança de luz, deixava a carga ruidosa); uma conhecida que mudou abre 24 ciclos com a média de 6 atualizações
+  (`cache_params[1]`, a 512 fora disso), e o modo parado espera a janela. O sol e a luz do céu ficam de fora (um ciclo de
+  dia mexe no sol todo quadro). `REALENGINE_CACHE_LIGHT_SHORT=0` compara; `REALENGINE_CACHE_LIGHT_LOG=1` diz cada disparo.
+- **Medidas** (8 s): a sala 0,063–0,067 nit em todas as rodadas e nos dois estados (sem a correção 1,18–1,98; sem o cache
+  de superfície 12,8: as sondas sozinhas). Teste `facility_leak` com o limite 0,5 (era 2,5). `spec_leak_epic`,
+  `spec_leak_low`, `gi_house_thin`/`_movable`, `ghost_realistic` e `budget_house` falham de vez em quando com ou sem a
+  correção (picos de 5 a 45 nits, cintilação no limite): instabilidade anterior, anotada.
 
 ## A GI vê o brilho dos materiais (2026-11-23)
 - `GpuInstance.emissive_rough.z` de uma instância com material leva a **emissão média** em nits (`render.c

@@ -1,9 +1,9 @@
 id: health-damage
 kind: recipe
-title: Vida e dano: Health, escudo, tipos de dano, morte | Health and damage: Health, shield, damage types, death
+title: Vida e dano: Health, escudo, tipos de dano, morte | Health and damage: Health, shield, damage types, death | Vida y daño: Health, escudo, tipos de daño, muerte
 keys: vida, hp, dano, machucar, morrer, morte, health, damage, take damage, levar dano, perder vida, barra de vida, health bar, matar inimigo, health component, componente de vida, escudo, shield, armadura, armor, regeneracao, regenerar vida, regen, curar, heal, cura, reviver, revive, respawn, invencivel, invincible, god mode, tipo de dano, damage type, fogo, fire, veneno, poison, explosao, explosion, dano radial, radial damage, dano em area, granada, grenade, multiplicador de dano, resistencia, fraqueza, imune, numeros de dano, damage numbers, dano flutuante, ragdoll ao morrer, apply damage, apply radial damage, event anydamage, on death, on healed, on shield broken, get health percent, is dead
 --- pt
-Como o **Health Component** dos jogos da Unreal, pronto: **Details > Adicionar > Vida** (no nível ou no Blueprint, em **Componentes > + Adicionar > Jogabilidade**).
+Como o **Health Component** dos jogos da Unreal, pronto: **Details > Adicionar > Vida** (no nível ou no Grafo, em **Componentes > + Adicionar > Jogabilidade**).
 1. **Vida Máxima** e **Vida**; **Escudo Máximo**: o escudo recebe o dano antes da vida.
 2. **Regeneração**: depois de **Atraso da Regeneração** segundos sem dano, a vida e o escudo voltam na taxa de cada um.
 3. **Multiplicadores de Dano**: um tipo de dano é uma **Gameplay Tag** (`Damage.Fire`, `Damage.Physical`...) com o quanto o ator recebe (0 imune, 0,5 metade, 2 o dobro). Vale o mais específico: `Damage` cobre `Damage.Fire.Burning`, mas `Damage.Fire` ganha dele.
@@ -43,7 +43,7 @@ public class FireTrap : Actor
 
 O custo: 1000 atores levando dano todo quadro custam ~0,11 ms; a lista **Health and Damage** do Debug Viewer (F10) mostra o tempo e a vida de cada ator. Para montar a sua própria barra, veja [Interface do jogo](article:game-ui).
 --- en
-Like the **Health Component** of Unreal's games, ready: **Details > Add > Health** (in the level, or in a Blueprint under **Components > + Add > Gameplay**).
+Like the **Health Component** of Unreal's games, ready: **Details > Add > Health** (in the level, or in a Graph under **Components > + Add > Gameplay**).
 1. **Max Health** and **Health**; **Max Shield**: the shield takes the damage before the health.
 2. **Regeneration**: after **Regen Delay** seconds without damage, the health and the shield come back at their rates.
 3. **Damage Multipliers**: a damage type is a **Gameplay Tag** (`Damage.Fire`, `Damage.Physical`...) with how much the actor takes (0 immune, 0.5 half, 2 double). The most specific wins: `Damage` covers `Damage.Fire.Burning`, but `Damage.Fire` beats it.
@@ -82,3 +82,43 @@ public class FireTrap : Actor
 ```
 
 The cost: 1000 actors damaged every frame take ~0.11 ms; the Debug Viewer's (F10) **Health and Damage** list shows the time and each actor's health. To make a bar of your own, see [The game's UI](article:game-ui).
+--- es
+Como el **Health Component** de los juegos de Unreal, ya listo: **Detalles > Añadir > Health** (en el nivel, o en un Grafo bajo **Components > + Añadir > Gameplay**).
+1. **Max Health** y **Health**; **Max Shield**: el escudo recibe el daño antes que la vida.
+2. **Regeneration**: después de **Regen Delay** segundos sin daño, la vida y el escudo vuelven a sus ritmos.
+3. **Damage Multipliers**: un tipo de daño es un **Gameplay Tag** (`Damage.Fire`, `Damage.Physical`...) con cuánto recibe el actor (0 inmune, 0,5 la mitad, 2 el doble). Gana el más específico: `Damage` cubre `Damage.Fire.Burning`, pero `Damage.Fire` lo supera.
+4. **On Death**: **Only the Event**, **Destroy Actor** (tras el retraso) o **Ragdoll** (el Skeletal Mesh con un Physics Asset se queda flojo).
+5. Los **Damage Numbers** flotan sobre el actor; **Show Health Bar** en el pawn del jugador pone **WBP_HealthBar** (en Content/UI, creado al añadir la Health) en la pantalla. También entra en tu propio juego con **Create Widget** + **Add to Viewport**.
+
+Nodos (categoría **Game > Damage**): **Apply Damage**, **Apply Radial Damage** (una explosión que decae con la distancia), **Heal**, **Get Health**, **Get Health Percent**, **Get Max Health**, **Get Shield**, **Set Max Health**, **Set Shield**, **Is Dead**, **Revive**, **Set Invincible**, **Set Damage Multiplier**. Los eventos del actor: **Event AnyDamage** (daño, tipo, quién y con qué), **Event On Healed**, **Event On Death**, **Event On Shield Broken**.
+
+```diagram steps
+Enemigo: Detalles > Añadir > Health | Trampa: OnActorBeginOverlap -> Apply Damage (Damage.Fire) | La vida llega a 0: Event On Death | On Death: Ragdoll o Destroy Actor
+```
+```blueprint
+Event ActorBeginOverlap -> Apply Damage ( Target = Other Actor, Amount = 25, Damage Type = "Damage.Fire", Instigator = self )
+Event AnyDamage -> Print String ( Format Text ( "damage {0} of {1}", Damage, Damage Type ) )
+Event On Death -> Apply Radial Damage ( Base Damage = 80, Origin = Get Actor Location, Damage Radius = 400, Damage Type = "Damage.Explosion" )
+```
+```real
+class Barrel extends Actor
+    event BeginPlay()
+        SetDamageMultiplier("Damage.Fire", 2.0)
+
+    event OnAnyDamage(damage: float, damage_type: string, instigator: Actor, causer: Actor)
+        print("damage: {damage} ({damage_type})")
+
+    event OnDeath(killer: Actor, damage_type: string, causer: Actor)
+        ApplyRadialDamage(80.0, GetActorLocation(), 400.0, "Damage.Explosion", killer, self, 1.0, 0.0)
+```
+```cs
+public class FireTrap : Actor
+{
+    void OnBeginOverlap(Actor other)
+    {
+        other.ApplyDamage(25.0f, "Damage.Fire", this, this);
+    }
+}
+```
+
+El costo: 1000 actores dañados en cada cuadro toman ~0,11 ms; la lista **Health and Damage** del Debug Viewer (F10) muestra el tiempo y la vida de cada actor. Para hacer una barra propia, mira [La interfaz del juego](article:game-ui).

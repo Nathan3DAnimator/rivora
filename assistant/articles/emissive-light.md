@@ -1,6 +1,6 @@
 id: emissive-light
 kind: howto
-title: Materiais emissivos que iluminam a cena | Emissive materials that light the scene
+title: Materiais emissivos que iluminam a cena | Emissive materials that light the scene | Material emisivo que ilumina
 keys: emissivo, emissive, emissao, emission, brilho, glow, luz emissiva, emissive light, lampada, lamp, neon, tela brilhante, glowing screen, led, rebate na gi, bounces in the gi
 --- pt
 ```diagram steps
@@ -26,3 +26,15 @@ Material: Emission Color and Strength | Emissive Light (1) | Each actor lights |
 - A glow too faint (a small LED) goes in through the GI alone. Reflections always show the glow.
 
 [Open the Content Browser](open:content)
+--- es
+```diagram steps
+Material: Emission Color y Strength | Emissive Light (1) | Cada actor ilumina | La GI lo hace rebotar
+```
+## Cómo funciona
+- Un material con **Emission** (Emission Color × Emission Strength) **ilumina la escena**: cada actor que lo tiene ilumina como una lámpara y el brillo **rebota en la GI**.
+- **Emissive Shadows** activa las sombras por trazado de rayos de esa luz (lo que se interpone la bloquea; cerca de 1 ms).
+- **Emissive Light** (Detalles del material > Material) es cuánto ilumina el brillo: 1 normal, 2 el doble, **0 brilla pero no ilumina nada**.
+- El panel muestra la **emisión media en nits** después del bake.
+- Un brillo demasiado tenue (un LED pequeño) entra solo por la GI. Los reflejos siempre muestran el brillo.
+
+[Abrir el Explorador de contenidos](open:content)

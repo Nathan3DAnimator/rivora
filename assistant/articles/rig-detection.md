@@ -1,6 +1,6 @@
 id: rig-detection
 kind: howto
-title: Detecção de rig: Mixamo, Rigify, Auto-Rig Pro e outros prontos | Rig detection: Mixamo, Rigify, Auto-Rig Pro and more, ready to use
+title: Detecção de rig: Mixamo, Rigify, Auto-Rig Pro e outros prontos | Rig detection: Mixamo, Rigify, Auto-Rig Pro and more, ready to use | Detección de rig: Mixamo, Rigify, Auto-Rig Pro y más, listos para usar
 keys: deteccao de rig, detecção de rig, rig detection, reconhecer rig, auto rig, autorig, mixamo, rigify, auto-rig pro, arp, accurig, character creator, daz, metahuman, vroid, biped, rig do tlender, tlender rig, ik e fk, ik fk, hierarquia do rig, nomes dos ossos, bone names, foot ik nao funciona, leg ik nao acha o pe, pe flutuando, feet floating, pe nao fica no chao, papeis dos ossos, bone roles, analisar rig, analyze rig, rig detectado
 --- pt
 ```diagram steps
@@ -34,3 +34,19 @@ Import the character (FBX, glTF, .tlend, .rasset) | The engine finds what each b
 - Everything that asks for a bone by its Unreal name (`foot_l`, `calf_r`, `thigh_l`, `spine_02`, `head`...) finds the right bone on **any** rig. The AnimGraph's **Leg IK** node and **Foot IK** come with `foot_l` / `foot_r`: on a Mixamo character they already take `LeftFoot` / `RightFoot`. **Just switch on** Foot IK and the feet stay on the ground, no floating.
 - The **Aim Offset**, the **locomotion styles**, **cover**, **hit reactions** and **Motion Matching** find their bones by role too.
 - **Generate Bodies** (Physics Asset) uses the roles and the mesh: see [Automatic physics from the mesh](article:physics-auto-fit).
+--- es
+```diagram steps
+Importa el personaje (FBX, glTF, .tlend, .rasset) | El motor encuentra qué es cada hueso | Rig Detected: sistema, clase, roles, cadenas | Leg IK / Foot IK y Generate Bodies funcionan sin más
+```
+## Qué reconoce el motor
+- Los mismos rigs que reconoce el Tlender: el **auto-rig del Tlender**, **Rigify**, **Auto-Rig Pro**, **AdvancedSkeleton**, **Mixamo / HumanIK**, **UE / MetaHuman**, **VRoid**, **Character Creator / AccuRig**, **Daz**, **Biped / CAT**, **SMPL**, **Valve** y **MPFB**. Un rig sin nombres conocidos se lee por la **forma del esqueleto**: la cadera donde se juntan dos piernas y la columna, el pecho donde están los brazos y el cuello.
+- Cada hueso recibe un rol: **hips, spine, chest, neck, head, clavicle, upper arm, forearm, hand, fingers, thigh, shin, foot, toe**. También distingue los **controles** (FK, IK handles, poles, MCH), las **torsiones** y las **cadenas colgantes** (cola, orejas, pelo, cadenas, capas, accesorios).
+- En un rig de control (Rigify, Auto-Rig Pro) se usan los huesos **deformantes**; los controles nunca se convierten en cuerpos de física.
+
+## Dónde verlo
+- Abre la **Skeletal Mesh**: bajo el **Skeleton Tree** está **Rig Detected** con el sistema, la clase (Humanoid, Quadruped...), cuántos roles encontró, las cadenas y la lista **Roles** (un clic selecciona el hueso). **Analyze Rig** lo rehace.
+
+## Qué funciona por sí solo
+- Todo lo que pide un hueso por su nombre de Unreal (`foot_l`, `calf_r`, `thigh_l`, `spine_02`, `head`...) encuentra el hueso correcto en **cualquier** rig. El nodo **Leg IK** del AnimGraph y **Foot IK** vienen con `foot_l` / `foot_r`: en un personaje de Mixamo ya toman `LeftFoot` / `RightFoot`. **Solo activa** Foot IK y los pies se quedan en el suelo, sin flotar.
+- El **Aim Offset**, los **estilos de locomoción**, la **cobertura**, las **reacciones a golpes** y el **Motion Matching** también encuentran sus huesos por rol.
+- **Generate Bodies** (Physics Asset) usa los roles y la malla: mira [Física automática a partir de la malla](article:physics-auto-fit).

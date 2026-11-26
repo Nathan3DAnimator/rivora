@@ -37,6 +37,14 @@ e a transmitância; refeito a cada frame (a câmera anda), terra plana em volta 
 direção, nunca abaixo do chão). Aplicado no passe principal e no ponto primário do path tracer (conferido lado a
 lado). Settings > Aerial Perspective Scale (como a View Distance Scale da Unreal): 1 é o físico (só aparece com
 quilômetros), 0 desliga, 300 deixa a névoa visível na escala do nível padrão.
+- (2026-11-25, item 19) **Profundidade inicial de 100 m** (`AP_START_KM`, `atmosphere.glsl`: a Aerial Perspective Start
+  Depth da Unreal, padrão 0,1 km): os froxels não sabem de paredes, e a primeira fatia (62,5 m) lida pela raiz dava a um
+  ponto a 10 m 40% dela, em toda sala de todo interior. Instalação procedural, sala funda fechada, lâmpadas apagadas:
+  **4,91 → 1,03 nits** de média (o ar azul do céu dentro de casa; teste `facility_leak`). Ao ar livre o haze começa 100 m
+  (25/11, bug-fixer: 13 rodadas do `facility_leak` depois das 06:56 dão dois estados, 1,46-1,55 e 1,97-2,01 nits, e o
+  limite 2,0 falhou na borda: agora 2,5, metade do vazamento de 5,08 do binário anterior ao item 19. O nível subiu de
+  1,03 para esses entre 02:10 e 06:56; a GI de fallback não é a causa: sem ela, ~2,0)
+  mais longe, como na Unreal.
 
 ## Sombras
 - **Por raio** (Médio para cima, Settings > Ray Traced Shadows): toda luz com Cast Shadows, inclusive point/spot/rect, no

@@ -18,9 +18,12 @@
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #include <cimgui.h>
 #include <GLFW/glfw3.h>
+#include "components.h"
+#include "procgen.h"
 #include "content.h"
 #include "cvars.h"
 #include "editor.h"
+#include "hud.h"
 #include "i18n.h"
 #include "material.h"
 #include "mcp.h"
@@ -36,6 +39,12 @@
 #include "script_ide.h"
 #include "vehicle.h"
 #include "vkctx.h"
+
+// (2026-11-24, the tester's item 6) a dry run's state (mcp_guide.inc batch_exec): no files made while it runs; a recipe's
+// class not made yet lives in memory for the trial spawn (g_dry_cls at g_dry_vpath), freed after
+static bool g_mcp_dry;
+static BpAsset* g_dry_cls;
+static char g_dry_vpath[300];
 
 // --- helpers ---
 char* mcp_jw_take(JsonWriter* w) {
@@ -103,7 +112,7 @@ static const char* actor_name(World* w, Entity e) {
 static const char* actor_class(World* w, Entity e) {
     const CBlueprint* b = ecs_get(w, e, COMP_BLUEPRINT);
     if (b) {
-        BpAsset* a = bp_find_hash(b->asset_hash);
+        BpAsset* a = g_dry_cls && g_dry_cls->hash == b->asset_hash ? g_dry_cls : bp_find_hash(b->asset_hash); // (a dry run's class: in memory)
         if (a) return a->name;
     }
     return editor_actor_type(w, e);
@@ -158,6 +167,13 @@ static const char k_guide[] =
     "- Properties have the Details panel's names (`Intensity`, `Light Color`, `Attenuation Radius`, `Base Color`, `Roughness`...); "
     "`get_actor` lists every property an actor has with its value. Colors are [r, g, b] 0..1.\n"
     "- Every change is one undo step (`undo`). Nothing is saved until `level` with action save.\n\n"
+    "## Fastest: one call per task\n"
+    "- `recipe` does a whole task in one call: test_level, lighting, playable_character, pbr_material, hud (`{\"list\": true}` shows "
+    "their params). `dry_run: true` answers what it would do and changes nothing.\n"
+    "- `batch` runs several calls as ONE undo step; atomic by default (a failed step rolls everything back).\n"
+    "- `inspect_level` says what is missing or wrong, each with the fix. `search` finds any name (types, components, assets, "
+    "functions, docs) in one call. `tool_help` gives a tool's examples. Every answer ends with `next`: the likely next call.\n"
+    "- Arguments are checked before anything runs: a wrong key answers the right one (position -> location).\n\n"
     "## Fast workflow\n"
     "1. `get_editor_state` and `find_actors` to see the level (cheap; prefer them to screenshots).\n"
     "2. `spawn_actors` / `modify_actors` / `delete_actors` take LISTS: build a whole scene in one call.\n"
@@ -173,7 +189,7 @@ static const char k_guide[] =
     "Ambient Sound, Decal, Fire, Rain, Ocean, Water Body, Sky Preset names... (`list_actor_types` has them all). Or `asset` = a "
     "/Content path of a Static Mesh (.rmesh), Skeletal Mesh (.rskm), Blueprint (.rbp), script class, Particle System, Vehicle.\n\n"
     "## Scripts (run_script, write_script)\n"
-    "Four languages compile to the same bytecode: python (.py), real (.real), csharp (.cs), c (.c). In run_script give only the body: "
+    "Four languages compile to the same bytecode: python (.py), rivora (.rvs), csharp (.cs), c (.c). In run_script give only the body: "
     "it runs once on the editor's level (not while playing), print() comes back to you.\n"
     "Python example (snake_case names):\n"
     "```\nfor i in range(get_selected_actor_count()):\n    a = get_selected_actor(i)\n    a.add_actor_world_offset(Vector(0, 0, 50))\n    print(a.get_display_name())\n```\n"
@@ -181,15 +197,19 @@ static const char k_guide[] =
 
 const char* mcp_instructions(void) {
     return "You are driving the Rivora Engine editor (a game engine like Unreal Engine 5). Call get_started first: it has the "
-           "conventions (cm, Z up, degrees), the fast workflow and the current level. Prefer batch calls (spawn_actors, "
-           "modify_actors take lists), find_actors/get_actor over screenshots, run_script for logic or bulk work (Python, the "
-           "engine's whole API via api_reference), and search_docs for how-tos. Every change can be undone.";
+           "conventions (cm, Z up, degrees), the fast workflow and the current level. Whole tasks take one call with recipe "
+           "(test_level, lighting, playable_character, pbr_material, hud); several changes take one call and one undo step with "
+           "batch (dry_run to preview). inspect_level says what is missing with the fix; search finds any name. Prefer lists "
+           "(spawn_actors, modify_actors), find_actors/get_actor over screenshots, run_script for logic or bulk work (Python, the "
+           "engine's whole API via api_reference), and search_docs for how-tos. Every answer's next says the likely next call. "
+           "Every change can be undone.";
 }
 
 // --- the tools' list ---
 typedef struct ToolDef { const char* name; const char* title; const char* desc; const char* schema; bool read_only, destructive; } ToolDef;
 #define ACTOR_REF "{\"description\":\"An actor: its id (number) or its name\",\"type\":[\"integer\",\"string\"]}"
 #define VEC3(d) "{\"type\":\"array\",\"items\":{\"type\":\"number\"},\"minItems\":3,\"maxItems\":3,\"description\":\"" d "\"}"
+#define COMPS "{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Components to add, by their Details names (Health, HUD Layout, Rotating Movement, Physics, Interactable...)\"}"
 static const ToolDef k_tools[] = {
     { "get_started", "Get started", "The guide to this editor (conventions, the fastest workflow, actor types, script examples) and the level's current state. Call it first.",
       "{\"type\":\"object\",\"properties\":{}}", true, false },
@@ -208,13 +228,14 @@ static const ToolDef k_tools[] = {
       "{\"type\":\"object\",\"properties\":{\"actors\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{"
       "\"type\":{\"type\":\"string\"},\"asset\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"location\":" VEC3("cm") ",\"rotation\":" VEC3("pitch, yaw, roll in degrees") ","
       "\"scale\":" VEC3("1 = 100%") ",\"properties\":{\"type\":\"object\",\"description\":\"Details names to values: numbers, booleans, [r,g,b] / [x,y,z]\"},"
-      "\"material\":{\"type\":\"string\",\"description\":\"A /Content/...rmat or .rmi for a mesh\"}}}},"
+      "\"material\":{\"type\":\"string\",\"description\":\"A /Content/...rmat or .rmi for a mesh\"},"
+      "\"components\":" COMPS "}}},"
       "\"select\":{\"type\":\"boolean\",\"default\":true}},\"required\":[\"actors\"]}", false, false },
     { "modify_actors", "Modify actors", "Changes one or many actors in one call: location / rotation / scale (absolute), offset (added to the location), name, hidden, "
       "properties (Details names), material.",
       "{\"type\":\"object\",\"properties\":{\"actors\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"actor\":" ACTOR_REF ","
       "\"name\":{\"type\":\"string\"},\"location\":" VEC3("cm") ",\"offset\":" VEC3("cm added") ",\"rotation\":" VEC3("degrees") ",\"scale\":" VEC3("1 = 100%") ","
-      "\"hidden\":{\"type\":\"boolean\"},\"properties\":{\"type\":\"object\"},\"material\":{\"type\":\"string\"}},\"required\":[\"actor\"]}}},\"required\":[\"actors\"]}", false, false },
+      "\"hidden\":{\"type\":\"boolean\"},\"properties\":{\"type\":\"object\"},\"material\":{\"type\":\"string\"},\"components\":" COMPS "},\"required\":[\"actor\"]}}},\"required\":[\"actors\"]}", false, false },
     { "delete_actors", "Delete actors", "Removes actors (one undo step).",
       "{\"type\":\"object\",\"properties\":{\"actors\":{\"type\":\"array\",\"items\":" ACTOR_REF "}},\"required\":[\"actors\"]}", false, true },
     { "select_actors", "Select actors", "Selects actors in the editor (the user sees them in the Details) and optionally frames them with the camera.",
@@ -250,6 +271,28 @@ static const ToolDef k_tools[] = {
       "{\"type\":\"object\",\"properties\":{\"redo\":{\"type\":\"boolean\",\"default\":false},\"steps\":{\"type\":\"integer\",\"default\":1}}}", false, false },
     { "get_log", "Get log", "The editor's recent messages and the scripts' / Blueprints' prints.",
       "{\"type\":\"object\",\"properties\":{\"lines\":{\"type\":\"integer\",\"default\":40}}}", true, false },
+    // (2026-11-24) the guide that speeds the AI up (mcp_guide.inc)
+    { "recipe", "Recipe", "A whole task in ONE call: test_level (ground, Player Start, sky, obstacles), lighting (a sky preset), "
+      "playable_character (a Character class you can play, third/first person or top-down), pbr_material (a material from texture maps, "
+      "found by their names in a folder), hud (the game HUD: bars, compass, crosshair). dry_run shows what it would do and changes nothing. "
+      "{\"list\": true} lists them with their params and examples.",
+      "{\"type\":\"object\",\"properties\":{\"recipe\":{\"type\":\"string\",\"enum\":[\"test_level\",\"lighting\",\"playable_character\",\"pbr_material\",\"hud\"]},"
+      "\"params\":{\"type\":\"object\",\"description\":\"The recipe's params (list:true shows them)\"},\"dry_run\":{\"type\":\"boolean\",\"default\":false},"
+      "\"list\":{\"type\":\"boolean\",\"default\":false}}}", false, false },
+    { "batch", "Batch", "Several tool calls in ONE call, as ONE undo step (a transaction): steps run in order; atomic (default) rolls everything "
+      "back when a step fails; dry_run runs them, answers what they did and rolls back. Steps may be spawn_actors, modify_actors, "
+      "delete_actors, select_actors, set_camera, run_script, find_actors, get_actor, get_editor_state, inspect_level.",
+      "{\"type\":\"object\",\"properties\":{\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"tool\":{\"type\":\"string\"},"
+      "\"args\":{\"type\":\"object\"}},\"required\":[\"tool\"]}},\"atomic\":{\"type\":\"boolean\",\"default\":true},\"dry_run\":{\"type\":\"boolean\",\"default\":false}},"
+      "\"required\":[\"steps\"]}", false, false },
+    { "inspect_level", "Inspect level", "What the level has and what is missing or wrong, each with how to fix it (no light, nothing to stand on, no "
+      "player, scripts that don't compile, errors in the log, actors fallen out of the world, unsaved changes, a slow frame) and the next steps.",
+      "{\"type\":\"object\",\"properties\":{}}", true, false },
+    { "tool_help", "Tool help", "A tool's schema, examples that work as they are, its common errors and the related tools. No tool: every tool in one line each.",
+      "{\"type\":\"object\",\"properties\":{\"tool\":{\"type\":\"string\"}}}", true, false },
+    { "search", "Search everything", "One search over everything the AI may need: actor types, components, recipes, the level's actors, assets, API functions "
+      "and the knowledge base's articles. Use it before guessing a name.",
+      "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"default\":5,\"description\":\"Per kind\"}},\"required\":[\"query\"]}", true, false },
 };
 #define NTOOLS (int)(sizeof k_tools / sizeof k_tools[0])
 
@@ -301,6 +344,10 @@ static const PromptDef k_prompts[] = {
       "Make this level run faster in the Rivora editor. Steps: get_editor_state (frame time); search_docs \"performance\"; "
       "find_actors for heavy things (lights with shadows, particles, high-poly meshes); console r.* variables for quality; "
       "change one thing at a time and compare the frame time; report what helped." },
+    { "make_playable", "Make it playable", "A level you can play in a few calls: ground, sky, a player, a HUD.", NULL, NULL,
+      "Make the open level playable in the Rivora editor with as few calls as possible: inspect_level; if it has nothing to "
+      "stand on, recipe test_level; if it has no light, recipe lighting; recipe playable_character (view: third); recipe hud; "
+      "play with seconds 3 and read the output; inspect_level again; save the level (level save)." },
     { "fix_problem", "Fix a problem", "Diagnoses something that is wrong.", "problem", "What is wrong",
       "Something is wrong in the Rivora editor: %s\n\nSteps: get_log for errors; search_docs with the message; find_actors / "
       "get_actor on what is involved; screenshot to see it; fix it with the smallest change; confirm." },
@@ -374,7 +421,11 @@ char* mcp_prompt_get(const JsonValue* params) {
 
 const char* mcp_resources_list_json(void) {
     return "{\"resources\":[{\"uri\":\"rivora://guide\",\"name\":\"guide\",\"title\":\"Rivora Engine: guide for AI\",\"description\":\"Conventions, the fastest "
-           "workflow, actor types, script examples\",\"mimeType\":\"text/markdown\"}]}";
+           "workflow, actor types, script examples\",\"mimeType\":\"text/markdown\"},"
+           "{\"uri\":\"rivora://recipes\",\"name\":\"recipes\",\"title\":\"Recipes: whole tasks in one call\",\"description\":\"The recipe tool's "
+           "tasks, their params and examples\",\"mimeType\":\"text/markdown\"},"
+           "{\"uri\":\"rivora://state\",\"name\":\"state\",\"title\":\"The level now\",\"description\":\"The editor's state and what is missing or "
+           "wrong in the level (inspect_level as Markdown)\",\"mimeType\":\"text/markdown\"}]}";
 }
 const char* mcp_resource_templates_json(void) {
     return "{\"resourceTemplates\":[{\"uriTemplate\":\"rivora://docs/{id}\",\"name\":\"doc\",\"title\":\"Knowledge base article\",\"description\":\"An article "
@@ -439,7 +490,10 @@ void mcp_compose_answer(McpCall* c) {
 // --- the state ---
 static void write_state(JsonWriter* jw, Editor* ed) {
     World* w = &ed->world;
-    jw_kstr(jw, "project", project()->name);
+    // (2026-11-25, the tester: the build's Content read as the default name "MyProject", taken for a real project) no
+    // project open: said so
+    jw_kstr(jw, "project", project_file()[0] ? project()->name : "(no project: the engine's own Content)");
+    jw_kbool(jw, "project_open", project_file()[0] != 0);
     jw_kstr(jw, "content_root", "/Content");
     const char* lp = ed->level_path;
     const char* cr = content_root();
@@ -483,6 +537,30 @@ static int find_type(const char* name) {
         if (ieq_loose(al[k].alias, name))
             for (int i = 0; i < n; i++)
                 if (ieq_loose(editor_place_name(i, NULL), al[k].name)) return i;
+    // (2026-11-25, the tester's gap: "Procedural World" was refused) the catalog's groups: "Procedural World" (its first:
+    // Terrain), "Procedural World: Facility", "Procedural World Facility", "Facility (Procedural World)", "Procedural Facility"
+    for (int i = 0; i < n; i++) {
+        const char* cat = NULL;
+        const char* t = editor_place_name(i, &cat);
+        char full[200];
+        snprintf(full, sizeof full, "%s %s", cat, t);
+        if (ieq_loose(full, name)) return i;
+        snprintf(full, sizeof full, "%s: %s", cat, t);
+        if (ieq_loose(full, name)) return i;
+        snprintf(full, sizeof full, "%s (%s)", t, cat);
+        if (ieq_loose(full, name)) return i;
+    }
+    for (int i = 0; i < n; i++) {
+        const char* cat = NULL;
+        editor_place_name(i, &cat);
+        if (ieq_loose(cat, name)) return i;
+    }
+    if (!_strnicmp(name, "Procedural ", 11)) // ("Procedural Facility", "Procedural Terrain")
+        for (int i = 0; i < n; i++) {
+            const char* cat = NULL;
+            const char* t = editor_place_name(i, &cat);
+            if (!strcmp(cat, "Procedural World") && ieq_loose(t, name + 11)) return i;
+        }
     return -1;
 }
 static void close_types(const char* name, char* out, size_t cap) {
@@ -532,7 +610,7 @@ static Entity spawn_asset(Editor* ed, const char* vpath, const float at[3], char
         }
     } else if (k == ASSET_BLUEPRINT || k == ASSET_SCRIPT) {
         ScriptFile* sf = k == ASSET_SCRIPT ? script_load(vpath) : NULL;
-        BpAsset* cls = k == ASSET_SCRIPT ? (sf ? sf->cls : NULL) : bp_load(vpath);
+        BpAsset* cls = k == ASSET_SCRIPT ? (sf ? sf->cls : NULL) : g_dry_cls && !_stricmp(vpath, g_dry_vpath) ? g_dry_cls : bp_load(vpath);
         if (!cls) {
             snprintf(err, ecap, "%s: %s", vpath, sf && sf->ndiags ? sf->diags[0].text : "not a class that compiles");
             return ENTITY_NONE;
@@ -616,6 +694,38 @@ static void set_props(Editor* ed, Entity e, const JsonValue* props, JsonWriter* 
             jw_str(errs, msg);
             (*nerr)++;
         }
+    }
+}
+
+// (2026-11-24) components: ["Health", "HUD Layout", "Rotating Movement"] added as Details > Add does (their defaults, the
+// example widgets they need made into Content/UI); a wrong name answers the close ones
+static void add_components(Editor* ed, Entity e, const JsonValue* list, JsonWriter* errs, int* nerr) {
+    World* w = &ed->world;
+    for (size_t i = 0; list && list->type == JSON_ARRAY && i < json_len(list); i++) {
+        const char* name = json_str(json_at(list, i), "");
+        int found = -1;
+        for (int k = 0; k < COMP_COUNT && found < 0; k++)
+            if (g_components[k].user_addable && ieq_loose(g_components[k].name, name)) found = k;
+        if (found < 0) {
+            char msg[700], near_[400] = "";
+            int got = 0;
+            char k4[6];
+            snprintf(k4, sizeof k4, "%.4s", name);
+            for (int k = 0; k < COMP_COUNT && got < 8; k++)
+                if (g_components[k].user_addable && (icontains(g_components[k].name, k4) || !k4[0])) {
+                    size_t l = strlen(near_);
+                    snprintf(near_ + l, sizeof near_ - l, "%s%s", got ? ", " : "", g_components[k].name), got++;
+                }
+            snprintf(msg, sizeof msg, "%s: no component '%s'%s%s (search {\"query\": \"component\"} lists them)", actor_name(w, e), name,
+                     got ? "; close: " : "", near_);
+            jw_str(errs, msg), (*nerr)++;
+            continue;
+        }
+        if (ecs_get(w, e, (ComponentId)found)) continue; // (already has it)
+        ecs_add(w, e, (ComponentId)found);
+        CTransform* t = ecs_get(w, e, COMP_TRANSFORM);
+        if (t && (found == COMP_RIGID_BODY || found == COMP_SKELETAL_MESH)) t->flags = (t->flags & ~TRANSFORM_MOBILITY_MASK) | MOBILITY_MOVABLE;
+        if (found == COMP_HUD_LAYOUT && !g_mcp_dry) hud_layout_asset(); // (WBP_GameHUD into Content/UI when missing; a dry run makes no file)
     }
 }
 
@@ -753,6 +863,10 @@ static void t_get_actor(McpCall* c, Editor* ed) {
         const Material* m = mat_find_hash(sm->material);
         if (m) jw_kstr(jw, "material", m->path);
     }
+    { // (2026-11-25) a Procedural World's kind (set by its type: "Procedural World: Facility")
+        const CProcWorld* pw = ecs_get(w, e, COMP_PROC_WORLD);
+        if (pw && pw->mode < PROCGEN_MODE_COUNT) jw_kstr(jw, "procedural_mode", g_procgen_mode_names[pw->mode]);
+    }
     if (json_get_bool(c->args, "properties", true)) {
         jw_key(jw, "properties");
         jw_obj_begin(jw);
@@ -850,6 +964,7 @@ static void t_spawn(McpCall* c, Editor* ed, double now) {
             CName* cn = ecs_get(w, e, COMP_NAME);
             if (cn) snprintf(cn->text, sizeof cn->text, "%s", un);
         }
+        add_components(ed, e, json_get(a, "components"), &errs, &nerr);
         set_props(ed, e, json_get(a, "properties"), &errs, &nerr);
         const char* mat = json_get_str(a, "material", "");
         char merr[300] = "";
@@ -921,6 +1036,7 @@ static void t_modify(McpCall* c, Editor* ed) {
             CName* cn = ecs_get(w, e, COMP_NAME);
             if (cn) snprintf(cn->text, sizeof cn->text, "%s", un);
         }
+        add_components(ed, e, json_get(a, "components"), &errs, &nerr);
         set_props(ed, e, json_get(a, "properties"), &errs, &nerr);
         const char* mat = json_get_str(a, "material", "");
         char merr[300] = "";
@@ -1007,19 +1123,52 @@ static void frame_actors(Editor* ed, const Entity* es, uint32_t n, float dist) {
     look(ed, from, c);
 }
 
+// (2026-11-25, the tester: [{"id":19}] answered {"selected":0} with no error) each entry checked as modify_actors does:
+// an id, "#id" or a name, or an object with "actor", "id" or "name"; the ones not found named in errors (none found: an error)
 static void t_select(McpCall* c, Editor* ed) {
     const JsonValue* list = json_get(c->args, "actors");
+    if (!list || list->type != JSON_ARRAY) {
+        fail(c, "actors: a list of actors (ids, \"#id\" or names; [] selects none)");
+        return;
+    }
     Entity es[512];
     uint32_t n = 0;
+    JsonWriter errs;
+    jw_init(&errs);
+    jw_arr_begin(&errs);
+    int nerr = 0;
     editor_select_none(ed);
-    for (size_t i = 0; list && i < json_len(list) && n < 512; i++) {
-        Entity e = find_actor(ed, json_at(list, i));
-        if (e) editor_select(ed, e, SEL_ADD), es[n++] = e;
+    for (size_t i = 0; i < json_len(list) && n < 512; i++) {
+        const JsonValue* v = json_at(list, i);
+        if (v && v->type == JSON_OBJECT) { // ({"id": 19} or {"actor": "Cube"}: what get/find_actors give back)
+            const JsonValue* k = json_get(v, "actor");
+            if (!k) k = json_get(v, "id");
+            if (!k) k = json_get(v, "name");
+            v = k;
+        }
+        Entity e = find_actor(ed, v);
+        if (!e) {
+            char r[160], m[260];
+            actor_ref_text(v, r, sizeof r);
+            snprintf(m, sizeof m, "actors[%zu]: no actor '%s' (an id, \"#id\" or a name; find_actors lists them)", i, r);
+            jw_str(&errs, m), nerr++;
+            continue;
+        }
+        editor_select(ed, e, SEL_ADD), es[n++] = e;
     }
+    jw_arr_end(&errs);
     if (json_get_bool(c->args, "focus", false)) frame_actors(ed, es, n, 0.0f);
     jw_obj_begin(&c->body);
     jw_kint(&c->body, "selected", n);
+    if (nerr) {
+        char* et = mcp_jw_take(&errs);
+        jw_key(&c->body, "errors");
+        jw_raw(&c->body, et ? et : "[]");
+        free(et);
+    }
     jw_obj_end(&c->body);
+    jw_free(&errs);
+    if (nerr && !n) c->is_error = true;
 }
 
 static void t_camera(McpCall* c, Editor* ed) {
@@ -1147,8 +1296,9 @@ static bool t_screenshot(McpCall* c, Editor* ed) {
 // --- scripts ---
 static int lang_of(const char* s) {
     if (!s || !s[0] || !_stricmp(s, "python") || !_stricmp(s, "py")) return SL_PYTHON;
-    if (!_stricmp(s, "real")) return SL_REAL;
+    if (!_stricmp(s, "real") || !_stricmp(s, "rivora") || !_stricmp(s, "rvs")) return SL_REAL; // (Rivora Script; "real" its old name)
     if (!_stricmp(s, "csharp") || !_stricmp(s, "c#") || !_stricmp(s, "cs")) return SL_CSHARP;
+    if (!_stricmp(s, "cpp") || !_stricmp(s, "c++") || !_stricmp(s, "rcpp")) return SL_CPP; // (2026-11-25, item 13)
     if (!_stricmp(s, "c")) return SL_C;
     return -1;
 }
@@ -1175,6 +1325,7 @@ static char* wrap_code(int lang, const char* code, int* line_offset) {
     const char* head = lang == SL_PYTHON ? "from realengine import *\n\nclass MCP_Run(EditorUtility):\n    def Run(self):\n"
                        : lang == SL_REAL ? "class MCP_Run extends EditorUtility\n    event Run()\n"
                        : lang == SL_CSHARP ? "using RealEngine;\n\npublic class MCP_Run : EditorUtility\n{\n    void Run()\n    {\n"
+                       : lang == SL_CPP ? "#include \"rivora.hpp\"\n\nclass MCP_Run : public EditorUtility {\npublic:\n    void Run() {\n"
                                            : "// parent: EditorUtility\n#include \"realengine.h\"\n\nvoid Run(void)\n{\n";
     const int indent = 8;
     *line_offset = 0;
@@ -1198,7 +1349,7 @@ static char* wrap_code(int lang, const char* code, int* line_offset) {
         p = e ? e + 1 : p + l;
     }
     if (!any && (lang == SL_PYTHON || lang == SL_REAL)) memcpy(out + o, "        pass\n", 13), o += 13;
-    const char* tail = lang == SL_CSHARP ? "    }\n}\n" : lang == SL_C ? "}\n" : "";
+    const char* tail = lang == SL_CSHARP ? "    }\n}\n" : lang == SL_CPP ? "    }\n};\n" : lang == SL_C ? "}\n" : "";
     o += (size_t)snprintf(out + o, cap - o, "%s", tail);
     out[o] = 0;
     return out;
@@ -1646,9 +1797,14 @@ static void t_log(McpCall* c, Editor* ed) {
     jw_obj_end(jw);
 }
 
-static void read_resource(McpCall* c) {
+static bool run_tool(McpCall* c, Editor* ed, double now);
+#include "mcp_guide.inc" // (2026-11-24) recipes, batches with undo and dry run, inspect_level, tool_help, search, the checks, "next"
+
+static void read_resource(McpCall* c, Editor* ed) {
     const char* uri = c->name;
     if (!strcmp(uri, "rivora://guide")) c->res_text = _strdup(k_guide);
+    else if (!strcmp(uri, "rivora://recipes")) c->res_text = recipes_markdown();
+    else if (!strcmp(uri, "rivora://state")) c->res_text = state_markdown(ed);
     else if (!strncmp(uri, "rivora://docs/", 14)) {
         const char* t = doc_text(uri + 14, 0);
         if (t) c->res_text = _strdup(t);
@@ -1657,9 +1813,23 @@ static void read_resource(McpCall* c) {
 
 bool mcp_tools_run(McpCall* c, Editor* ed, double now) {
     if (!strcmp(c->method, "resources/read")) {
-        read_resource(c);
+        read_resource(c, ed);
         return true;
     }
+    if (c->stage == 0 && c->frames == 0) { // (the first time: the arguments against the schema, before anything runs)
+        char err[900];
+        if (!check_call_args(c->name, c->args, err, sizeof err)) {
+            fail(c, "%s", err);
+            add_next(c, ed);
+            return true;
+        }
+    }
+    bool done = run_tool(c, ed, now);
+    if (done) add_next(c, ed);
+    return done;
+}
+
+static bool run_tool(McpCall* c, Editor* ed, double now) {
     const char* n = c->name;
     if (c->stage == 0 && c->frames == 0 && strcmp(n, "screenshot") && strcmp(n, "play")) jw_free(&c->body), jw_init(&c->body);
     if (!strcmp(n, "get_started")) t_get_started(c, ed);
@@ -1684,6 +1854,11 @@ bool mcp_tools_run(McpCall* c, Editor* ed, double now) {
     else if (!strcmp(n, "level")) t_level(c, ed, now);
     else if (!strcmp(n, "undo")) t_undo(c, ed, now);
     else if (!strcmp(n, "get_log")) t_log(c, ed);
-    else fail(c, "Unknown tool '%s' (tools/list has them)", n);
+    else if (!strcmp(n, "recipe")) t_recipe(c, ed, now);
+    else if (!strcmp(n, "batch")) t_batch(c, ed, now);
+    else if (!strcmp(n, "inspect_level")) t_inspect(c, ed);
+    else if (!strcmp(n, "tool_help")) t_tool_help(c);
+    else if (!strcmp(n, "search")) t_search(c, ed);
+    else fail(c, "Unknown tool '%s' (tools/list has them; tool_help gives each in one line)", n);
     return true;
 }

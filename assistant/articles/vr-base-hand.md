@@ -1,6 +1,6 @@
 id: vr-base-hand
 kind: howto
-title: Mão base do VR: exportar em FBX para modelar e riggar, e usar | VR base hand: export as FBX to model and rig, and use
+title: Mão base do VR: exportar em FBX para modelar e riggar, e usar | VR base hand: export as FBX to model and rig, and use | Mano base de VR: exportar como FBX para modelar y riggear, y usar
 keys: mao base, mão base, mao do vr, mão do vr, maos do vr, mãos do vr, exportar mao, exportar mão, mao em fbx, mão em fbx, malha da mao, malha da mão, skeletal mesh da mao, mao com esqueleto, mão com esqueleto, ossos da mao, ossos da mão, dedos, juntas do openxr, rigger, modelador, base hand, vr hand, vr hands, hand mesh, hand fbx, export base hand, use the base hand, hand skeleton, hand bones, finger bones, openxr joints, hand rig, rig a hand, mano base, mano de vr, exportar mano, huesos de la mano, fist, pinch, point, grip, thumbs up
 --- pt
 ```diagram steps
@@ -36,3 +36,20 @@ Project Settings > VR > Export Base Hand (FBX) | A modeler and a rigger redo the
 - A **Static Mesh** (.rmesh) still works as a rigid hand. **Hand Mesh Scale** and **Rotation** adjust both kinds.
 - Cost: ~0.0015 ms per hand per frame (the fingers solved on the CPU, the skin deformed on the GPU like any character's).
 - See also [VR games](article:vr-quest).
+--- es
+```diagram steps
+Project Settings > VR > Export Base Hand (FBX) | Un modelador y un rigger rehacen la mano (mismos nombres de huesos) | Importa el FBX en el Explorador de contenidos | Left/Right Hand Mesh = el nuevo Skeletal Mesh
+```
+- **Export Base Hand (FBX)...** (Project Settings > VR, bajo Hand Meshes) escribe `RealEngine_BaseHand_L.fbx`, `RealEngine_BaseHand_R.fbx` y un léame en una carpeta. Cada FBX tiene:
+  - una **malla con skin** (palma, dedos y pulgar, ~4k triángulos, centímetros, Z arriba);
+  - el **esqueleto de las 26 articulaciones de la mano de OpenXR**: `Wrist`, `Palm` y, para Thumb, Index, Middle, Ring y Little, los huesos `Metacarpal`, `Proximal`, `Intermediate` (no en el pulgar), `Distal` y `Tip`, con el sufijo `_L` o `_R`;
+  - **7 poses** como animaciones (30 fps, de abierta en el cuadro 0 a la pose en el cuadro 10): Open, Relaxed, Fist, Grip, Point, Pinch, ThumbsUp.
+- Se abre en **Blender** y **Maya** con sus huesos, pesos y animaciones. Dáselo a un modelador y a un rigger: la malla puede cambiar libremente; **mantén los nombres de los huesos** (el sufijo puede cambiar, y "Pinky" cuenta como Little). Así es como el motor mueve los dedos.
+- **Use the Base Hand** importa la mano en `/Content/VR/Hands` y la pone en ambas manos: pruébala enseguida con **Jugar > VR Preview**.
+- Para usar la mano nueva: importa el FBX en el Explorador de contenidos y elige el Skeletal Mesh en **Left Hand Mesh** y **Right Hand Mesh**.
+- Cómo se mueven los dedos:
+  - **Manos rastreadas** (sin mando): cada hueso apunta a la siguiente articulación real, y la mano se coloca en la muñeca y los nudillos reales.
+  - **Mandos**: el gatillo cierra el índice, el agarre los demás, y los botones A/B/X/Y bajan el pulgar. El motor mezcla las animaciones **Open** y **Fist** de tu mano dedo por dedo (las encuentra por nombre). Sin ellas, cada dedo se dobla alrededor de los ejes de sus propios huesos.
+- Un **Static Mesh** (.rmesh) sigue funcionando como una mano rígida. **Hand Mesh Scale** y **Rotation** ajustan ambos tipos.
+- Costo: ~0.0015 ms por mano por cuadro (los dedos se resuelven en la CPU, la piel se deforma en la GPU como la de cualquier personaje).
+- Consulta también [Juegos de VR](article:vr-quest).

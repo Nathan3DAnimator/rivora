@@ -1,6 +1,6 @@
 id: gaussian-splat
 kind: concept
-title: Cenário escaneado (Gaussian Splatting) | Scanned scenery (Gaussian Splatting)
+title: Cenário escaneado (Gaussian Splatting) | Scanned scenery (Gaussian Splatting) | Gaussian Splat
 keys: gaussian splatting, gaussian splat, 3dgs, 3dgs ply, load a 3dgs ply file, ply file, carregar ply, arquivo ply, splat, splats, .ply, .splat, escanear, scan, escaneado, scanned scene, fotogrametria, photogrammetry, captura de celular, phone capture, luma, polycam, postshot, nuvem de gaussianas, cenario realista escaneado, REALENGINE_NO_SPLATS
 --- pt
 ```diagram steps
@@ -32,3 +32,18 @@ A **Gaussian Splat** shows a scanned place as millions of 3D "blobs" (the 3DGS m
 - **Cost** (RTX 3060, Epic): ~1.4 ms with 140 thousand Gaussians near the camera; it grows with how many overlap on screen.
 - **Examples:** `Splats/Example_Bush2.splat` and `Splats/Example_Flowers.ply` (test scene `splat`).
 - **Not yet:** shadows from the Gaussians, color changing with the angle (the SH bands above 0) and tiled rasterization for scenes of millions.
+--- es
+```diagram steps
+Escanea un lugar con el teléfono y entrénalo (Luma, Polycam, Postshot...)
+Exporta el .ply (3DGS) o .splat y ponlo en Content/Splats
+Añadir > Visual Effects > Gaussian Splat, apunta File hacia él
+La GPU ordena las gaussianas en cada cuadro y las dibuja sobre la escena
+```
+Un **Gaussian Splat** muestra un lugar escaneado como millones de "manchas" 3D (el método 3DGS): el atajo hacia un escenario fotorrealista sin modelar.
+- **Cómo usarlo:** entrena la captura en una aplicación (Luma, Polycam, Postshot, el 3DGS original) y exporta el **.ply** (o un **.splat**). Ponlo en `Content/Splats/` y, en **Añadir > Visual Effects > Gaussian Splat**, escribe la ruta en **File**.
+- **Ejes y escala:** **Up Axis** (los entrenamientos 3DGS usan -Y arriba, el valor por defecto) y **Unit** (100: el archivo en metros). Gíralo, muévelo y escálalo con el actor.
+- **Luz:** **Lit by the Scene** usa el color como albedo bajo el cielo y el sol de la escena; **Own Light** muestra el color como luz propia (**Brightness** en nits), bueno para capturas con su luz ya incorporada.
+- **Con las mallas:** lo que está delante oculta las gaussianas y ellas se ven detrás de las mallas correctas (la profundidad de la escena).
+- **Costo** (RTX 3060, Épico): ~1,4 ms con 140 mil gaussianas cerca de la cámara; crece con cuántas se superponen en pantalla.
+- **Ejemplos:** `Splats/Example_Bush2.splat` y `Splats/Example_Flowers.ply` (escena de prueba `splat`).
+- **Aún no:** sombras de las gaussianas, color que cambia con el ángulo (las bandas SH por encima de 0) y rasterización por mosaicos para escenas de millones.

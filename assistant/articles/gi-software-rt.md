@@ -1,6 +1,6 @@
 id: gi-software-rt
 kind: concept
-title: Iluminação global sem placa RTX (ray tracing por software) | Global illumination without an RTX card (software ray tracing)
+title: Iluminação global sem placa RTX (ray tracing por software) | Global illumination without an RTX card (software ray tracing) | GI sin ray tracing por hardware
 keys: gi sem rtx, gi sem ray tracing, sem ray tracing, no ray tracing, software ray tracing, ray tracing por software, placa sem rtx, gpu sem ray tracing, gtx, amd antiga, intel integrada, celular, android, quest, luz indireta no celular, indirect light on mobile, lumen software, no-rt, REALENGINE_NO_SWRT, gi no android
 --- pt
 ```diagram steps
@@ -28,3 +28,16 @@ On a card **without hardware ray tracing** (GTX, older AMD, Intel integrated, An
 - **Cost** (RTX 3060 with ray tracing off, Medium): the house at ~400 fps with 0.5 ms of GI; the RPG at ~130 fps with 2.6 ms. On a phone use the Low or Medium presets.
 - **Masked foliage** blocks light as if opaque in this mode.
 - For the old behavior (sky and lightmaps only): `REALENGINE_NO_SWRT=1`. To test on a PC: `--no-rt`.
+--- es
+```diagram steps
+La GPU no tiene ray tracing por hardware
+El motor construye una BVH por malla y una sobre las instancias
+La caché de superficie y las sondas trazan por software
+La luz indirecta sigue a las luces en movimiento, como en una RTX
+```
+En una tarjeta **sin ray tracing por hardware** (GTX, AMD más antiguas, Intel integradas, teléfonos Android, Quest), la iluminación global sigue siendo **dinámica**: el motor traza los rayos de la GI por **software**, recorriendo sus propias estructuras (BVH) en la GPU. Es automático.
+- **El mismo resultado:** la luz indirecta queda a ~1% de la versión por hardware. Una luz en movimiento rebota; abrir una puerta cambia la luz de la habitación.
+- **Qué cambia sin RTX:** no existen los reflejos trazados ni las sombras por ray tracing; las sombras de las luces vienen de mapas de sombra. El path tracer (tecla P) también es solo por hardware.
+- **Costo** (RTX 3060 con ray tracing apagado, Medio): la casa a ~400 fps con 0,5 ms de GI; el RPG a ~130 fps con 2,6 ms. En un teléfono usa los presets Bajo o Medio.
+- **El follaje Masked** bloquea la luz como si fuera opaco en este modo.
+- Para el comportamiento antiguo (solo cielo y lightmaps): `REALENGINE_NO_SWRT=1`. Para probar en un PC: `--no-rt`.

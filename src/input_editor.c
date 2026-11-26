@@ -1,5 +1,6 @@
 // The Enhanced Input assets' editors (Unreal's): an Input Action (its value type, Consume Input, its triggers and
 // modifiers) and an Input Mapping Context (its mappings: an action, a key, each one's modifiers and triggers).
+#include "editor_docs.h"
 #include "input_editor.h"
 
 #include <stdio.h>
@@ -217,4 +218,18 @@ void input_editor_draw(void) {
         if (E.unsaved) E.action ? input_action_save(E.action) : input_context_save(E.context);
         E.action = NULL, E.context = NULL;
     }
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+int input_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    if (!E.action && !E.context) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) return E.action = NULL, E.context = NULL, E.unsaved = false, 1;
+    if (!E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, E.action ? E.action->name : E.context->name), 1;
+    bool ok = E.action ? input_action_save(E.action) : input_context_save(E.context);
+    if (ok) E.unsaved = false;
+    return !ok;
 }

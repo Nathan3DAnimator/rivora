@@ -1,6 +1,6 @@
 id: soft-body
 kind: howto
-title: Corpo mole: almofadas, colchões, bolas de borracha, gelatina, barriga | Soft body: cushions, mattresses, rubber balls, jelly, belly
+title: Corpo mole: almofadas, colchões, bolas de borracha, gelatina, barriga | Soft body: cushions, mattresses, rubber balls, jelly, belly | Cuerpo blando: cojines, colchones, pelotas de goma, gelatina, barriga
 keys: corpo mole, soft body, soft physics, fisica mole, almofada, cushion, sofa, sofá, colchao, mattress, espuma, foam, borracha, rubber, bola, ball, gelatina, jelly, gordura, fat, barriga, belly, carne, flesh, jiggle, amassar, squash, deformar, deform, volume, tetraedros, tetrahedra, neo-hookean, vbd, plasticidade, plasticity, memory foam, espuma viscoelastica, amassado, dent, preso, held, pinned, soltar, release, criar corpo mole a partir da selecao, make soft body from selected, chaos flesh
 --- pt
 ```diagram steps
@@ -31,6 +31,23 @@ A **Soft Body** is an actor with its **Static Mesh** and a **Cloth** component o
 - It **collides** with the level's meshes, the characters (their bones), physics bodies, cloths and the other soft bodies. A **physics box** dropped on a cushion **sinks in and stops**: the soft body pushes back (**Push Physics Bodies**).
 - It **sleeps** when still (no cost) or far from the camera, and wakes when touched. The sofa of 3 cushions costs ~0.47 ms on an RTX 3060.
 - Use a mesh with enough vertices (a 24-vertex box only bends at its corners): imported meshes and the sphere do.
+```blueprint
+Event Hit -> Add Soft Body Impulse ( Target = self, Location = Hit Location, Radius = 30, Velocity = Make Vector(0, 0, -300) )
+Event Key H -> Set Soft Body Stiffness ( Target = self, Stiffness = 40 )
+Event Key R -> Set Soft Body Pinned ( Target = self, Pinned = false )
+```
+--- es
+```diagram steps
+Selecciona una Static Mesh (cojín, colchón, pelota) | Actor > Make Soft Body from Selected (o Quick Add > Soft Body) | Detalles > Soft Body: Preset, Stiffness, Keep Volume, Held By | Jugar (Alt+P): se aplasta, rebota, sostiene cajas | Blueprint: Add Soft Body Impulse, Set Soft Body Stiffness, Set Soft Body Pinned
+```
+## Cómo funciona
+Un **Soft Body** es un actor con su **Static Mesh** y un componente **Cloth** de tipo **Soft Body**. La malla se coloca dentro de una **red de cubos** (las celdas que llena), cada cubo dividido en **6 tetraedros**, simulada en la GPU por el propio **Vertex Block Descent** de la tela con elasticidad **Neo-Hookean estable**: se aplasta, rebota y **conserva su volumen** (Keep Volume cerca de 0,5 se abulta por los lados al apretarlo). La malla se dibuja doblada con **su propio material**, sombras y rayos.
+- **Presets**: Foam, Rubber, Jelly, Cushion, Flesh (densidad, rigidez, volumen, amortiguación y abolladuras de una vez).
+- **Held By**: Free (cae y rueda), Bottom (un cojín sobre su asiento), Band, Bone (barriga y grasa sujetas a un hueso con **Follow Actor/Bone**, desvaneciéndose a lo largo del **Falloff**) o **Painted** (los colores de vértice de la malla: rojo sujeto, negro libre).
+- **Plasticidad**: una abolladura se queda y vuelve despacio (**Dent Recovery**), como la espuma viscoelástica.
+- **Colisiona** con las mallas del nivel, los personajes (sus huesos), los cuerpos de física, las telas y los demás cuerpos blandos. Una **caja de física** soltada sobre un cojín **se hunde y se detiene**: el cuerpo blando empuja de vuelta (**Push Physics Bodies**).
+- **Duerme** cuando está quieto (sin costo) o lejos de la cámara, y despierta al tocarlo. El sofá de 3 cojines cuesta ~0,47 ms en una RTX 3060.
+- Usa una malla con suficientes vértices (una caja de 24 vértices solo se dobla en sus esquinas): las mallas importadas y la esfera sí lo tienen.
 ```blueprint
 Event Hit -> Add Soft Body Impulse ( Target = self, Location = Hit Location, Radius = 30, Velocity = Make Vector(0, 0, -300) )
 Event Key H -> Set Soft Body Stiffness ( Target = self, Stiffness = 40 )

@@ -225,6 +225,11 @@ void services_init(Editor* ed) {
 
     update_endpoint_urls(endpoints_get("update", "releases_repo"), endpoints_get("update", "latest_url"), U.api, sizeof U.api,
                          U.page, sizeof U.page);
+    if (!endpoints_get("update", "latest_url")[0]) { // (2026-11-25) the relay first (no API limit), then the API, then the feed
+        char relay[600];
+        update_relay_url(endpoints_get("reports", "report_url"), endpoints_get("update", "releases_repo"), relay, sizeof relay);
+        if (relay[0]) snprintf(U.api, sizeof U.api, "%s", relay);
+    }
     if (!getenv("REALENGINE_NO_UPDATE_CHECK")) start_check(false); // the tests and --bench skip it
 }
 

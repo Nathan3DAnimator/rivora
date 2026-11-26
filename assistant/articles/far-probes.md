@@ -1,6 +1,6 @@
 id: far-probes
 kind: concept
-title: Luz indireta ao longe (sondas distantes) | Distant indirect light (far probes)
+title: Luz indireta ao longe (sondas distantes) | Distant indirect light (far probes) | Luz indirecta a lo lejos (sondas lejanas)
 keys: luz indireta longe, gi longe, gi distante, far field, far probes, sondas distantes, cascata de sondas, probe cascade, montanha escura, predio longe sem luz, distant building lighting, paisagem grande gi, landscape gi, horizonte iluminacao, REALENGINE_NO_FAR_PROBES
 --- pt
 ```diagram steps
@@ -26,3 +26,15 @@ Global illumination uses **probes** (points that measure light in every directio
 - **Cost** (RTX 3060, Epic): from almost nothing in a village to ~0.45 ms in a large landscape.
 - **No seam:** across the near grid's last probes the two blend.
 - To compare without it: `REALENGINE_NO_FAR_PROBES=1`.
+--- es
+```diagram steps
+Cerca de la cámara: sondas cada 2 m (unos 64 m alrededor)
+Más allá: una segunda grilla, sondas cada 16 m (unos 512 m)
+En el borde las dos se mezclan, sin costura
+Se activa sola cuando la escena es más grande que la grilla cercana
+```
+La iluminación global usa **sondas** (puntos que miden la luz en todas las direcciones). Antes, más allá de ~64 m de la cámara solo había la luz del cielo: un edificio o una colina lejanos no recibían rebote del suelo ni se oscurecían donde algo los tapaba. Ahora una **segunda grilla de sondas**, 8 veces más separadas, llega a ~512 m.
+- **Automático:** se activa cuando la escena pasa de la grilla cercana (aldeas, paisajes). Una casa o una habitación no pagan nada.
+- **Costo** (RTX 3060, Epic): desde casi nada en una aldea hasta ~0,45 ms en un paisaje grande.
+- **Sin costura:** entre las últimas sondas de la grilla cercana las dos se mezclan.
+- Para comparar sin ella: `REALENGINE_NO_FAR_PROBES=1`.

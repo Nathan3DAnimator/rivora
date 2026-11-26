@@ -22,6 +22,9 @@
 #define MOP_OUTPUT 313      // in: a closure: the material's result
 #define MOP_SET_W 315        // out = (in 0's xyz, in 1's x): the height into the closure's alpha (M7, parallax)
 #define MOP_BUMP_HEIGHTS 314 // in: strength, distance, h, normal, h(+u), h(+v); p0 invert, p1 the texel (float): out normal
+// (2026-11-24) out = (in 0[p0], in 1[p1], in 2[p2], in 3[p3]): the bake's result put together from the parts the affine fold
+// keeps baked (material_affine.inc: a channel a parameter only scales or offsets bakes its root, the shader applies a, b)
+#define MOP_GATHER 316
 
 #define MAT_MAX_SLOTS 4     // baked intermediate textures a dynamic material reads
 #define MAT_VM_REGS 32      // registers of the per-pixel program (the bake has MAT_BAKE_REGS)
@@ -46,7 +49,11 @@
 #define MATF_EYE 512u        // the Eye shading model (A9.3c): the iris refracted under the cornea (a coat), e7.xy its radius and depth
 #define MATF_TOON 2048u     // (Q11) the Toon shading model: its block after the GpuMatExt table (toon.glsl GpuToon), lit in bands (mesh.frag)
 #define MATF_UDIM 4096u     // (Q18) UDIM: a tile per unit square of the UV, anim.w its table in the parameters (mesh.frag udim_tile)
-#define MATF_TESS 8192u     // (Q17) Nanite Tessellation (Enable Tessellation): the baked base's alpha displaces its DAG clusters, diced on the GPU (tess.glsl); GpuMaterial anim.z its magnitude (a still one: anim.z is the flipbook's) (cm) and center (two halfs)
+// (2026-11-24) the affine fold (material_affine.inc): the slot's GpuMatAff block (mat_common.glsl) turns the baked base, metallic,
+// roughness and emission into the final ones (bake * a + b): its parameters (Material Instances, Blueprints) and its Emission
+// Intensity change without a bake
+#define MATF_AFFINE 16384u
+#define MATF_TESS 8192u   // (Q17) Nanite Tessellation (Enable Tessellation): the baked base's alpha displaces its DAG clusters, diced on the GPU (tess.glsl); GpuMaterial anim.z its magnitude (a still one: anim.z is the flipbook's) (cm) and center (two halfs)
 #define MATF_EXT 128u       // the Principled BSDF's extra lobes (GpuMaterial.ext: coat, anisotropy, subsurface, specular tint / IOR, transmission)
 
 #endif

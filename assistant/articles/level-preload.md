@@ -1,6 +1,6 @@
 id: level-preload
 kind: recipe
-title: Carregar o mapa no lobby sem travar (pré-carregar nível com velocidade) | Load the map in the lobby without hitches (preload a level at a speed)
+title: Carregar o mapa no lobby sem travar (pré-carregar nível com velocidade) | Load the map in the lobby without hitches (preload a level at a speed) | Cargar el mapa en el lobby sin trabas (precargar un nivel con velocidad)
 keys: carregar o mapa, mapa no lobby, carregar o mapa no lobby, carregar sem travar, travar ao carregar, carregar mapa sem travar, pre carregar nivel, pré-carregar nível, preload level, carregar em segundo plano, background loading, async loading, load level async, carregar mapa no lobby, lobby, velocidade de carregamento, load speed, carregar sem travar, loading without hitches, tela de carregamento, loading screen, trocar de nivel sem travar, seamless level switch, open level instantaneo, carregar mapa enorme, big map loading, set async loading speed, get level preload progress
 --- pt
 ```diagram steps
@@ -29,6 +29,22 @@ Lobby: Preload Level (Load Speed 0.05) | The map loads little by little, no Begi
 - **Get Level Preload Progress** gives the progress (0 to 1) and **Ready**.
 - **Open Level (by Name)** of a preloaded level **swaps it in at once, like a camera cut**. Not finished yet: the **loading screen** shows and it finishes at full speed.
 - **Set Async Loading Speed** applies to every background load (the preloads without a speed of their own and **Load Stream Level**).
+
+```blueprint
+Event BeginPlay -> Preload Level ( Level Name = "BigMap", Load Speed = 0.05 )
+Event Custom EveryoneReady -> Set Level Load Speed ( Level Name = "BigMap", Load Speed = 1 ) -> Open Level (by Name) ( Level Name = "BigMap" )
+```
+--- es
+```diagram steps
+Lobby: Preload Level (Load Speed 0.05) | El mapa carga poco a poco, sin BeginPlay | Todos listos: Set Level Load Speed 1 | Open Level: entras al instante (o una pantalla de carga corta)
+```
+## Cómo funciona
+- **Preload Level** (Level Name, Load Speed) carga un nivel **por detrás**, sin abrirlo: su archivo se lee en porciones y sus actores se construyen aparte. **No se ejecuta nada** (ni BeginPlay, ni se dibuja nada) hasta el cambio.
+- **Load Speed** va de **0.01** (muy lento y ligero: el lobby sigue fluido) a **1** (lo más rápido posible). **0** usa la velocidad global (**Set Async Loading Speed**).
+- **Set Level Load Speed** cambia la velocidad **mientras carga**: baja mientras el lobby se juega, alta cuando todos pulsaron Play.
+- **Get Level Preload Progress** da el progreso (0 a 1) y **Ready**.
+- **Open Level (by Name)** de un nivel precargado **lo cambia al instante, como un corte de cámara**. Si aún no terminó: aparece la **pantalla de carga** y termina a toda velocidad.
+- **Set Async Loading Speed** se aplica a toda carga en segundo plano (las precargas sin velocidad propia y **Load Stream Level**).
 
 ```blueprint
 Event BeginPlay -> Preload Level ( Level Name = "BigMap", Load Speed = 0.05 )

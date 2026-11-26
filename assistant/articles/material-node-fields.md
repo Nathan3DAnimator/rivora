@@ -1,6 +1,6 @@
 id: material-node-fields
 kind: howto
-title: Material Editor: editar os valores direto no nó | Material Editor: edit values right on the node
+title: Material Editor: editar os valores direto no nó | Material Editor: edit values right on the node | Material Editor: editar los valores directamente en el nodo
 keys: material editor, editor de material, valor no no, value on node, editar no no, edit on node, campo, field, arrastar valor, drag value, slider, barra, fator, factor, cor no no, color on node, seletor de cor, color picker, lista do no, node dropdown, distribuicao, distribution, metodo, method, como no blender, like blender, como no tlender, like tlender, sem detalhes, without details, mudar valor rapido, change value fast, numero, number
 --- pt
 ```diagram steps
@@ -34,3 +34,19 @@ A **linked** input shows no field (its value comes from the link). The fields sh
 Touching a field selects its node; the **Details** panel keeps every field and shows the same values.
 
 While you drag, the material is rebaked without compression (fast, the same textures reused); once you stop, it's compressed again.
+--- es
+```diagram steps
+Acércate con el zoom | Arrastra el número en el nodo | Haz clic para escribir | El material se actualiza solo
+```
+## Los valores viven en el propio nodo (como en Blender y el Tlender)
+- **Números**: arrastra hacia los lados para cambiarlos; un clic sin arrastrar abre el valor para **escribir** (Enter confirma). El nombre de la entrada queda dentro del campo.
+- **Factores (0 a 1)**, como Metallic y Alpha: la barra se llena hasta el valor; arrastra para elegir.
+- **Colores**: haz clic en la muestra junto a la entrada (o en la franja del nodo RGB) para abrir el selector de color.
+- **Vectores**: los tres números X Y Z junto al nombre.
+- **Ajustes del nodo** (Distribution, Subsurface Method, la operación Math...): la lista queda justo debajo de las salidas; las casillas también.
+- Nodos **Value** y **RGB**: el valor o el color en el cuerpo del nodo.
+
+Una entrada **enlazada** no muestra campo (su valor viene del enlace). Los campos aparecen con un zoom del 80 % o más; más lejos, el nodo muestra el valor como texto.
+Tocar un campo selecciona su nodo; el panel de **Detalles** mantiene todos los campos y muestra los mismos valores.
+
+Mientras arrastras, el material se vuelve a hornear sin compresión (rápido, reutilizando las mismas texturas); al soltar, se comprime de nuevo.

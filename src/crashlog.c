@@ -1626,7 +1626,10 @@ void crash_fatal(const char* kind, const char* fmt, ...) {
     abort();
 }
 
+// (item 21) the UI sweep's (ui_sweep.c sets it while it runs: an assert recorded on the control, the run goes on)
+bool (*g_ui_sweep_assert_hook)(const char* expr, const char* file, int line);
 void re_imgui_assert_fail(const char* expr, const char* file, int line) {
+    if (g_ui_sweep_assert_hook && g_ui_sweep_assert_hook(expr, file, line)) return;
     const char* f = file ? file : "?";
     for (const char* c = f; *c; c++)
         if (*c == '/' || *c == '\\') f = c + 1;

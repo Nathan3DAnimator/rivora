@@ -1,6 +1,6 @@
 id: performance-budget
 kind: concept
-title: Orçamento de desempenho (para profissionais) | Performance budget (for professionals)
+title: Orçamento de desempenho (para profissionais) | Performance budget (for professionals) | Presupuesto de rendimiento
 keys: orcamento, budget, 200 fps, 100 fps, 10 ms, meta de fps, profiling, perfilar, gargalo, cpu bound, gpu bound, timestamps, medir custo, otimizacao profissional, fatias do quadro, frame budget, orcamento do quadro, frame slices
 --- pt
 ```diagram bars ms
@@ -12,7 +12,7 @@ Câmera, cor e pós: 0.8
 Reconstrução e UI: 0.7
 ```
 - As metas da engine: **200 FPS a 1440p** na GPU de desenvolvimento (5 ms por quadro) nas cenas simples e abaixo do Épico; no **Épico**, o vídeo-realismo cabe em **10 ms** (acima de 100 FPS). O gráfico mostra como os 10 ms se dividem.
-- **F10 Debug Viewer > Frame Budget:** cada fatia do quadro com o tempo de agora e a meta dela; o que passou aparece como "(over)". As fatias de CPU também estão lá: render, Blueprints, física, animação, IA, partículas e os módulos de jogo. [Abrir](open:debug)
+- **F10 Debug Viewer > Frame Budget:** cada fatia do quadro com o tempo de agora e a meta dela; o que passou aparece como "(over)". As fatias de CPU também estão lá: render, Grafos, física, animação, IA, partículas e os módulos de jogo. [Abrir](open:debug)
 - **Medir antes de mudar:** a barra de status separa CPU e GPU; **Ferramentas > Medir o Quadro (3 s)** dá médias estáveis. [Medir](run:measure)
 - **Na linha de comando:** `--bench 5 --budget 10` mede 5 s e falha se a GPU ou a CPU passar de 10 ms; com `--budget-strict`, falha também quando uma fatia passa da meta dela. Os testes `budget_house`, `budget_rpg` e `budget_heavy` usam isso.
 - **Modo de visualização Object Cost:** colore cada objeto pelo custo.
@@ -28,9 +28,25 @@ Camera, color and post: 0.8
 Reconstruction and UI: 0.7
 ```
 - The engine's targets: **200 FPS at 1440p** on the development GPU (5 ms a frame) in simple scenes and below Epic; at **Epic**, video realism fits **10 ms** (above 100 FPS). The chart shows how the 10 ms are split.
-- **F10 Debug Viewer > Frame Budget:** each slice of the frame with its time now and its goal; one past it shows "(over)". The CPU slices are there too: render, Blueprints, physics, animation, AI, particles and the game modules. [Open it](open:debug)
+- **F10 Debug Viewer > Frame Budget:** each slice of the frame with its time now and its goal; one past it shows "(over)". The CPU slices are there too: render, Graphs, physics, animation, AI, particles and the game modules. [Open it](open:debug)
 - **Measure before changing:** the status bar splits CPU and GPU; **Tools > Measure Frame Time (3 s)** gives steady averages. [Measure](run:measure)
 - **From the command line:** `--bench 5 --budget 10` measures 5 s and fails when the GPU or the CPU goes past 10 ms; with `--budget-strict` it also fails when a slice goes past its goal. The tests `budget_house`, `budget_rpg` and `budget_heavy` use it.
 - **The Object Cost view mode:** colors each object by its cost.
 - High CPU: too much logic per Tick (use timers, events), many actors with AI, many animated characters.
 - High GPU: resolution and scalability (TSR or an upscaler), shadows, translucent materials, overlapping local lights, meshes without LODs.
+--- es
+```diagram bars ms
+Geometría y materiales: 3.0
+Luz directa y sombras: 1.5
+GI y reflejos: 3.0
+Volúmenes, agua y cielo: 1.0
+Cámara, color y post: 0.8
+Reconstrucción e interfaz: 0.7
+```
+- Las metas del motor: **200 FPS a 1440p** en la GPU de desarrollo (5 ms por cuadro) en escenas simples y por debajo de Épico; en **Épico**, el realismo de video cabe en **10 ms** (más de 100 FPS). El gráfico muestra cómo se reparten los 10 ms.
+- **F10 Debug Viewer > Frame Budget:** cada porción del cuadro con su tiempo actual y su meta; una que se pasa muestra "(over)". Las porciones de CPU también están ahí: render, Grafos, física, animación, IA, partículas y los módulos del juego. [Abrirlo](open:debug)
+- **Mide antes de cambiar:** la barra de estado separa CPU y GPU; **Herramientas > Medir el tiempo del cuadro (3 s)** da promedios estables. [Medir](run:measure)
+- **Desde la línea de comandos:** `--bench 5 --budget 10` mide 5 s y falla cuando la GPU o la CPU pasan de 10 ms; con `--budget-strict` también falla cuando una porción pasa de su meta. Las pruebas `budget_house`, `budget_rpg` y `budget_heavy` lo usan.
+- **El modo de vista Object Cost:** colorea cada objeto según su costo.
+- CPU alta: demasiada lógica por Tick (usa timers, eventos), muchos actores con IA, muchos personajes animados.
+- GPU alta: resolución y escalabilidad (TSR o un upscaler), sombras, materiales translúcidos, luces locales superpuestas, mallas sin LODs.

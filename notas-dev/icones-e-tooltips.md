@@ -92,4 +92,4 @@ Ids genéricos usados em vários lugares com sentidos diferentes foram renomeado
   quadro em que o item está sob o mouse; a linha do Details guarda um ponteiro por linha; os pontos do fundo do grafo
   são quads direto na draw list (~7 mil num grafo de 1440p em zoom 1).
 - Cuidado ao medir: uma pasta de build antiga guarda `RE_VERSION_STRING` no cache (aqui era 0.24): o editor abre um
-  aviso de versão e o `dock_targets` falha em tudo. `cmake -U RE_VERSION_STRING build` resolve.
+  aviso de versão e o `dock_targets` falha em tudo. `cmake -U RE_VERSION_STRING build` resolve (desde 20/11 os testes não fazem a checagem e o `dock_targets` não depende disso).

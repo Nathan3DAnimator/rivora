@@ -1927,6 +1927,9 @@ void ImGui_ImplVulkanH_CreateOrResizeWindow(VkInstance instance, VkPhysicalDevic
     ImGui_ImplVulkanH_CreateWindowSwapChain(physical_device, device, wd, allocator, width, height, min_image_count, image_usage);
     ImGui_ImplVulkanH_CreateWindowCommandBuffers(physical_device, device, wd, queue_family, allocator);
 
+#if 0 // [Real Engine] (2026-11-25) not done: every swapchain image moved UNDEFINED -> PRESENT_SRC in a submit of its own,
+      // none of them acquired (VUID-vkQueueSubmit: "a layout transition on presentable VkImage ... not been acquired", two
+      // per floating window). ImGui_ImplVulkan_RenderWindow takes each one from UNDEFINED after its acquire instead
     // FIXME: to submit the command buffer, we need a queue. In the examples folder, the ImGui_ImplVulkanH_CreateOrResizeWindow function is called
     // before the ImGui_ImplVulkan_Init function, so we don't have access to the queue yet. Here we have the queue_family that we can use to grab
     // a queue from the device and submit the command buffer. It would be better to have access to the queue as suggested in the FIXME below.
@@ -2001,6 +2004,7 @@ void ImGui_ImplVulkanH_CreateOrResizeWindow(VkInstance instance, VkPhysicalDevic
     command_buffer = VK_NULL_HANDLE;
     fence = VK_NULL_HANDLE;
     queue = VK_NULL_HANDLE;
+#endif // [Real Engine]
 }
 
 void ImGui_ImplVulkanH_DestroyWindow(VkInstance instance, VkDevice device, ImGui_ImplVulkanH_Window* wd, const VkAllocationCallbacks* allocator)
@@ -2230,7 +2234,7 @@ static void ImGui_ImplVulkan_RenderWindow(ImGuiViewport* viewport, void*)
             VkImageMemoryBarrier barrier = {};
             barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // [Real Engine] (2026-11-25) from UNDEFINED: the first frame's image never was PRESENT_SRC (the creation's own transition is gone), and it is cleared or fully drawn anyway
             barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             barrier.image = fd->Backbuffer;
             barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;

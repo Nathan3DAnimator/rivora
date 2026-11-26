@@ -6,6 +6,14 @@
 // the point is in the light's own map: a spot's cone (its slide, the far plane of the cone is the texture), a point
 // light's directions (octahedral), a directional light's world tiled every L.half_h cm across its direction. A material
 // with a Time node plays its loop (its frames blended, as on a surface). lights.c puts its slot + 1 in L.half_w
+// (2026-11-24) the affine fold (its parameters and Emission Intensity by Blueprint: a flickering bulb without a bake); the
+// base color as it was read (sRGB-encoded)
+vec3 light_fn_affine(FrameBuf f, GpuMaterial gm, uint slot, bool em, vec3 c) {
+    if ((gm.flags & MATF_AFFINE) == 0u) return c;
+    if (em) return mat_affine_emis(f.materials, slot, c);
+    vec3 l = mat_affine_base(f.materials, slot, srgb_to_linear(c));
+    return mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), l));
+}
 vec3 light_fn(FrameBuf f, GpuLight L, vec3 p) {
     GpuMaterial gm = GpuMaterialBuf(f.materials).m[uint(L.half_w + 0.5) - 1u];
     vec3 w = p - L.position, d = L.direction, r = L.right, u = cross(d, r);
@@ -25,9 +33,10 @@ vec3 light_fn(FrameBuf f, GpuLight L, vec3 p) {
         float ft = fract(f.camera_pos.w / max(uintBitsToFloat(gm.anim.y), 0.05)) * float(gm.anim.x);
         uint f0 = uint(ft) % gm.anim.x, f1 = (f0 + 1u) % gm.anim.x;
         uvec4 t0 = MatFrameBuf(f.mat_params).t[gm.anim.z + f0], t1 = MatFrameBuf(f.mat_params).t[gm.anim.z + f1];
-        return mix(textureLod(u_mat_tex[nonuniformEXT(em ? t0.z : t0.x)], uv, 0.0).rgb, textureLod(u_mat_tex[nonuniformEXT(em ? t1.z : t1.x)], uv, 0.0).rgb, fract(ft));
+        vec3 c = mix(textureLod(u_mat_tex[nonuniformEXT(em ? t0.z : t0.x)], uv, 0.0).rgb, textureLod(u_mat_tex[nonuniformEXT(em ? t1.z : t1.x)], uv, 0.0).rgb, fract(ft));
+        return light_fn_affine(f, gm, uint(L.half_w + 0.5) - 1u, em, c);
     }
-    return textureLod(u_mat_tex[nonuniformEXT(em ? gm.tex_emis : gm.tex_base)], uv, 0.0).rgb;
+    return light_fn_affine(f, gm, uint(L.half_w + 0.5) - 1u, em, textureLod(u_mat_tex[nonuniformEXT(em ? gm.tex_emis : gm.tex_base)], uv, 0.0).rgb);
 }
 // a light's Light Function at p (lights.c: its material slot + 1 in half_w, never on a rect light): 1 without one
 vec3 light_fn_of(FrameBuf f, GpuLight L, vec3 p) { return light_kind(L) != LIGHT_RECT && L.half_w >= 1.0 ? light_fn(f, L, p) : vec3(1.0); }

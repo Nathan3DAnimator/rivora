@@ -32,6 +32,7 @@ static const char* const g_src[SL_COUNT] = {
     "    var picked = 0\n"
     "    var hitsum = 0\n"
     "    var last: HitReal\n"
+    "    var next_level: Level = \"StreamSub\"\n"
     "\n"
     "    event BeginPlay()\n"
     "        for i in 0..10\n"
@@ -83,6 +84,7 @@ static const char* const g_src[SL_COUNT] = {
     "    int hitsum;\n"
     "    struct HitCs { public int damage; public float scale; }\n"
     "    HitCs last;\n"
+    "    Level next_level = \"StreamSub\";\n"
     "\n"
     "    void BeginPlay()\n"
     "    {\n"
@@ -130,6 +132,7 @@ static const char* const g_src[SL_COUNT] = {
     "    picked = 0\n"
     "    hitsum = 0\n"
     "    last: HitPy\n"
+    "    next_level: Level = \"StreamSub\"\n"
     "\n"
     "    def begin_play(self):\n"
     "        for i in range(10):\n"
@@ -180,6 +183,7 @@ static const char* const g_src[SL_COUNT] = {
     "int hitsum;\n"
     "typedef struct { int damage; float scale; } HitC;\n"
     "HitC last;\n"
+    "Level next_level = \"StreamSub\";\n"
     "\n"
     "int Double(int x) { return x * 2; }\n"
     "void Ping(void) { pinged = true; }\n"
@@ -207,8 +211,53 @@ static const char* const g_src[SL_COUNT] = {
     "}\n"
     "\n"
     "void Tick(float dt) { ticks++; }\n",
+    // C++ (2026-11-25, item 13): the same class, as a C++ programmer writes it
+    "#include \"rivora.hpp\"\n"
+    "using namespace std;\n"
+    "\n"
+    "struct HitCpp { int damage; float scale; };\n"
+    "\n"
+    "class TestCpp : public Actor {\n"
+    "public:\n"
+    "    int sum = 0;\n"
+    "    int doubled = 0;\n"
+    "    int ticks = 0;\n"
+    "    bool pinged = false;\n"
+    "    std::string label = \"\";\n"
+    "    int listsum = 0;\n"
+    "    int picked = 0;\n"
+    "    int hitsum = 0;\n"
+    "    HitCpp last;\n"
+    "    Level next_level = \"StreamSub\";\n"
+    "\n"
+    "    void BeginPlay() override {\n"
+    "        for (int i = 0; i < 10; ++i) sum += i;\n"
+    "        doubled = Double(7);\n"
+    "        std::vector<int> xs = { 3, 4, 5 };\n"
+    "        for (const auto& x : xs) listsum += x;\n"
+    "        switch (doubled) {\n"
+    "        case 7: picked = 1; break;\n"
+    "        case 13: case 14: picked = 2; break;\n"
+    "        default: picked = 3; break;\n"
+    "        }\n"
+    "        HitCpp h = { 5, 2.0f };\n"
+    "        h.damage += 3;\n"
+    "        last = h;\n"
+    "        hitsum = last.damage * static_cast<int>(last.scale);\n"
+    "        int n = 0;\n"
+    "        while (true) { ++n; if (n >= 5) break; }\n"
+    "        label = \"n=\" + std::to_string(n) + \" sum=\" + to_string(sum);\n"
+    "        this->Ping();\n"
+    "        SetActorLocation(GetActorLocation() + FVector(0, 0, 100));\n"
+    "    }\n"
+    "\n"
+    "private:\n"
+    "    void Ping() { pinged = true; }\n"
+    "    int Double(int x) const { return x * 2; }\n"
+    "    void Tick(float dt) override { ticks++; }\n"
+    "};\n",
 };
-static const char* const g_names[SL_COUNT] = { "TestReal", "TestCs", "TestPy", "TestC" };
+static const char* const g_names[SL_COUNT] = { "TestReal", "TestCs", "TestPy", "TestC", "TestCpp" };
 
 static Entity g_actor[SL_COUNT];
 static bool jit_measure(Editor* ed);
@@ -242,6 +291,15 @@ bool script_test_setup(Editor* ed) {
         }
         printf("[RealEngine] Script %s (%s): %u nodes, %u ops, %.2f ms, %u warnings\n", g_names[l], g_script_lang_names[l], f->nodes, f->ops,
                f->compile_ms, f->ndiags);
+        { // (2026-11-24, item 11) a field of the type Level: a Level reference variable (Name, its class Level), its value kept
+            int lv = -1;
+            for (uint32_t k = 0; k < f->cls->nvars; k++)
+                if (!strcmp(f->cls->vars[k].name, "next_level")) lv = (int)k;
+            const BpVar* v = lv >= 0 ? &f->cls->vars[lv] : NULL;
+            printf("[RealEngine] Script %s: next_level is %s (%s) = \"%s\"\n", g_names[l], v ? g_bp_type_names[v->type] : "missing", v ? v->ref : "", v ? v->sdef : "");
+            if (!v || v->type != BPT_NAME || strcmp(v->ref, "Level") || strcmp(v->sdef, "StreamSub"))
+                printf("[RealEngine] FAIL: script-test: %s's Level field isn't a Level reference with its value\n", g_names[l]), g_fail = true;
+        }
         for (uint32_t i = 0; i < f->ndiags; i++) printf("[RealEngine]   warning (%d:%d): %s\n", f->diags[i].line, f->diags[i].col, f->diags[i].text);
         float at[3] = { ed->cam.pos[0] + 400.0f, ed->cam.pos[1] + (float)(l - 2) * 150.0f, 100.0f };
         g_actor[l] = bp_spawn(&ed->world, f->cls, at, (float[3]){ 0, 0, 0 });

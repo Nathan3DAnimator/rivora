@@ -174,7 +174,7 @@ void main() {
                 bool tess = false;
                 if (dag && (f.tess_u.x & TESS_SUBDIV) != 0u && f.tess_u.y != 0u) {
                     Instance ti = InstanceBuf(pc.instances).i[slot];
-                    if (tess_inst(f, ti.ids.y, ti.emissive_rough)) {
+                    if ((ti.ids.y & INST_SKINNED) == 0u && tess_inst(f, ti.ids.y, ti.emissive_rough)) {
                         UintBuf th = UintBuf(f.tess_buf);
                         uint n = tot / 3u, cur = th.v[0];
                         for (uint g = 0u; g < 64u; g++) {
@@ -245,7 +245,11 @@ void main() {
             vec4 lc = vec4(cl.sphere.xyz, 1.0);
             vec3 c = vec3(dot(row0, lc), dot(row1, lc), dot(row2, lc));
             vec3 sx = vec3(row0.x, row1.x, row2.x), sy = vec3(row0.y, row1.y, row2.y), sz = vec3(row0.z, row1.z, row2.z);
-            float r = cl.sphere.w * sqrt(max(dot(sx, sx), max(dot(sy, sy), dot(sz, sz))));
+            // (2026-11-24, item 4) a live skin's clusters: their bind's spheres widened by its pose's reach, the 35% its
+            // whole sphere takes (render.c upload_mesh_info), the same on both sides of a group (one cut still)
+            uint iflags = ib.i[slot].ids.y;
+            float slack = (iflags & INST_SKINNED) != 0u ? MeshInfoBuf(f.mesh_info).m[iflags >> INST_SHAPE_SHIFT].sphere.w * (0.35 / 1.35) : 0.0;
+            float r = (cl.sphere.w + slack) * sqrt(max(dot(sx, sx), max(dot(sy, sy), dot(sz, sz))));
             // in the view and not behind the prepass's depth (the opaque meshes, the Masked ones drawn whole); a DAG's: in
             // the view and the right level here, its own error on screen under the limit and its parent's over it (the
             // same group's sphere and error on both sides of a level: exactly one cut, no gap, no overlap)
@@ -253,8 +257,8 @@ void main() {
                 float s = sqrt(max(dot(sx, sx), max(dot(sy, sy), dot(sz, sz)))), lim = max(uintBitsToFloat(f.pad_cull1), 0.25);
                 vec4 ls = vec4(cl.self_sphere.xyz, 1.0), lp = vec4(cl.parent_sphere.xyz, 1.0);
                 vec3 cs = vec3(dot(row0, ls), dot(row1, ls), dot(row2, ls)), cp = vec3(dot(row0, lp), dot(row1, lp), dot(row2, lp));
-                float ds = view_ortho(f) ? 1.0 : max(length(cs - f.camera_pos.xyz) - cl.self_sphere.w * s, 1.0);
-                float dp = view_ortho(f) ? 1.0 : max(length(cp - f.camera_pos.xyz) - cl.parent_sphere.w * s, 1.0);
+                float ds = view_ortho(f) ? 1.0 : max(length(cs - f.camera_pos.xyz) - (cl.self_sphere.w + slack) * s, 1.0);
+                float dp = view_ortho(f) ? 1.0 : max(length(cp - f.camera_pos.xyz) - (cl.parent_sphere.w + slack) * s, 1.0);
                 bool fits = cl.self_err * s / ds * f.cull_params.x <= lim;
                 bool parent_fits = cl.parent_err < 1e30 && cl.parent_err * s / dp * f.cull_params.x <= lim;
                 seen = fits && !parent_fits && sphere_inside(f.cull_planes, c, r); // (a cone test for the back half: measured no gain, the raster drops those cheaply)
@@ -293,7 +297,7 @@ void main() {
                 uint m = mc / MAX_LODS;
                 MeshInfo mi = meshes.m[m];
                 uint l = mc % MAX_LODS;
-                if (l == 0u && m > 0u && (m == 5u || ((mi.lod_count ^ meshes.m[m - 1u].lod_count) & 0x500u) != 0u)) { // (5: SHAPE_COUNT; Masked, Translucent)
+                if (l == 0u && m > 0u && (m == 5u || ((mi.lod_count ^ meshes.m[m - 1u].lod_count) & 0x2500u) != 0u)) { // (5: SHAPE_COUNT; Masked, Translucent; 2026-11-24: RE_EXT)
                     packed_n.v[list * nm + run] = run_n;
                     run = m, run_n = 0u;
                 }
@@ -436,10 +440,12 @@ void main() {
                         // (Q17: a displaced instance the same: diced where its DAG is drawn; farther, its LOD's vertices displaced
                         // (mesh.vert): every rock by its DAG diced 360 k base triangles in the rocks scene, +7 ms)
                         bool dag = !imp && !masked && meshes.m[shape].dag_count != 0u && (lod == 0u || (lod == 1u && !sphere_inside(f.cull_planes, c, -r)) ||
-                                                                                  ((f.tess_u.x & TESS_SEAMS) != 0u && tess_inst(f, flags, ib.i[i].emissive_rough))); // (the seam check: its rock by the DAG at any distance)
+                                                                                  ((flags & INST_SKINNED) == 0u && (f.tess_u.x & TESS_SEAMS) != 0u && tess_inst(f, flags, ib.i[i].emissive_rough))); // (the seam check: its rock by the DAG at any distance)
                         uint ncl = dag ? meshes.m[shape].dag_count : u4at(meshes.m[shape].cluster_count, lod);
                         uint lodd = dag ? 0u : lod;
-                        if ((masked || dag) && !imp && !own_verts && f.hiz_pad != 0u && f.cl_entries != 0u && ncl != 0u && (meshes.m[shape].lod_count & 0x400u) == 0u) {
+                        // (2026-11-24, item 4) a live skin too (its bent LOD 0 vertices, mesh.vert: the same local index), by
+                        // its DAG only: pass 6 widens its clusters' spheres by the pose's reach; a Masked skin stays whole
+                        if ((dag || (masked && (flags & INST_SKINNED) == 0u)) && !imp && !own_verts && f.hiz_pad != 0u && f.cl_entries != 0u && ncl != 0u && (meshes.m[shape].lod_count & 0x400u) == 0u) {
                             UintBuf h = UintBuf(f.cl_work);
                             uint e = atomicAdd(h.v[0], 1u);
                             if (e < f.cl_entries) {

@@ -113,3 +113,60 @@ Relato: a cena de 1 M objetos vista de cima ficava lenta. Medido (`--stress-obje
 - Raio de oclusão dos reflexos ásperos só a até 40 m da câmera.
 - O que resta a 1 km é rasterizar 218 k instâncias minúsculas (não o sombreamento): o próximo passo é um rasterizador por
   software para micro-triângulos (como a Nanite) ou impostores agrupados por célula.
+
+## Milhares de Skeletal Meshes (item 4 parte 2, 2026-11-24/25)
+Cena de referência: a cópia do projeto Unamed (cápsulas `SK_Capsula_rig`, 9284 triângulos, dois ossos e um só com todos
+os vértices), Cinemático + RT, RTX 3060, 1440p. `--skin-copies N` copia o primeiro Skeletal Mesh Actor numa grade.
+
+| | antes | depois |
+|---|---|---|
+| 2080 cápsulas | 43 fps, CPU 14,8 ms, GPU 22,1 ms, 19,3 M tri. | 53 fps, CPU 7,8 ms, GPU 18,8 ms, 7,5 M tri. |
+| 5000 cápsulas | 20 fps, CPU 31 ms, GPU 48,9 ms, 36,5 M tri. | 34 fps, CPU 7,9 ms, GPU 29,4 ms, 16,1 M tri. |
+
+- **Pele rígida** (`render.c` `skin_rigid`, `R.mesh_rigid_bone`): todo vértice com peso ≥ 254/255 num osso só (sem morphs)
+  vira instância comum com as linhas vezes a paleta do osso: sem área de pele, sem BLAS própria, LODs, DAG, impostor e
+  sombra de malha comum. Log `Rigid skins: N`.
+- **Dormentes** (`SLOT_DORMANT`, 120 quadros parados, `REALENGINE_NO_DORMANT`): o slot dinâmico perde `INST_DYNAMIC`,
+  vai para o TLAS estático e para as sombras em cache; acorda no primeiro movimento ou pose. Log `Dormant dynamic instances`.
+- **Log de mudanças do ECS**: `anim.c` não registra peles Movable (o anel de 4096 transbordava e reenviava a cena toda).
+- **Ícones do viewport**: cartão de ator com malha só até 20 m e a linha/anel só perto ou com até 256 ícones (o "Editor
+  Frame" de 14,3 ms com 4171 atores era isso).
+- **Refits em lote** (`gi.c` `gi_dyn_blas_record_batch`, 256 por chamada) e área de peles pela VRAM (16 M vértices com
+  8 GB; `SKINS_MAX` 16384).
+- O que sobra na GPU com 5000: passe principal 13,7 ms (16 M triângulos), raios da GI 6,3 ms.- Rodada 3 (25/11): no **Épico** (`--scalability 3`, 1 px de erro, ReSTIR GI) a meta de 60 fps **não** foi atingida: 2080 =
+  29 fps (GPU 34,3 ms, 19,3 M triângulos), 5000 = 19 fps (GPU 52,2 ms, 36,5 M). Com 1 px o LOD 1 da cápsula (7,63 cm) só
+  entra além de ~100 m: tudo no LOD 0. A cápsula também não ganha DAG nem com `REALENGINE_NANITE_ALL` (provável: mais
+  vértices que triângulos pelas costuras, o teste `pieces` de `render.c` recusa). Próximo passo: DAG sobre as posições
+  soldadas (como os LODs de pele) ou uma cadeia de LODs com erro pequeno (o LOD de bordas livres, 74%).
+- Fotos (`--game-view --cam-near-skin D`): a 1,2 m a cápsula no LOD 0 sem deformação; a 25 m as silhuetas certas.- Rodadas 4 e 5 (25/11, com o DAG da cápsula: o teste `pieces` por ilhas soldadas, `MESH_CLOD_STUCK_FALLBACK` permissivo
+  e sloppy nos grupos presos, Auto a partir de 4096 triângulos numa Skeletal Mesh): 5000 cápsulas caem de 36,5 M para
+  5,6 M triângulos em todos os presets; Épico nativo 19 -> 27 fps. O nível sozinho (`--no-skins`) custa 4,7-5,9 ms de GPU:
+
+  | preset | só o nível | 5000 cápsulas |
+  |---|---|---|
+  | Alto + upscaler Qualidade | 208 fps, 4,7 ms | 45 fps, 22,0 ms |
+  | Épico + upscaler Qualidade | 184 fps, 5,4 ms | 44 fps, 22,9 ms |
+  | Cinemático (MSAA 8x, RT) | 168 fps, 5,9 ms | 21 fps, 48,8 ms |
+
+  Onde vão os ~17 ms das cápsulas (Alto-Q): passe principal 8,4 ms, pré-passe 3,1, raios da GI 2,8, cache de superfície
+  2,3 (3,8 no Épico, 7,9 no Cinemático: cresce com as 10 mil instâncias). Não é mais geometria: as cápsulas a 80 cm umas
+  das outras (o espaçamento do próprio nível) se interpenetram e cada uma fica com ~1400 triângulos em poucos pixels.
+  Testado e descartado: GI por sonda além de 40-80 m (nenhum ganho nesta vista: a tela é quase toda perto). Impostor da
+  pele rígida dormente ligado, mas a multidão é compacta demais para o farview trocar (a cena precisa passar da distância
+  da troca). DAG da cápsula: 0,5 cm 9284 tri., 10 cm 3789, 30 cm 2200, 100 cm 223, 1000 cm 89 (`--skin-lods-test`).- Rodada 6 (25/11): (a) cache de superfície assentado (`gi_cache.c` `C.quiet`: 4 ciclos inteiros sem mudança no mundo, a cota
+  por quadro cai a um quarto; qualquer mudança no ECS ou realocação volta à cota cheia; `REALENGINE_CACHE_QUIET=0` desliga)
+  e (b) impostor da multidão (`farview.c`: uma malha com 256 instâncias ou mais ganha o cartão qualquer que seja o alcance
+  da cena; feito o da cápsula, 2080 instâncias, 1,1 ms de bake). 5000 cápsulas: Alto-Q 45 -> 55 fps (22,0 -> 18,2 ms, cache
+  2,3 -> 0,65), Épico-Q 44 -> 53 fps (22,9 -> 19,0; cache 3,9 -> 1,23, sem o assentado 46 fps), Cinemático 21 -> 28 fps
+  (48,8 -> 35,6; cache 7,9 -> 3,75). O pré-passe (3,0 ms) fica: os clusters do DAG são os oclusores do Hi-Z do quadro.
+  Falta ~1,5 ms para 60 fps no Alto-Q: o resto é o passe principal (7,0 ms) e os raios da GI (2,8 ms).- Fechado em 25/11 (decisão do usuário): 5000 cápsulas a 55 fps no Alto-Q e 53 no Épico-Q (Cinemático + RT: 28). O que
+  falta para 60+ e o caminho, para quando voltar:
+  - O resto é pixel: o passe principal (7,0 ms no Alto-Q) sombreia cápsulas de ~1400 triângulos em poucos pixels, com
+    quadrados 2x2 inteiros por triângulo minúsculo; o pré-passe (3,0 ms) é o Hi-Z de todo o quadro e fica.
+  - Caminho: rasterizar em software os clusters pequenos na tela (como a Nanite: um compute que escreve profundidade + id
+    de instância/triângulo num buffer de visibilidade de 64 bits com atomicMax, e um passe de sombreamento por pixel que lê
+    esse id). Os clusters do DAG com triângulos abaixo de ~2 px iriam por ele; os grandes seguem no hardware. Precisa de
+    `shaderImage/BufferInt64Atomics` (a RTX 3060 tem), um passe de material por pixel a partir do id e o mesmo para a
+    sombra virtual do sol. Estimativa: grande (semanas); ganho esperado no passe principal da cena: 40-60%.
+  - Mais baratos, antes disso: raios da GI (2,8 ms) a meia resolução nos pixels de instâncias pequenas; impostor por
+    distância também para instâncias acordadas (hoje só dormentes trocam).

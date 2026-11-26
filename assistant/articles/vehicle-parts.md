@@ -1,6 +1,6 @@
 id: vehicle-parts
 kind: concept
-title: Peças de veículo: rodas, suspensão, motor, pistões, portas | Vehicle parts: wheels, suspension, engine, pistons, doors
+title: Peças de veículo: rodas, suspensão, motor, pistões, portas | Vehicle parts: wheels, suspension, engine, pistons, doors | Piezas de vehículo: ruedas, suspensión, motor, pistones, puertas
 keys: peca de veiculo, vehicle part, roda, wheel, suspensao, suspension, mola, spring, amortecedor, damper, shock, pistao, piston, hidraulico, hydraulic, engrenagem, gear, porta, door, capo, hood, cacamba, dump bed, dobradica, hinge, corredica, slider, helice, propeller, asa, wing, aileron, profundor, elevator, leme, rudder, rotor, boia, pontoon, float, truque, bogie, diferencial, differential, cambio, gearbox, motor, engine, torque
 --- pt
 ```diagram steps
@@ -64,3 +64,34 @@ Each part is physics and may move an actor's **component** by name (a wheel's me
 - **Bogie**: a train's truck, on the rail.
 
 A low center of mass keeps the vehicle steady; a stiffer spring and a bigger damper make the suspension firm.
+--- es
+```diagram steps
+Doble clic en el Vehicle | + Part (su tipo) | Component: la malla del actor que mueve (por nombre) | Su posición y eje en las vistas superior y lateral | Sus números a la derecha
+```
+## Las piezas
+Cada pieza es física y puede mover un **componente** del actor por nombre (la malla de una rueda, el panel de una puerta).
+
+**Ruedas y suspensión**
+- **Wheel**: radio, resorte (N/cm), amortiguador, recorrido de la suspensión, giro máximo, su parte del motor (Drive), freno, freno de mano y agarre. Su malla gira, dirige y sube y baja sobre su resorte.
+- **Piston**: se estira entre su punto y la pieza enlazada (un amortiguador a la mangueta de una rueda, el cilindro de una caja volquete). Sin enlace se extiende a lo largo de su eje según su entrada.
+
+**Motor y transmisión**
+- **Engine**: par máximo, pico, RPM máximas y de ralentí, y freno motor.
+- **Gearbox**: reducción final, automática (cambia por RPM) o manual. Las relaciones de marchas están en el chasis.
+- **Differential**: abierto, bloqueado o de deslizamiento limitado.
+
+**Piezas móviles**
+- **Hinge**: puertas, capó, caja o cañón oscilan entre Min y Max. Se abren con su entrada (F/G/H/J) o con los nodos *Set Part Position* y *Toggle Part*.
+- **Slider**: una puerta corrediza, el brazo de una grúa, el mástil de un montacargas.
+- **Gear**: gira con otra pieza: `Engine` (cigüeñal, ventilador), `Steer` (volante, manillar), una rueda u otra pieza.
+
+**Agua y aire**
+- **Propeller**: empuje según el acelerador, en el aire (avión) o en el agua (barco).
+- **Wing**: sustentación y resistencia según su ángulo, con pérdida de sustentación. Con una entrada pasa a ser un **alerón**, **elevador**, **timón** o **timón de barco** (In Water).
+- **Rotor**: el de un helicóptero, con colectivo, cíclico, par de cola y Stability.
+- **Pontoon**: flotabilidad y resistencia del agua en los puntos del casco.
+
+**Rieles**
+- **Bogie**: el bogie de un tren, sobre el riel.
+
+Un centro de masa bajo mantiene estable el vehículo; un resorte más rígido y un amortiguador mayor hacen la suspensión firme.

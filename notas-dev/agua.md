@@ -485,3 +485,12 @@ Pedido: "gotas e filetes brancos: devem refratar/transmitir como as gotas parada
 - Fica para depois: as gotas caindo e a névoa vistas de longe dentro da tempestade (hoje só onde a câmera está), o
   vento regional no Foliage e no cabelo, o mapa em espaço do mundo em vez do da inclinação da chuva (com vento forte e
   chão alto as poças guardadas andam um pouco).
+
+## A Chuva sem travar o quadro (2026-11-25, bug-fixer)
+- A chuva molha as superfícies nas variantes RE_EXT do `mesh.frag`; o 1º quadro com chuva criava o conjunto inteiro no
+  quadro (`ext_pipelines_ensure`: 257 ms de um quadro de 300-450 ms; 6,5 s numa execução da varredura, com o cache frio).
+  Agora o conjunto vai num thread (`ext_pipelines_request`, render.c, o padrão do `rt_alpha_job`): até ficar pronto
+  (~200 ms) desenham as pipelines comuns e as superfícies molham alguns quadros depois. Vale também para Light Function,
+  luz Force Toon e material com lóbulos extras. `render_pipelines_pending` espera por ele (as medidas).
+- Teste `place_rain_hitch` (Adicionar > Chuva num Terceira Pessoa novo, nenhum quadro acima de 150 ms): antes 426 ms
+  (FALHOU), depois 56-64 ms.

@@ -112,6 +112,9 @@ typedef struct GiDynBlas {
 } GiDynBlas;
 bool gi_dyn_blas_create(struct VkCtx* vk, GiDynBlas* b, uint32_t prims, uint32_t maxv);
 void gi_dyn_blas_record(VkCommandBuffer cmd, GiDynBlas* b, VkDeviceAddress vertices, uint32_t maxv, VkDeviceAddress indices);
+// (2026-11-24, item 4) many at once (one build call, n infos)
+typedef struct GiDynBlasJob { GiDynBlas* blas; VkDeviceAddress vertices, indices; uint32_t maxv; } GiDynBlasJob;
+void gi_dyn_blas_record_batch(VkCommandBuffer cmd, const GiDynBlasJob* jobs, uint32_t n);
 void gi_dyn_blas_free(struct VkCtx* vk, GiDynBlas* b);
 // A Masked mesh's BLAS rebuilt with an opacity micromap (data: 16 bytes a triangle, render.c's omm.comp); false: unchanged
 bool gi_blas_omm(struct VkCtx* vk, int mesh, const GpuBuf* vertices, uint32_t vertex_count, const GpuBuf* indices, const GiMesh* m,

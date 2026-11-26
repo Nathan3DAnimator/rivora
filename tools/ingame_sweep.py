@@ -66,7 +66,9 @@ EDITOR_SYSTEMS = {
     'editor_frame': 'editor tool: the frame itself',
     'test_step': 'editor tool: the tests\' scripted steps',
     'dv_frame': 'covered: the game has the Debug Viewer (F10)',
-    'panic_tick': "editor tool: the --scene panicN test's scripted alarm (the game's alarms: the Crowd Alarm node; Q27.1)",
+    'edhost_frame': 'editor tool: the Editors window, the asset editors\' tabs (item 9)',
+    'kit_frame': 'editor tool: the built-in editor plugins (Edit > Plugins; item 18)',
+    'panic_tick':"editor tool: the --scene panicN test's scripted alarm (the game's alarms: the Crowd Alarm node; Q27.1)",
 }
 
 

@@ -3,7 +3,8 @@
 // layout (a panel's center and its 4 sides, the dock space's 4 outer edges, the gaps between panels, across and down)
 // and must end up docked there; then the same window, out of the editor as a window of its own, maximized, is closed
 // by its X, by the system (WM_CLOSE: Alt+F4, the taskbar) and by a close meant for it that reached the editor's main
-// window: each time the window closes and the engine keeps running.
+// window: each time the window closes and the engine keeps running. Then the asset editors (dock_test_docs.c): a Graph
+// and a Material tabs of one Editors window, windows of their own owned by the editor's, a project switch, the close.
 #include "dock_test.h"
 
 #include <math.h>
@@ -146,9 +147,29 @@ static void report(int s, bool ok) {
     fflush(stdout);
 }
 
+// (20/11) The test owns ImGui's input while it runs: whatever the backend queued (the OS's cursor, buttons, keys, focus)
+// is dropped before the test's own events. When one of the engine's windows got the OS focus (a window of its own
+// destroyed hands it to the main one), the backend put the real cursor in every frame the test was waiting, and a focus
+// lost (a click in another program, another session's window) cleared ImGui's mouse buttons: the drag let go halfway,
+// a stage at random failed ("the window at no node", the double-click not maximizing).
+static void drop_os_input(void) {
+    ImGuiContext* g = igGetCurrentContext();
+    ImVector_ImGuiInputEvent* q = &g->InputEventsQueue;
+    int n = 0;
+    for (int k = 0; k < q->Size; k++) {
+        ImGuiInputEventType t = q->Data[k].Type;
+        bool os = t == ImGuiInputEventType_MousePos || t == ImGuiInputEventType_MouseWheel || t == ImGuiInputEventType_MouseButton ||
+                  t == ImGuiInputEventType_MouseViewport || t == ImGuiInputEventType_Key || t == ImGuiInputEventType_Text ||
+                  t == ImGuiInputEventType_Focus;
+        if (!os) q->Data[n++] = q->Data[k];
+    }
+    q->Size = n;
+}
+
 // Before the frame (ImGui's input queue): the drag's steps, the closes
 void dock_test_input(Editor* ed) {
     if (!dock_test_running()) return;
+    drop_os_input();
     if (T.wait > 0) {
         T.wait--;
         return;
@@ -191,11 +212,18 @@ void dock_test_input(Editor* ed) {
                 return;
             }
             T.grab = (ImVec2){ w->Pos.x + 50, w->Pos.y + igGetFrameHeight() * 0.5f };
-            if (getenv("REALENGINE_DOCK_DEBUG")) printf("[RealEngine] dock test debug: stage %d grab %.0f,%.0f (window %.0f,%.0f %.0fx%.0f, hovered %s)\n", T.stage, T.grab.x, T.grab.y, w->Pos.x, w->Pos.y, w->Size.x, w->Size.y, igGetCurrentContext()->HoveredWindow ? igGetCurrentContext()->HoveredWindow->Name : "-"), fflush(stdout);
+            if (getenv("REALENGINE_DOCK_DEBUG")) {
+                ImGuiPlatformIO* pio = igGetPlatformIO_Nil();
+                int focused = -1;
+                for (int k = 0; k < pio->Viewports.Size; k++)
+                    if (pio->Viewports.Data[k]->PlatformHandle && glfwGetWindowAttrib((GLFWwindow*)pio->Viewports.Data[k]->PlatformHandle, GLFW_FOCUSED)) focused = k;
+                printf("[RealEngine] dock test debug: stage %d grab %.0f,%.0f (window %.0f,%.0f %.0fx%.0f, hovered %s, mouse %.0f,%.0f, focused viewport %d of %d)\n", T.stage, T.grab.x, T.grab.y, w->Pos.x, w->Pos.y, w->Size.x, w->Size.y, igGetCurrentContext()->HoveredWindow ? igGetCurrentContext()->HoveredWindow->Name : "-", igGetIO_Nil()->MousePos.x, igGetIO_Nil()->MousePos.y, focused, pio->Viewports.Size), fflush(stdout);
+            }
             mouse(T.grab, 0);
             T.step = 3;
             return;
         case 3:
+            if (getenv("REALENGINE_DOCK_DEBUG")) printf("[RealEngine] dock test debug: stage %d press: window %.0f,%.0f, docked %d, hovered %s, mouse %.0f,%.0f\n", T.stage, w ? w->Pos.x : 0, w ? w->Pos.y : 0, w && w->DockNode, igGetCurrentContext()->HoveredWindow ? igGetCurrentContext()->HoveredWindow->Name : "-", igGetIO_Nil()->MousePos.x, igGetIO_Nil()->MousePos.y), fflush(stdout);
             mouse(T.grab, 1);
             T.step = 4;
             return;
@@ -208,8 +236,9 @@ void dock_test_input(Editor* ed) {
                 mouse(T.to, -1);
                 if (k == 12 && getenv("REALENGINE_DOCK_DEBUG")) {
                     ImGuiContext* g = igGetCurrentContext();
-                    printf("[RealEngine] dock test debug: stage %d moving %s, window at %.0f,%.0f, mouse %.0f,%.0f\n", T.stage,
-                           g->MovingWindow ? g->MovingWindow->Name : "(none)", w ? w->Pos.x : 0, w ? w->Pos.y : 0, igGetIO_Nil()->MousePos.x, igGetIO_Nil()->MousePos.y);
+                    printf("[RealEngine] dock test debug: stage %d moving %s, window at %.0f,%.0f, mouse %.0f,%.0f, active id %08X (its move id %08X)\n", T.stage,
+                           g->MovingWindow ? g->MovingWindow->Name : "(none)", w ? w->Pos.x : 0, w ? w->Pos.y : 0, igGetIO_Nil()->MousePos.x, igGetIO_Nil()->MousePos.y,
+                           g->ActiveId, w ? w->MoveId : 0);
                     fflush(stdout);
                 }
             } else if (k == 13) {
@@ -280,6 +309,14 @@ void dock_test_input(Editor* ed) {
     }
     // the closes: the window out of the editor (a window of its own), maximized, closed three ways
     if (T.stage >= T_COUNT) {
+        if (T.viewports) { // (2026-11-25, item 9) the asset editors' windows (dock_test_docs.c)
+            bool docs_ok = true, open = T.open;
+            if (!dock_docs_step(ed, T.main_win, &open, &docs_ok)) {
+                T.open = open;
+                return;
+            }
+            if (!docs_ok) T.fails++;
+        }
         T.done = true;
         T.ok = T.fails == 0;
         printf(T.ok ? "[RealEngine] Dock test OK: %d targets, the maximized window closed 3 ways, the engine alive\n"

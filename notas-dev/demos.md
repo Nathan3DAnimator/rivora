@@ -59,6 +59,10 @@
 - **Medidas** (RTX 3060, 2560×1417, jogando): 224 fps, GPU 4,1 ms, CPU 1,4 ms, 166 draws. Antes da cerca e das sombras
   saírem: 103 fps.
 - **Teste** `demo_fighting`: autoplay por 6 s. Golpes acertam, montagens tocam, a IA ataca, > 180 fps.
+  (2026-11-23) A medida começava no primeiro quadro depois de abrir o projeto: o `--new-project --play` leva ~5 s, mais
+  que o segundo de aquecimento do início, e os primeiros quadros do nível (528 + 53 ms: envios, BLAS, pipelines RE_EXT)
+  entravam nos 6 s (pior quadro 408-434 ms, 148-164 fps). Agora a medida espera 1 s depois de abrir, como no início
+  (`main.c`, o bloco do `pending_project`): pior quadro 12 ms, 173 → 194 fps escondido com a GPU livre.
 
 ## Terror (sugestão #29)
 - **Mapa**: uma clínica abandonada à noite, feita com paredes do kit de protótipo (colidem e navegam) e portas onde a

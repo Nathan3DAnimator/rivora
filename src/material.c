@@ -1,6 +1,7 @@
 // Materials (material.h, notas-dev/materiais.md): the graph, the .rmat / .rmi files, the compiler (static part baked,
 // dynamic part per pixel), the GPU textures and the dynamic instances.
 #include "material.h"
+#include "mat_pack.h" // (2026-11-25: the lobes' values to the GPU, the fields' limits)
 #include "tex_settings.h" // (2026-11-23: material_gpu.inc reads them)
 
 #include <ctype.h>
@@ -52,6 +53,29 @@ typedef struct GpuMatExt { float e[13][4]; } GpuMatExt; // (mat_common.glsl e0-e
 _Static_assert(MAT_GPU_SLOTS == 4096, "mat_common.glsl MAT_EXT_BASE");
 // (Q11) the Toon shading model's block per slot, a table after the GpuMatExt one (toon.glsl GpuToon; toon.c toon_pack)
 typedef struct GpuToon { float t[12][4]; } GpuToon;
+// (2026-11-24) the affine fold's coefficients per slot, a table after the toon one (mat_common.glsl GpuMatAff; MATF_AFFINE)
+typedef struct GpuMatAff { float a0[4], b0[4], a1[4], b1[4]; } GpuMatAff;
+#define MAT_AFF_BASE ((sizeof(GpuMaterial) + sizeof(GpuMatExt) + sizeof(GpuToon)) * MAT_GPU_SLOTS)
+
+// (2026-11-24) The affine fold's program (material_affine.inc): the uniform part of a graph (its parameters' own math) the
+// CPU runs per slot, and per channel (base r g b, metallic, emission r g b, roughness) the terms of its a and b
+#define AFF_MAX_INS 64
+#define AFF_MAX_VALS 160
+#define AFF_MAX_TERMS 160
+#define AFF_NCH 8
+typedef struct AffIns { uint16_t op; uint8_t nin, nout; uint32_t p[4]; uint8_t in[8], out[4]; } AffIns;
+enum { AT_CONST, AT_VAL, AT_PARAM, AT_MUL, AT_ADD, AT_SUB, AT_DIV, AT_SAT };
+typedef struct AffTerm { uint8_t op, comp; uint16_t a, b; float k; } AffTerm; // AT_VAL: a the CPU value; AT_PARAM: a the parameter
+typedef struct AffProg {
+    uint16_t nins, nvals, nterms;
+    AffIns ins[AFF_MAX_INS];
+    AffTerm t[AFF_MAX_TERMS];
+    uint16_t a[AFF_NCH], b[AFF_NCH];
+    uint32_t bake_mask; // the parameters the bake reads (a change bakes the variant); the others only the coefficients
+    bool on;            // MATF_AFFINE: a channel folds or it glows (the Emission Intensity)
+} AffProg;
+// (the compiler's: a value's component as root * A + B; root -1 uniform, -2 not affine; pm its parameters)
+typedef struct AffC { int16_t root; int8_t rc; int16_t A, B; uint32_t pm; } AffC;
 
 
 typedef struct BakePush { // material_bake.comp
@@ -82,6 +106,11 @@ typedef struct MatTex {
 // Instance's, an actor's dynamic instance's); a variant without parameters to differ shares its material's textures
 typedef struct Variant {
     uint32_t slot, param_off;
+    uint32_t param_cap; // (2026-11-24) its parameters' room (reused by its next bakes: params_need)
+    // (2026-11-24) a frame's bake (bake_variant_frame): its new textures, swapped into the slots once that frame is done
+    // (pend_at: the frame number; 0 none), as the streaming's jobs do: a frame in flight reads the old ones whole
+    uint32_t pend[3];
+    uint64_t pend_at;
     uint32_t tex[3];   // base, normal/roughness/metallic, emission (0: none / shared)
     bool own, dirty;   // own textures (else the material's); rebake before the next frame
     float avg[3];
@@ -124,6 +153,16 @@ typedef struct Compiled {
     // until they all are, the material shows frame 0 still
     uint32_t anim_next, anim_total;
     int time_param;
+    // (2026-11-24) the affine fold (material_affine.inc), the Emission Intensity's parameter (-1: none), the program's
+    // room in the program buffer, the flipbook table's, and the last bake's signature (an edit that leaves the bake's
+    // program and inputs as they were writes the slots only: material_gpu.inc bake)
+    AffProg aff;
+    int emis_param;
+    // (2026-11-24) the slot before its first bake: the graph's constant colors (material_gpu.inc ph_estimate) over neutral
+    // textures, so a mesh shows its color at once instead of white (ph: that slot is the placeholder now)
+    bool ph;
+    uint32_t prog_cap, table_cap;
+    uint64_t bake_sig;
 } Compiled;
 
 static struct {
@@ -151,7 +190,17 @@ static struct {
     bool any_dirty;
     bool resend; // (Q22) a slot an instance points to changed (a dynamic one made or freed): mat_update says changed
     bool any_detail; // a material with a detail normal (M5: mat_update follows their slots)
+    // (2026-11-24) the parameters' and the programs' room: ranges handed out and given back (params_need, prog_place)
+    struct { uint32_t n, off[512], len[512]; } pheap, gheap;
+    struct { uint32_t off, len; uint64_t at; } pgrave[128]; // (programs a bake in flight may still read)
+    uint32_t npgrave;
+    uint32_t bake_calls; // bake_variant's count (the tests: a parameter set without a bake)
+    VkCommandBuffer fcmd; // the frame's command buffer while mat_update runs (a bake recorded there: no wait)
+    uint32_t ph_tex[3];   // (2026-11-24) the placeholders' textures: white, a flat normal, black (4 x 4)
+    uint32_t first_delay; // (the mat_first_frame test: frames before any bake, REALENGINE_MAT_FIRST_DELAY)
 } M;
+static void mat_placeholders(void); // (2026-11-24) material_gpu.inc: the slots before the first bake
+
 
 // ============================================================================================
 // The graph
@@ -380,6 +429,7 @@ static bool parse(Material* m, const char* text, size_t len) {
     m->eye_glow_color[2] = (float)json_get_num(r, "eye_glow_b", 0.7);
     m->emissive_light = (float)json_get_num(r, "emissive_light", 1.0); // (2026-11-23)
     m->emissive_shadows = json_get_bool(r, "emissive_shadows", false);
+    m->emission_intensity = (float)json_get_num(r, "emission_intensity", 1.0); // (2026-11-24: optional, absent = 1)
     m->retro = (float)json_get_num(r, "retro", 0.0); // (Q27.8)
     m->retro_color[0] = (float)json_get_num(r, "retro_r", 1.0), m->retro_color[1] = (float)json_get_num(r, "retro_g", 1.0);
     m->retro_color[2] = (float)json_get_num(r, "retro_b", 1.0);
@@ -523,6 +573,7 @@ bool mat_save(Material* m) {
             jw_kfloat(&w, "eye_glow_b", m->eye_glow_color[2]);
     if (m->emissive_light != 1.0f) jw_kfloat(&w, "emissive_light", m->emissive_light); // (2026-11-23)
     if (m->emissive_shadows) jw_kbool(&w, "emissive_shadows", true);
+    if (m->emission_intensity != 1.0f) jw_kfloat(&w, "emission_intensity", m->emission_intensity); // (2026-11-24)
     if (m->retro > 0.0f) // (Q27.8)
         jw_kfloat(&w, "retro", m->retro), jw_kfloat(&w, "retro_r", m->retro_color[0]), jw_kfloat(&w, "retro_g", m->retro_color[1]),
             jw_kfloat(&w, "retro_b", m->retro_color[2]);
@@ -690,6 +741,7 @@ Material* mat_load(const char* path_in) {
         else snprintf(pp, sizeof pp, "%s", m->parent_path);
         m->parent = mat_load(pp);
     }
+    mat_placeholders(); // (2026-11-24: its slot and color now, before any bake: material_gpu.inc ph_pass)
     return m;
 }
 
@@ -807,6 +859,7 @@ Material* mat_create(const char* path, bool instance, const char* parent_path) {
     tmp.anim_frames = 16, tmp.anim_res = 512;
     tmp.opacity_clip = MAT_OPACITY_CLIP_DEFAULT;
     tmp.emissive_light = 1.0f; // (2026-11-23: its glow lights the scene)
+    tmp.emission_intensity = 1.0f; // (2026-11-24)
     tmp.absorption[0] = tmp.absorption[1] = tmp.absorption[2] = 1.0f, tmp.absorption_dist = 10.0f, tmp.colored_shadow = true; // (Q4)
     tmp.disp_magnitude = 5.0f, tmp.disp_center = 0.5f; // (Q17)
     MatGraph* g = NULL;

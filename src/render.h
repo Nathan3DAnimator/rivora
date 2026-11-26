@@ -134,6 +134,10 @@ bool render_preview_read(uint32_t key, const uint8_t** rgba, uint32_t* w, uint32
 // A mesh's LODs (count; their triangles and error in cm against LOD 0, NULL: not wanted) and the one the scene's cull
 // would draw at that distance (cm), scale and focal length (px per cm at 1 cm: the view's height / 2 / tan(fov / 2))
 uint32_t render_mesh_lods(uint32_t mesh, uint32_t tris[4], float error[4]);
+uint32_t render_mesh_nanite(uint32_t mesh, uint32_t* lod_clusters, bool* rigid); // (2026-11-24) its DAG's clusters as loaded (0: none)
+bool render_mesh_is_skinned(uint32_t mesh); // (2026-11-25) a skin's mesh (uv2's bits: 4 bones and weights)
+// (2026-11-25, item 17) the selection mask the last frame left: pixels set, a hash of where, the mask's draws (GPU idled)
+bool render_mask_read(struct VkCtx* vk, uint32_t* set, uint64_t* hash, uint32_t* draws, uint8_t* copy, size_t cap, uint32_t* w, uint32_t* h); // (copy: the pixels, w x h bytes; NULL: none)
 uint32_t render_mesh_lod_for(uint32_t mesh, float scale, float dist, float focal_px);
 // (render.c) the previews' start and end, and the shared buffers they draw from: a mesh's LOD 0 range in them
 void render_preview_init(struct VkCtx* vk);
@@ -242,8 +246,19 @@ VkFormat render_hdr_ui_format(void);
 void render_hdr_ui_begin(struct VkCtx* vk, VkCommandBuffer cmd);
 void render_hdr_ui_end(struct VkCtx* vk, VkCommandBuffer cmd);
 const RenderStats* render_stats(void);
+// (2026-11-24) the main pass's runs of draws the last frame: plain, RE_EXT (only the meshes an RE_EXT material draws), and
+// how many meshes are marked so (render.c draw_runs, MESH_INFO_EXT)
+void render_ext_runs(uint32_t* plain, uint32_t* ext, uint32_t* meshes);
 // The skins (render.c "skin"): how many, bent last frame (their vertices) and the CPU time of their palettes (ms)
 void render_skin_stats(uint32_t* skins, uint32_t* bent, uint32_t* verts, double* cpu_ms);
+// (2026-11-24) last frame's skins drawn at their bind (a pose that is the bind's, or no room) and of those the ones with no room
+void render_skin_bind_stats(uint32_t* at_bind, uint32_t* no_room);
+// (2026-11-24, item 4) the rigid skins sent the last frame (every vertex on one bone: the mesh moved by that bone)
+uint32_t render_skin_rigid_count(void);
+// (2026-11-24, item 4) the dynamic instances dormant the last frame (still 120 frames: static TLAS, cached shadow), slept and woke since the start
+void render_dormant_stats(uint32_t* now, uint32_t* slept, uint32_t* woke);
+int render_mesh_collision(uint32_t slot); // (2026-11-24) the mesh's Collision Complexity (.rlod): 0 the actor's, 1 simple, 2 complex
+bool render_last_camera(float pos[3]); // (2026-11-24) the last frame's camera (cm); false: none drawn yet
 // The morph targets (RMESH_MORPHS): the meshes that have them, last frame's skins bent with a weight set and their vertices
 void render_morph_stats(uint32_t* meshes, uint32_t* jobs, uint32_t* verts);
 // A test's look (morph_test.c): the positions of the skin of the Skeletal Mesh actor owner as the GPU bent them last

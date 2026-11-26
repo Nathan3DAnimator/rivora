@@ -1,6 +1,6 @@
 id: viewport-navigation
 kind: howto
-title: Câmera e navegação no viewport | Camera and navigation in the viewport
+title: Câmera e navegação no viewport | Camera and navigation in the viewport | Cámara y navegación en la ventana gráfica
 keys: navegar, camera do editor, andar pelo mapa, voar, olhar em volta, zoom, orbitar, perdi a camera, onde estou, viewport, navigate, fly, wasd, botao direito
 --- pt
 ```diagram keys
@@ -22,3 +22,13 @@ Right button + WASD: Fly | Q / E: Down, up | Wheel: Speed | F: Frame | Alt+G: Pe
 - **Lost everything?** Select any actor in the Outliner and press F.
 - **Top, front, side views:** Alt+J, Alt+H, Alt+K; Alt+G back to perspective.
 - **Game view** (no icons): G. Fullscreen: F11.
+--- es
+```diagram keys
+Botón derecho + WASD: Volar | Q / E: Bajar, subir | Rueda: Velocidad | F: Encuadrar | Alt+G: Perspectiva | Alt+J: Superior | G: Vista de juego | F11: Pantalla completa
+```
+- **Volar:** mantén el **botón derecho del mouse** y usa **W A S D** (Q / E bajan y suben); la rueda del mouse cambia la velocidad.
+- **Mirar:** botón derecho y arrastrar.
+- **Encontrar un objeto:** selecciónalo en el Organizador y pulsa **F** (lo encuadra).
+- **¿Perdiste todo?** Selecciona cualquier actor en el Organizador y pulsa F.
+- **Vistas superior, frontal y lateral:** Alt+J, Alt+H, Alt+K; Alt+G vuelve a la perspectiva.
+- **Vista de juego** (sin iconos): G. Pantalla completa: F11.

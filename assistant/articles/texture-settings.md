@@ -1,6 +1,6 @@
 id: texture-settings
 kind: howto
-title: Configurações da textura: sRGB, Linear, Normal Map e qualidade | Texture settings: sRGB, Linear, Normal Map and quality
+title: Configurações da textura: sRGB, Linear, Normal Map e qualidade | Texture settings: sRGB, Linear, Normal Map and quality | Ajustes de textura: sRGB, Linear, Normal Map y calidad
 keys: configuracoes da textura, texture settings, srgb, linear, non-color, nao cor, nao-cor, espaco de cor, color space, normal map, roughness errado, roughness wrong, metallic cinza, textura lavada, washed out texture, qualidade da textura, texture quality, tamanho maximo, max size, compressao, compression, bc7, sem compressao, uncompressed, filtro, filter, pixel art, closest, nearest, repeticao, wrap, tile, mirror, memoria de textura, texture memory
 --- pt
 ```diagram steps
@@ -30,3 +30,17 @@ Open the texture (double-click it in the Content Browser). Under **Texture Setti
 - **Compression**: BC7 (a quarter of the memory) or Uncompressed (the sharpest, 4× the memory).
 - **Filter**: Linear smooths; Closest keeps the pixels hard (pixel art). **Wrap**: Repeat, Extend, Clip, Mirror.
 - The change is saved beside the texture. **Apply to Materials** sets the color space, filter and wrap in every material of the project that uses it. The memory it takes shows below.
+--- es
+```diagram steps
+Doble clic en la textura | Texture Settings | Color Space, Max Size, Compression, Filter, Wrap | Apply to Materials
+```
+## Por su nombre, solas
+Toda textura llega ya organizada por su **nombre**: `_Roughness`, `_Metallic`, `_ORM`, `_AO`, `_Height` y `_Opacity` son **Linear (Non-Color)**; `_Normal` es un **Normal Map**; `_BaseColor`, `_Albedo`, `_Emissive` y los nombres sin una terminación conocida son **sRGB**. Los nodos Image Texture creados con ella (arrastrando, enlazando por nombre o importando) ya usan eso.
+
+## Cámbialas
+Abre la textura (doble clic en el Explorador de contenidos). En **Texture Settings**:
+- **Color Space**: sRGB para colores, Linear para datos (el material la lee como números), Normal Map para normales.
+- **Max Size**: el lado más grande con el que los materiales la leen. Menor usa menos memoria y se precalcula más rápido.
+- **Compression**: BC7 (una cuarta parte de la memoria) o Uncompressed (la más nítida, 4× la memoria).
+- **Filter**: Linear suaviza; Closest mantiene los píxeles duros (pixel art). **Wrap**: Repeat, Extend, Clip, Mirror.
+- El cambio se guarda junto a la textura. **Apply to Materials** ajusta el espacio de color, el filtro y el wrap en todos los materiales del proyecto que la usan. La memoria que ocupa se muestra abajo.

@@ -1,6 +1,6 @@
 id: landscape
 kind: howto
-title: Terreno: criar e esculpir | Landscape: make and sculpt
+title: Terreno: criar e esculpir | Landscape: make and sculpt | Landscape: esculpir el terreno
 keys: terreno, landscape, montanha, esculpir, sculpt, heightmap, relevo, chao, colinas
 --- pt
 ```diagram keys
@@ -20,3 +20,12 @@ Shift+2: Landscape Mode | Left button: Sculpt | Shift: Lower | Manage: Heightmap
 3. You can also import a heightmap (16 bits, .r16) in the Manage tab.
 
 Characters, AI and traces walk on it by themselves. The sculpted pieces are reloaded in the background.
+--- es
+```diagram keys
+Shift+2: Modo Landscape | Botón izquierdo: Esculpir | Shift: Bajar | Manage: Heightmap
+```
+1. Entra en el **Modo Landscape** (Shift+2). Si el nivel no tiene un landscape, se crea uno. [Entrar al modo](run:landscape-mode)
+2. El **botón izquierdo** esculpe; **Shift** hace lo contrario (baja). Las herramientas y el pincel están a la izquierda.
+3. También puedes importar un heightmap (16 bits, .r16) en la pestaña Manage.
+
+Los personajes, la IA y los traces caminan sobre él por sí solos. Las piezas esculpidas se recargan en segundo plano.

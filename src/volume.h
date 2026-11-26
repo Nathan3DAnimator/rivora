@@ -23,3 +23,4 @@ uint32_t volume_key(const struct CVolume* v);
 // The example (Content/Volumes/Example_Puff_0001.vdb .. 0024: a puff of smoke rising from a burning core), made when
 // missing by vdb.c's writer; false: not made
 bool volume_examples(void);
+bool volume_examples_present(void); // (made already: no need for a worker)

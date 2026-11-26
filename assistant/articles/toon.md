@@ -1,6 +1,6 @@
 id: toon
 kind: howto
-title: Toon e contorno: visual de desenho animado (cel shading, Auto Adaptive Outline) | Toon and outline: the cartoon look (cel shading, Auto Adaptive Outline)
+title: Toon e contorno: visual de desenho animado (cel shading, Auto Adaptive Outline) | Toon and outline: the cartoon look (cel shading, Auto Adaptive Outline) | Toon y contorno: aspecto de dibujo animado (cel shading, Auto Adaptive Outline)
 keys: toon, cel, cel shading, cell shading, anime, desenho animado, cartoon, dibujos animados, estilizado, stylized, estilizado, faixas, bands, bandas, rampa, ramp, rampa de tons, tone ramp, sombra colorida, shadow color, color de sombra, luz de borda, rim light, rim, luz de contorno, brilho estilizado, stylized highlight, specular toon, hachura, hatching, sombreado con lineas, contorno, outline, contorno adaptativo, auto adaptive outline, linha de contorno, line art, inked, tinta, silhueta, silhouette, largura do contorno, outline width, distancia, distance, forcar toon, force toon, nunca toon, never toon, luz toon, toon light, M_Toon, M_ToonRamp, M_ToonHatch, M_ToonSkin, MI_ToonBlue, Set Toon Parameter, Set Toon Color, Set Actor Outline, Set Light Toon Mode, REALENGINE_NO_OUTLINE, REALENGINE_NO_TOON
 --- pt
 ```diagram steps
@@ -53,4 +53,27 @@ Event BeginPlay
 - Cost (RTX 3060, the `toon` scene, Epic with TSR, a 1599x992 render): the outline 0.12 ms of GPU (~0.28 ms at native 1440p); the toon in the main pass the same as the RE_EXT variants. `REALENGINE_NO_OUTLINE=1` and `REALENGINE_NO_TOON=1` to compare. See its cost in the Debug Viewer (F10) > Toon Outline.
 - See also: [Materials](article:materials), [Render styles](article:render-styles), [Lights](article:lights).
 --- es
-**Toon** da el aspecto de dibujos animados: la luz en **bandas planas**, el lado oscuro en un **color de sombra** propio y un **contorno** alrededor de los objetos. En el material: **Details > Modelo de Sombreado = Toon** (bandas, color de sombra, rampa de puntos o imagen, brillo, luz de borde, sombreado con líneas). **Contorno** en cualquier material: color, ancho en px a 1440p y **Auto Adaptive** (el ancho sigue la distancia: fino cerca, grueso lejos). Cada actor puede tener su propio contorno (**Details > Contorno del Actor**) y cada luz su modo (**Forzar Toon**, **Nunca Toon**). En el juego: Set Toon Parameter, Set Toon Color, Set Actor Outline, Set Light Toon Mode. Ejemplos en Materials/Examples/Toon; escena de prueba `toon`.
+```diagram steps
+Material: Detalles > Shading Model = Toon
+Bands, Shadow Color, Ramp (puntos o una imagen)
+Highlight, Rim Light, Hatching, Toon Ambient
+Contorno: Draw Outline, Line Color y Width, Auto Adaptive
+Actor: Detalles > Actor Outline; Luz: Detalles > Toon Light
+```
+```blueprint
+Event BeginPlay
+  -> Set Toon Parameter ( Target = self, Parameter = "Bands", Value = 3 )
+  -> Set Toon Color ( Target = self, Parameter = "Shadow Color", Color = Make Vector( 0.3, 0.2, 0.5 ) )
+  -> Set Actor Outline ( Target = self, Enabled = true, Color = Make Vector( 1, 0.1, 0.05 ), Width = 4 )
+```
+**Toon** da el aspecto de dibujo animado: la luz en **bandas planas** en vez de un degradado, el lado oscuro en un **color de sombra** propio y un **contorno** dibujado alrededor de los objetos.
+1. En el material, **Detalles > Shading Model = Toon**. **Toon Bands**: 2 es el cel clásico (luz y sombra); 3 o 4 añaden tonos medios. **Toon Softness** suaviza el borde de cada banda; **Shadow Threshold** mueve dónde empieza la sombra.
+2. **Shadow Color** es adonde va el lado oscuro (multiplicado por el color base). **Received Shadow Color** tiñe donde otro objeto tapa la luz (sombras proyectadas), aparte del lado oscuro.
+3. La **rampa**: hasta 4 **puntos** (posición y color) de oscuro a iluminado, o una **Ramp Image** leída de izquierda a derecha (una rampa pintada).
+4. **Highlight** (color, intensidad, tamaño, dureza): un punto duro de luz. **Rim Light**: el borde rasante iluminado del lado al que llega una luz. **Hatching**: líneas en la pantalla donde hay poca luz (cruzadas donde es más oscuro), estables también con TSR. **Toon Ambient**: cuánta luz indirecta entra (menos = bandas más planas).
+5. **Outline** (cualquier shading model): **Draw Outline**, **Line Color** y **Line Width** (px a 1440p). **Auto Adaptive**: el grosor sigue la distancia a lo largo de la propia silueta (fino cerca, grueso lejos), según la **Near/Far Width Scale** y la **Width Curve** entre la **Near Distance** y la **Far Distance**. **Depth Sensitivity** dibuja líneas dentro del actor (un brazo delante del cuerpo); **Crease Angle** dibuja las aristas.
+6. Una **Material Instance** puede tener los suyos: **Override Toon and Outline**. Un **actor** puede tener su propio contorno: **Detalles > Actor Outline** (On, color, grosor). Una **luz** elige en **Detalles > Toon Light**: As the material, **Force Toon** (todo material en un paso cel) o **Never Toon** (una luz de relleno suave).
+- En el juego: **Set Toon Parameter** y **Set Toon Color** (por nombre, en inglés o portugués; el actor recibe su propia instancia, sin horneado), **Get Toon Parameter**, **Set Actor Outline** (el objeto que puedes recoger, el enemigo en tu punto de mira), **Set Light Toon Mode**.
+- Ejemplos en Materials/Examples/Toon: **M_Toon**, **M_ToonRamp**, **M_ToonHatch**, **M_ToonSkin**, **M_ToonGround** y **MI_ToonBlue**. Escena de prueba: `toon`.
+- Coste (RTX 3060, la escena `toon`, Épico con TSR, un render de 1599x992): el contorno 0.12 ms de GPU (~0.28 ms en 1440p nativo); el toon en el pase principal igual que las variantes RE_EXT. `REALENGINE_NO_OUTLINE=1` y `REALENGINE_NO_TOON=1` para comparar. Mira su coste en el Debug Viewer (F10) > Toon Outline.
+- Mira también: [Materiales](article:materials), [Estilos de render](article:render-styles), [Luces](article:lights).

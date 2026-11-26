@@ -133,6 +133,7 @@ void mat_op(MatProgBuf pb, uint op, uint nin, uint nout, uvec4 p, uint i, uint o
     }
     case MOP_OUTPUT: mo_base = IN(0); mo_emis = IN(1); mo_nrm = IN(2); break;
     case MOP_SET_W: OUT(0) = vec4(INV(0), clamp(INF(1), 0.0, 1.0)); break;
+    case MOP_GATHER: OUT(0) = vec4(IN(0)[p.x], IN(1)[p.y], IN(2)[p.z], IN(3)[p.w]); break; // (the affine fold's roots)
 #ifdef MAT_BAKE
     case MOP_STORE_SLOT: mat_store_slot(p.x, IN(0)); break; // material_bake.comp
 #endif

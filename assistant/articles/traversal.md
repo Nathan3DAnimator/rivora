@@ -1,6 +1,6 @@
 id: traversal
 kind: recipe
-title: Traversal: pular, subir e escalar obstáculos | Traversal: vault, mantle and climb obstacles
+title: Traversal: pular, subir e escalar obstáculos | Traversal: vault, mantle and climb obstacles | Traversal: saltar, trepar y escalar obstáculos
 keys: traversal, travessia, parkour, pular muro, vault, vault over, pular obstaculo, jump over obstacle, subir no muro, mantle, climb up, escalar, climb, subir caixa, climb a box, borda, ledge, agarrar borda, grab ledge, try traversal, game animation sample, pular cerca, hop a fence, subir parede, climb a wall
 --- pt
 ```diagram steps
@@ -37,6 +37,26 @@ Try Traversal | traces: front, top, depth, floor behind, room | Vault, Mantle or
 - The **Third Person** template already uses it: **Space** tries the traversal and jumps when there's nothing.
 - Ready clips and montages in `Characters/Mannequin/Traversal` (`AM_Traversal_Vault`, `_Mantle`, `_Climb`); change the montage's clip to use your own.
 - Cost: 0.044 ms a check (about 15 traces).
+
+```blueprint
+Event Key Space -> Try Traversal ( Target = self, Max Distance = 150, Max Height = 230, Draw Debug = false )
+  -> Branch ( Return Value ) False -> Jump
+```
+--- es
+```diagram steps
+Try Traversal | trazados: frente, parte superior, profundidad, suelo detrás, espacio | Vault, Mantle o Climb | objetivos FrontLedge y suelo | montage con root motion y warp
+```
+## Qué hace
+- **Try Traversal** (Target, Max Distance, Max Height, Draw Debug) mira lo que hay delante del Character y elige por sí solo:
+  - **Vault**: un obstáculo bajo (hasta 130 cm) y delgado (hasta 90 cm) con suelo más bajo detrás: pasa por encima y aterriza al otro lado.
+  - **Mantle**: un obstáculo bajo y profundo: sube encima.
+  - **Climb**: un obstáculo alto (hasta Max Height, 230 cm de forma predeterminada): salta, se agarra al borde, se impulsa y se pone de pie encima.
+  - **None**: un escalón (menos de 30 cm), demasiado alto, o sin espacio para el cuerpo. Return Value false.
+- Las **manos caen sobre el borde** y los **pies sobre el suelo** a cualquier altura y profundidad, mediante **Motion Warping** (objetivos `FrontLedge` y `BackFloor` / `TopFloor`). Mientras se reproduce, el cuerpo atraviesa el obstáculo (**Ignore Collision** en el montage), como el modo Flying de Unreal.
+- **Draw Debug** muestra los trazados durante 2 s: en rojo donde chocan, en verde libres, en amarillo los bordes, la cápsula donde terminará.
+- La plantilla **Third Person** ya lo usa: **Space** prueba el traversal y salta cuando no hay nada.
+- Clips y montages listos en `Characters/Mannequin/Traversal` (`AM_Traversal_Vault`, `_Mantle`, `_Climb`); cambia el clip del montage para usar el tuyo.
+- Costo: 0,044 ms por comprobación (unos 15 trazados).
 
 ```blueprint
 Event Key Space -> Try Traversal ( Target = self, Max Distance = 150, Max Height = 230, Draw Debug = false )

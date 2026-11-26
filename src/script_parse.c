@@ -80,6 +80,27 @@ const char* s_ty_name(SCtx* c, uint8_t ty) {
     return t < ST_COUNT ? g_sty_names[t] : "?";
 }
 
+// (2026-11-24, item 11) Unreal's soft object references as script types: Level (World), LevelSequence, Sound, Material,
+// Texture, StaticMesh... A field of one is a Blueprint variable Name of that asset class (its value the asset's name: what
+// Open Level, Load Stream Level, Play Sequence take), edited in Details with the asset picker
+const char* s_asset_ref_named(const char* n) {
+    static const struct { const char* name; const char* label; } map[] = {
+        { "Level", "Level" }, { "World", "Level" }, { "UWorld", "Level" }, { "LevelSequence", "Level Sequence" }, { "ULevelSequence", "Level Sequence" },
+        { "Sound", "Sound" }, { "SoundBase", "Sound" }, { "SoundWave", "Sound" }, { "SoundCue", "Sound" }, { "USoundBase", "Sound" },
+        { "Material", "Material" }, { "MaterialInterface", "Material" }, { "MaterialInstance", "Material" }, { "UMaterialInterface", "Material" },
+        { "Texture", "Texture" }, { "Texture2D", "Texture" }, { "UTexture2D", "Texture" }, { "StaticMesh", "Static Mesh" }, { "UStaticMesh", "Static Mesh" },
+        { "SkeletalMesh", "Skeletal Mesh" }, { "USkeletalMesh", "Skeletal Mesh" }, { "AnimSequence", "Animation Sequence" }, { "Animation", "Animation Sequence" },
+        { "AnimMontage", "Anim Montage" }, { "DataAsset", "Data Asset" }, { "UDataAsset", "Data Asset" }, { "ParticleSystem", "Particle System" },
+        { "NiagaraSystem", "Particle System" }, { "Dialogue", "Dialogue" }, { "Quest", "Quest" }, { "BehaviorTree", "Behavior Tree" },
+        { "InputAction", "Input Action" }, { "InputMappingContext", "Input Mapping Context" }, { "Vehicle", "Vehicle" }, { "PhysicsAsset", "Physics Asset" },
+        { "IKRig", "IK Rig" }, { "CameraShake", "Camera Shake" }, { "PCGGraph", "PCG Graph" }, { "PhysicalMaterial", "Physical Material" },
+        { "SoundAttenuation", "Sound Attenuation" }, { "SoundClass", "Sound Class" }, { "SoundMix", "Sound Mix" }, { "Brain", "AI Brain" },
+    };
+    for (size_t i = 0; n && i < sizeof map / sizeof map[0]; i++)
+        if (!strcmp(map[i].name, n)) return map[i].label;
+    return NULL;
+}
+
 uint8_t s_type_named(const char* n) {
     static const struct { const char* name; uint8_t t; } map[] = {
         { "void", ST_VOID }, { "None", ST_VOID }, { "bool", ST_BOOL }, { "boolean", ST_BOOL }, { "Bool", ST_BOOL },
@@ -213,7 +234,7 @@ Tok* s_lex(SCtx* c, const char* src, size_t len, int* ntok) {
         }
         // comments (and C's preprocessor lines, its "parent:" hint)
         bool hash_comment = ch == '#' && (c->lang == SL_REAL || c->lang == SL_PYTHON);
-        bool pre = ch == '#' && (c->lang == SL_C || c->lang == SL_CSHARP);
+        bool pre = ch == '#' && (c->lang == SL_C || c->lang == SL_CSHARP || c->lang == SL_CPP);
         if (hash_comment || pre || (ch == '/' && peekc(&L, 1) == '/')) {
             size_t s0 = L.i;
             while (L.i < L.n && peekc(&L, 0) != '\n') adv(&L, 1);
@@ -256,7 +277,7 @@ Tok* s_lex(SCtx* c, const char* src, size_t len, int* ntok) {
             t->s = s;
             continue;
         }
-        if (ch == '\'' && (c->lang == SL_C || c->lang == SL_CSHARP)) { // a char: its code
+        if (ch == '\'' && (c->lang == SL_C || c->lang == SL_CSHARP || c->lang == SL_CPP)) { // a char: its code
             adv(&L, 1);
             int v = peekc(&L, 0);
             if (v == '\\') adv(&L, 1), v = peekc(&L, 0) == 'n' ? '\n' : peekc(&L, 0);
@@ -322,6 +343,26 @@ Tok* s_lex(SCtx* c, const char* src, size_t len, int* ntok) {
     if (L.indent_lang) {
         if (L.nt && L.t[L.nt - 1].kind != TK_NEWLINE) push(&L, TK_NEWLINE, L.line, L.col);
         while (L.nindent) L.nindent--, push(&L, TK_DEDENT, L.line, 1);
+    }
+    if (c->lang == SL_CPP) { // (2026-11-25, item 13) C++'s spellings as the engine's: std:: dropped, auto, FVector, std::to_string...
+        static const char* const alias[][2] = { { "auto", "var" }, { "vector", "List" }, { "FVector", "Vector" }, { "FRotator", "Rotator" },
+                                                { "FString", "string" }, { "FName", "string" }, { "FText", "string" }, { "FLinearColor", "Color" },
+                                                { "FColor", "Color" }, { "int32", "int" }, { "int32_t", "int" }, { "uint8", "int" }, { "uint32", "int" },
+                                                { "to_string", "str" }, { "AActor", "Actor" }, { "ACharacter", "Character" }, { "APawn", "Pawn" } };
+        int k = 0;
+        for (int i = 0; i < L.nt; i++) {
+            Tok* t = &L.t[i];
+            if (t->kind == TK_IDENT && (!strcmp(t->s, "std") || !strcmp(t->s, "rivora")) && i + 1 < L.nt && L.t[i + 1].kind == TK_OP &&
+                !strcmp(L.t[i + 1].op, "::")) {
+                i++; // (std::vector -> vector)
+                continue;
+            }
+            if (t->kind == TK_IDENT)
+                for (size_t a = 0; a < sizeof alias / sizeof alias[0]; a++)
+                    if (!strcmp(t->s, alias[a][0])) t->s = alias[a][1];
+            L.t[k++] = *t;
+        }
+        L.nt = k;
     }
     push(&L, TK_EOF, L.line, L.col);
     *ntok = L.nt;

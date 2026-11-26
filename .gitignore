@@ -1,6 +1,10 @@
+# The public repository's clone (tools/publish_source.ps1)
+/rivora-public/
+
 # Build output
 build/
 build-*/
+build_*/
 dist/
 
 # Local and temporary files
@@ -15,3 +19,4 @@ external/upscalers/
 build.log
 build_cfg.log
 /*.log
+__pycache__/

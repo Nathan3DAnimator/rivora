@@ -1,5 +1,6 @@
 // The Physical Material editor (physmat.h; notas-dev/fisica.md "Materiais físicos"): a small window like Unreal's
 // asset Details: a preset to start from, the values with their descriptions, Save (Ctrl+S).
+#include "editor_docs.h"
 #include "physmat.h"
 
 #include <stdio.h>
@@ -97,4 +98,19 @@ bool physmat_editor_add_menu(const char* folder_vpath) {
     }
     igEndMenu();
     return made;
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+static const char* physmat_editor_docs_base(const char* vpath) { const char* b = strrchr(vpath, '/'); return b ? b + 1 : vpath; }
+int physmat_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    if (!E.open) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (op == DOCS_CLOSE) return E.open = false, E.unsaved = false, 1;
+    if (!E.unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, physmat_editor_docs_base(E.vpath)), 1;
+    bool ok = physmat_save(E.vpath, &E.m);
+    if (ok) E.unsaved = false;
+    return !ok;
 }

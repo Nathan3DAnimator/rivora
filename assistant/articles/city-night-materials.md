@@ -1,6 +1,6 @@
 id: city-night-materials
 kind: recipe
-title: Materiais da cidade à noite: retrorrefletor e flocos metálicos | City night materials: retroreflector and metallic flakes
+title: Materiais da cidade à noite: retrorrefletor e flocos metálicos | City night materials: retroreflector and metallic flakes | Materiales de la ciudad de noche: retrorreflector y escamas metálicas
 keys: retrorrefletor, retroreflector, retrorreflexao, retroreflection, placa refletiva, reflective sign, placa de transito, road sign, tachao, cat's eye, olho de gato, colete refletivo, hi-vis vest, refletor de bicicleta, bike reflector, brilha no farol, shines in the headlights, pintura metalica, metallic paint, flocos metalicos, metallic flakes, glitter, purpurina, brilho do carro, car paint sparkle, cidade a noite, city at night, flake size, flake spread
 --- pt
 Dois ajustes no material (Details do editor de material, qualquer Shading Model menos Eye e Toon) para a cidade à noite, como no GTA 6:
@@ -21,4 +21,14 @@ Two material settings (the material editor's Details, any Shading Model but Eye 
 
 ```diagram steps
 Material Editor | Retroreflection 8 (sign) or Metallic Flakes 1.5 (car) | a headlight beside the camera | the sign sends the light back, the paint sparkles
+```
+--- es
+Dos ajustes de material (los Detalles del editor de materiales, cualquier Shading Model salvo Eye y Toon) para la ciudad de noche, como en GTA 6:
+- **Retroreflection** (0 a 16) y **Retroreflection Color**: la superficie devuelve la luz hacia donde vino. Con un faro junto a la cámara, una señal de tráfico, un ojo de gato en la calzada, las franjas de un chaleco o un reflector de bicicleta brillan mucho más que la pintura normal. Vistos desde lejos de la luz, se ven normales.
+- **Metallic Flakes** (0 a 4), **Flake Size** (cm) y **Flake Spread**: escamas de metal bajo la capa, cada una inclinada a su manera, que destellan una a una alrededor del brillo: la pintura metalizada de un coche. A lo lejos las escamas se funden en un brillo suave, sin ruido de centelleo.
+- **Ejemplos listos**: `Examples/M_RoadSign` (señal blanca), `Examples/M_Reflector` (reflector rojo) y `Examples/M_CarPaintFlakes` (azul metalizado con escamas).
+- **Costo**: el retrorreflector es un término más por luz, solo en los materiales que lo usan. Las escamas cuestan dos hashes por luz en los píxeles del material. La escena `city_night` corre a más de 500 fps.
+
+```diagram steps
+Editor de materiales | Retroreflection 8 (señal) o Metallic Flakes 1.5 (coche) | un faro junto a la cámara | la señal devuelve la luz, la pintura centellea
 ```

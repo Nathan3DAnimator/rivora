@@ -55,6 +55,7 @@ EXTRA_BITS = {
     ('details', 'LOD'): ('grm->lod', '1u', 0),
     ('details', 'Dynamic'): ('grm->dynamic', '1u', 0),
     ('details', 'Collide'): ('grm->collide', '1u', 0),
+    ('details', 'Visible', '&gvis'): ('grm->visible', '1u', 0),  # (2026-11-25, item 16: the groom on / off)
     ('fpcam_ui', 'Use First Person Camera'): ('c->fp', 'FP_ON', 0),
     ('ia_ui_interactable', 'Can Repeat'): ('c->flags', 'IA_ONCE', 1),
     ('abil_ui_system', 'Activate with Keys 1-6'): ('c->flags', 'ABIL_KEYS', 0),

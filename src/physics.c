@@ -407,7 +407,10 @@ static void geom_of(const CStaticMesh* sm, const CTransform* t, const CRigidBody
     memcpy(g->half, half, 12);
     uint32_t want = rb ? rb->collision_shape : COLSHAPE_AUTO;
     uint32_t kind = SHAPE_BOX;
-    if (fixed && rb && rb->complex_collision && sm && slot != SHAPE_CUBE && slot != SHAPE_PLANE) kind = SHAPE_TRIS;
+    // (2026-11-24, item 4) the mesh asset's Collision Complexity (its viewer: .rlod) over the actor's Use Complex Collision
+    int asset_cc = sm ? render_mesh_collision(slot) : 0;
+    bool complex = asset_cc == 2 || (asset_cc == 0 && rb && rb->complex_collision);
+    if (fixed && complex && sm && slot != SHAPE_CUBE && slot != SHAPE_PLANE) kind = SHAPE_TRIS;
     else if (want == COLSHAPE_BOX) kind = SHAPE_BOX;
     else if (want == COLSHAPE_SPHERE) kind = SHAPE_BALL;
     else if (want == COLSHAPE_CAPSULE) kind = SHAPE_CAPS;

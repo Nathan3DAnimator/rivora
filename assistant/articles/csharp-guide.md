@@ -1,6 +1,6 @@
 id: csharp-guide
 kind: concept
-title: C# na Rivora Engine: o que funciona | C# in the Rivora Engine: what works
+title: C# na Rivora Engine: o que funciona | C# in the Rivora Engine: what works | C# en Rivora Engine: qué funciona
 keys: csharp, c#, c sharp, unity, monobehaviour, public class, using, foreach, list, var, new vector, editable, serializefield
 --- pt
 - `public class X : Actor { ... }` (ou `: Character`); `using` é ignorado; `MonoBehaviour` vira Actor.
@@ -14,3 +14,9 @@ keys: csharp, c#, c sharp, unity, monobehaviour, public class, using, foreach, l
 - `void BeginPlay()`, `void Tick(float dt)`, `void OnBeginOverlap(Actor other)` (also `Start`, `Update`, `OnTriggerEnter`).
 - `var`, `new Vector(...)`, `$"text {x}"`, `for`, `foreach`, `while`, `do { ... } while (...);`, `switch`, `++`/`--`, casts `(int)x`, `struct`, `int[] xs = { ... }`.
 - There are no extra classes, LINQ, your own generics or exceptions: one file is one engine class.
+--- es
+- `public class X : Actor { ... }` (o `: Character`); `using` se ignora; `MonoBehaviour` se convierte en Actor.
+- Los campos con `[Editable]` o `[SerializeField]` aparecen en Detalles.
+- `void BeginPlay()`, `void Tick(float dt)`, `void OnBeginOverlap(Actor other)` (también `Start`, `Update`, `OnTriggerEnter`).
+- `var`, `new Vector(...)`, `$"texto {x}"`, `for`, `foreach`, `while`, `do { ... } while (...);`, `switch`, `++`/`--`, conversiones `(int)x`, `struct`, `int[] xs = { ... }`.
+- No hay clases adicionales, LINQ, genéricos propios ni excepciones: un archivo es una clase del motor.

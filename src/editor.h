@@ -164,6 +164,7 @@ typedef struct Editor {
     // Undo / Redo: whole-world blobs (ecs_serialize), taken before each change; RE_UNDO_MAX steps
     struct UndoStep { uint8_t* data; size_t size; Entity selected; ReVmBuf mem; void* levels; } undo[RE_UNDO_MAX], redo[RE_UNDO_MAX]; // (levels: the Levels panel's list then, editor_levels.c)
     int undo_count, redo_count;
+    bool undo_hold; // (2026-11-24, MCP batches) the pushes held: the batch's one step (taken before it) is the only one
     struct UndoStep pending; // taken when a field starts being edited, kept if the edit ends with a change
 
     // The level file (.rlevel): its path ("" until saved) and whether it changed since
@@ -199,6 +200,7 @@ bool char_test_check(Editor* ed);
 bool constraint_test_setup(Editor* ed); // --constraint-test (constraint_test.c)
 bool pause_test_setup(Editor* ed, bool reload); // --pause-test / --pause-test-reload (pause_test.c)
 bool pause_test_check(Editor* ed, bool reload);
+bool pause_test_done(void); // (2026-11-25) its steps all done (the bench waits for them)
 extern double g_pie_tick_ms; // the Play's game step last frame, ms (editor.c: the pause's measure)
 bool constraint_test_check(Editor* ed);
 struct VkCtx;
@@ -235,6 +237,9 @@ void editor_simulate(Editor* ed, double now);
 #define RE_PAYLOAD_PLACE "RE_PLACE"
 typedef struct PlacePayload { int index; } PlacePayload;
 void editor_place_drop(Editor* ed, int index, const float at[3]);
+// (2026-11-25, item 18) A copy of an actor as Ctrl+D makes it (a unique name, its own save key), with no undo step and the
+// selection untouched; ENTITY_NONE when the world is full
+Entity editor_duplicate_actor(Editor* ed, Entity src);
 // (2026-11-24, the MCP server) the catalog by code: its count, a class's name (and its category or group), a class
 // placed in front of the camera (as the Add menu does: selected, undoable; ENTITY_NONE when nothing new), the
 // Outliner's class name of an actor ("Point Light", "Static Mesh Actor")
@@ -340,6 +345,9 @@ void editor_landscape_paint_tick(Editor* ed, double dt); // --scene landscape_pa
 void editor_wp_tick(Editor* ed, double dt);               // --scene wp: the player carried east over 4 km, the Data Layers switched
 bool editor_wp_check(Editor* ed);                         // ... the cells, the HLOD, the layers, no hitch
 void editor_procgen_tick(Editor* ed, double dt);          // --scene procgen: the player carried east
+void editor_facility_leak_tick(Editor* ed);             // (2026-11-25, item 19) --scene facility_leak: the deepest room, its lamps off
+// (facility_leak_test.c) the shot read back: the walls' blotches and mean (0: not checked); false: FAIL printed
+bool facility_leak_check(Editor* ed, const char* shot, double max_blotch, double min_mean);
 bool editor_procgen_check(Editor* ed, bool facility);     // ... the chunks, the rebases, the rooms
 void editor_snow_tick(Editor* ed, double dt);     // --scene snow: the Walker leaving prints
 void editor_vehicles_tick(Editor* ed, double dt); // --scene vehicles: the script driving them
@@ -435,6 +443,7 @@ void axes_rotator(const float axes[3][3], float rot_deg[3]);
 // Called before a change the user can undo (a gizmo drag, a Details edit): the undo history keeps the world as it was
 void editor_undo_push(Editor* ed);
 void editor_undo_drop(Editor* ed); // (2026-11-23) the last step dropped unapplied (a cancelled gizmo drag)
+void editor_undo_revert(Editor* ed); // (2026-11-24) the last step applied and dropped, no redo (an MCP batch rolled back / a dry run)
 void editor_undo(Editor* ed, double now);
 void editor_redo(Editor* ed, double now);
 
@@ -460,6 +469,7 @@ bool editor_android_upload_key(Editor* ed, double now); // <project>/Build/Andro
 bool editor_open_project(Editor* ed, const char* rproject, int tpl);
 // The Project Browser's open: done by main.c between frames (the loading screen draws its own frames meanwhile)
 void editor_open_project_later(Editor* ed, const char* rproject, int tpl);
+void editor_show_plugins(void); // Edit > Plugins opened (--show plugins)
 // A load's progress (main.c: the loading screen; NULL: nothing to show) and the project's own splash (its path)
 extern void (*g_load_progress)(float progress, const char* status);
 extern void (*g_load_splash)(const char* path);

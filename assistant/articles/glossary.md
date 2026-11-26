@@ -1,11 +1,11 @@
 id: glossary
 kind: concept
-title: Glossário | Glossary
+title: Glossário | Glossary | Glosario
 keys: glossario, significado, o que significa, termos, palavras, vocabulario, dicionario, glossary, meaning, definicao
 --- pt
 - **Ator**: algo no nível. **Componente**: uma parte de um ator.
 - **Asset**: um arquivo do projeto. **Nível**: um mapa.
-- **Blueprint**: uma classe feita de nós. **Script**: uma classe em código.
+- **Grafo**: uma classe feita de nós. **Script**: uma classe em código.
 - **Evento**: quando algo roda. **Tick**: todo quadro.
 - **Malha**: um modelo 3D. **Material**: a aparência da superfície.
 - **LOD**: uma versão mais simples de longe. **Mobilidade**: se o ator se move.
@@ -15,10 +15,20 @@ keys: glossario, significado, o que significa, termos, palavras, vocabulario, di
 --- en
 - **Actor**: something in the level. **Component**: a part of an actor.
 - **Asset**: a project file. **Level**: a map.
-- **Blueprint**: a class made of nodes. **Script**: a class in code.
+- **Graph**: a class made of nodes. **Script**: a class in code.
 - **Event**: when something runs. **Tick**: every frame.
 - **Mesh**: a 3D model. **Material**: the surface's look.
 - **LOD**: a simpler version from afar. **Mobility**: whether the actor moves.
 - **PIE**: playing inside the editor. **Package**: making the finished game.
 - **GI**: light that bounces. **Bake**: compute ahead (light, materials).
 - **TSR**: a smaller render upscaled with quality. **Replication**: copying the state over the network.
+--- es
+- **Actor**: algo en el nivel. **Componente**: una parte de un actor.
+- **Asset**: un archivo del proyecto. **Nivel**: un mapa.
+- **Grafo**: una clase hecha de nodos. **Script**: una clase en código.
+- **Evento**: cuándo algo se ejecuta. **Tick**: en cada fotograma.
+- **Malla**: un modelo 3D. **Material**: el aspecto de la superficie.
+- **LOD**: una versión más simple de lejos. **Mobility**: si el actor se mueve.
+- **PIE**: jugar dentro del editor. **Empaquetar**: crear el juego terminado.
+- **GI**: luz que rebota. **Bake**: calcular de antemano (luz, materiales).
+- **TSR**: un render más pequeño escalado con calidad. **Replicación**: copiar el estado por la red.

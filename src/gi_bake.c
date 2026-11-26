@@ -290,6 +290,7 @@ static void place_chart(Texel* g, uint32_t atlas, const Chart* c) {
         for (int r = 0; r < 3; r++) tx->nrm[r] *= nl;
         tx->pos[3] = 1.0f;
         tx->nrm[3] = 1.0f;
+        tx->du[3] = s->pad0; // (2026-11-25) the atlas's neighbors that are another face: walls (lightmap_bake.comp)
     }
 }
 

@@ -54,7 +54,7 @@ bool rules_ui_component(CGameRules* r) {
     ch |= flag(PL(TR("Win by Score")), &r->flags, GR_WIN_SCORE);
     if (r->flags & GR_WIN_SCORE) ch |= igDragInt(PL(TR("Score Target")), &r->score_target, 0.5f, 1, 1000000, "%d", 0);
     ch |= flag(PL(TR("Win by Elimination")), &r->flags, GR_WIN_ELIMINATE);
-    if (r->flags & GR_WIN_ELIMINATE) ch |= igInputTextWithHint(PL(TR("Eliminate Tag")), "Enemy", r->eliminate_tag, sizeof r->eliminate_tag, 0, NULL, NULL);
+    if (r->flags & GR_WIN_ELIMINATE) ch |= igInputTextWithHint(PL(TR("Eliminate Tag")), "Enemy", r->eliminate_tag, sizeof r->eliminate_tag, 0, NULL, NULL); // i18n: none (an example tag)
     ch |= flag(PL(TR("Lose Out of Lives")), &r->flags, GR_LOSE_LIVES);
     ch |= flag(PL(TR("Lose by Deaths")), &r->flags, GR_LOSE_DEATHS);
     if (r->flags & GR_LOSE_DEATHS) ch |= drag_u16(PL(TR("Max Deaths")), &r->max_deaths, 1, 9999, "%d");

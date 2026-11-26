@@ -5,6 +5,7 @@
 // puts a panel that opens without a place back beside the viewport, and keeps the layouts (.rlayout: the panels shown
 // and ImGui's docking, as text).
 #include "editor_dock.h"
+#include "editor_host.h" // (item 9)
 
 #include <GLFW/glfw3.h>
 #ifdef _WIN32
@@ -416,15 +417,16 @@ static bool layouts_dir(bool project, char* out, size_t cap) {
     return true;
 }
 
-static char* layout_text(Editor* ed) {
+static char* layout_text(Editor* ed, bool docs) {
     size_t n = 0;
     const char* ini = igSaveIniSettingsToMemory(&n);
-    size_t cap = n + 1024;
+    size_t cap = n + 1024 + (docs ? 16384 : 0);
     char* t = malloc(cap);
     if (!t) return NULL;
     int w = snprintf(t, cap, "; Real Engine layout (Window > Layout): the panels shown, then the docking (ImGui)\n[RealEngine][Panels]\n");
     for (int p = 1; p < DP_COUNT; p++) w += snprintf(t + w, cap - (size_t)w, "%s=%d\n", g_flag_names[p], *panel_flag(ed, p) ? 1 : 0);
     w += snprintf(t + w, cap - (size_t)w, "\n");
+    if (docs) w += (int)edhost_layout_write(t + w, cap - (size_t)w - n - 1); // (item 9) the asset editors open
     memcpy(t + w, ini, n);
     t[w + n] = 0;
     return t;
@@ -457,7 +459,7 @@ bool dock_layout_save(Editor* ed, const char* name, bool project) {
     if (!name || !name[0] || !layouts_dir(project, dir, sizeof dir)) return false;
     re_make_dirs(dir);
     snprintf(path, sizeof path, "%s/%s.rlayout", dir, name);
-    char* t = layout_text(ed);
+    char* t = layout_text(ed, false); // (a named layout: the panels and docking only, no project's documents)
     bool ok = t && write_text(path, t);
     free(t);
     return ok;
@@ -532,6 +534,7 @@ void dock_between_frames(Editor* ed) {
         else if (p == DP_MODES || p == DP_PLATFORMS) *panel_flag(ed, p) = false; // (a layout from before 0.44: they stay closed)
     }
     igLoadIniSettingsFromMemory(t, 0); // (ImGui's docking: the nodes rebuilt, the windows put back in them)
+    if (!g_editor_prefs_readonly && project_file()[0]) edhost_layout_read(t); // (item 9) the editors the project closed with
     ImGuiDockNode* n = igDockBuilderGetNode(dock_id());
     g_build_default = !n || (!n->ChildNodes[0] && !n->Windows.Size);
     free(t);
@@ -541,7 +544,7 @@ void dock_layout_autosave(Editor* ed) {
     // (2026-11-20, crashes #143-146) ImGui's settings: never without its context (main.c saves before destroying it)
     if (g_editor_prefs_readonly || !igGetCurrentContext()) return;
     char dir[700], path[900];
-    char* t = layout_text(ed);
+    char* t = layout_text(ed, project_file()[0] != 0); // (the project's own: its documents too, item 9)
     if (!t) return;
     if (project_file()[0]) {
         char root[600];

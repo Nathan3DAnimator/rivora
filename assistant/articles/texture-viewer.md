@@ -1,6 +1,6 @@
 id: texture-viewer
 kind: howto
-title: Ver texturas e malhas (o visualizador) | Viewing textures and meshes (the viewer)
+title: Ver texturas e malhas (o visualizador) | Viewing textures and meshes (the viewer) | Ver texturas y mallas (el visor)
 keys: visualizador de textura, texture viewer, texture editor, editor de textura, abrir textura, open texture, ver textura, canais, channels, canal alfa, alpha channel, mip, mips, nivel de mip, mip level, mipmap, hdr, .hdr, radiance, hdri, exposicao, exposure, exr, openexr, .exr nao abre, exr doesnt open, tiff, tif, gif, udim, rudim, miniatura, thumbnail, miniatura desatualizada, thumbnail not updating, miniatura nao atualiza, textura mudou, pintei a textura, photoshop, substance, reimportar textura, vertices, quantos vertices, vertex count, triangulos, triangle count, static mesh viewer, visualizador de malha, ver malha, textura no se actualiza, ver textura hdr
 --- pt
 ```diagram steps
@@ -42,3 +42,23 @@ Painted again in Photoshop, Krita or Substance and saved over it: **the Content 
 
 ## Meshes (Static Mesh)
 Double-clicking a mesh opens the asset viewport ([the viewport](article:asset-viewport)) with its **triangles and vertices**: the vertex count is the vertices the mesh uses, each once.
+--- es
+```diagram steps
+Doble clic en la textura (Explorador de contenidos) | Canales R G B A | Mip Level: cómo se ve de lejos | .hdr: HDR Exposure | Guardada de nuevo en otro programa: la ventana y la miniatura la siguen
+```
+## Abrir
+**Doble clic** en una textura del Explorador de contenidos para abrir el visor (como el Texture Editor de Unreal, más simple). Lee PNG, JPEG, TGA, BMP, TIFF, GIF, DDS, **.hdr** (Radiance, los HDRI) y **.rudim** (el primer tile de una textura UDIM). **Rueda**: zoom en el cursor; **arrastrar**: desplazar; **Fit** y **1:1** restablecen.
+
+## Ver los canales y los mips
+- **R G B A**: activa y desactiva cada canal; **A** solo muestra el alfa en gris (blanco = opaco).
+- **Mip Level**: la imagen reducida como la GPU la lee a lo lejos (su tamaño al lado). Úsalo para ver si una línea fina desaparece o si la textura se difumina demasiado a distancia.
+- El píxel bajo el cursor se muestra en la esquina (R, G, B, A).
+
+## Imágenes .hdr
+Un .hdr guarda luz por encima de 1. **HDR Exposure** aclara u oscurece solo la vista (+1 duplica) para ver el sol o las sombras; un material lee la imagen a 0 EV. **OpenEXR (.exr)** aún no se lee: la ventana lo dice; guárdalo como .hdr o PNG/TGA.
+
+## ¿Editada fuera de la engine?
+Pintada de nuevo en Photoshop, Krita o Substance y guardada encima: **la miniatura del Explorador de contenidos y el visor abierto la siguen solos** en menos de un segundo, sin reiniciar el editor (la engine comprueba las fechas de los archivos en un hilo en segundo plano, sin costo para el fotograma). Las mallas exportadas de nuevo también.
+
+## Mallas (Static Mesh)
+Hacer doble clic en una malla abre la ventana gráfica del asset ([la ventana gráfica](article:asset-viewport)) con sus **triángulos y vértices**: el conteo de vértices son los vértices que usa la malla, cada uno una vez.

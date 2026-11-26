@@ -290,6 +290,7 @@ const char* g_vk_extra_device_exts[24];
 uint32_t g_vk_extra_ndev;
 VkPhysicalDevice (*g_vk_pick_gpu)(VkInstance instance);
 int g_vk_validation_errors;
+char g_vk_last_validation[512]; // (item 21, the UI sweep: the last error's text, for its report)
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                                      VkDebugUtilsMessageTypeFlagsEXT type,
@@ -305,7 +306,10 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(VkDebugUtilsMessageSeverity
     if (severity < VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT && data->pMessage && strstr(data->pMessage, "\"rw_luma_history\""))
         return VK_FALSE;
     if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) fprintf(stderr, "[Vulkan] %s\n", data->pMessage);
-    if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) g_vk_validation_errors++; // --bench fails on them
+    if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) { // --bench fails on them
+        g_vk_validation_errors++;
+        snprintf(g_vk_last_validation, sizeof g_vk_last_validation, "%s", data->pMessage ? data->pMessage : "?");
+    }
     return VK_FALSE;
 }
 
@@ -683,6 +687,10 @@ static bool create_device(VkCtx* ctx) {
             }
         }
     }
+    // (2026-11-25, bug-fixer) what this process uses of the GPU's memory (vkctx_gpu_memory_used: the scalability_memory
+    // test, the process's private bytes moved with the machine's other work)
+    if (device_has_extension(ctx->gpu, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME))
+        exts[ext_count++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME, ctx->mem_budget = true;
     // the vendors' upscalers (upscale_vendor.c): DLSS's and XeSS's device extensions, XeSS's features patched into the chain
     void* chain = &f2;
     ups_vendor_device_exts(ctx->instance, ctx->gpu, exts, &ext_count, 48, &chain);
@@ -926,6 +934,17 @@ static void android_surface_gained(void* user) {
     ctx->swapchain_dirty = true;
 }
 #endif
+
+uint64_t vkctx_gpu_memory_used(const VkCtx* ctx) {
+    if (!ctx || !ctx->mem_budget || !ctx->gpu) return 0;
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT b = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT };
+    VkPhysicalDeviceMemoryProperties2 p = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2, &b };
+    vkGetPhysicalDeviceMemoryProperties2(ctx->gpu, &p);
+    uint64_t used = 0;
+    for (uint32_t i = 0; i < p.memoryProperties.memoryHeapCount; i++)
+        if (p.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) used += b.heapUsage[i];
+    return used;
+}
 
 bool vkctx_init(VkCtx* ctx, GLFWwindow* window, bool validation) {
     bool vsync = ctx->vsync; // the caller's choice survives the reset

@@ -1,6 +1,6 @@
 id: move-actors
 kind: howto
-title: Mover, girar e escalar atores | Move, rotate and scale actors
+title: Mover, girar e escalar atores | Move, rotate and scale actors | Mover, girar y escalar actores
 keys: mover, girar, escalar, gizmo, transformar, posicao, w e r, focar, voar camera, navegar viewport, move, rotate, scale, fly
 --- pt
 ```diagram keys
@@ -30,3 +30,17 @@ W: Move | E: Rotate | R: Scale | Space: Cycle | Q: Select | F: Frame | End: To t
 - **G** hides the icons (game view); **F11** fullscreen.
 
 The exact values are in the **Details** panel (Location, Rotation, Scale). [Open Details](open:details)
+--- es
+```diagram keys
+W: Mover | E: Girar | R: Escalar | Espacio: Alternar | Q: Seleccionar | F: Encuadrar | End: Al suelo
+```
+## Las herramientas (como en Unreal)
+- **W** mover, **E** girar, **R** escalar; **Espacio** las alterna; **Q** solo selecciona.
+- **F** encuadra el actor seleccionado; **End** lo deja caer al suelo.
+- **Ctrl+`** cambia el gizmo entre local y mundo. Pivote, ejes y valores escritos: mira "Control total del gizmo".
+
+## La cámara
+- Mantén el **botón derecho del ratón** y usa **W A S D** para volar; **Q / E** bajan y suben.
+- **G** oculta los íconos (vista de juego); **F11** pantalla completa.
+
+Los valores exactos están en el panel **Detalles** (Location, Rotation, Scale). [Abrir Detalles](open:details)

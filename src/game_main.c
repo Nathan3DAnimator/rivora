@@ -607,6 +607,11 @@ int main(int argc, char** argv) {
     audio_init(content); // the mixer (its own thread) and the project's sounds
     project_apply_audio(); // (Project Settings > Audio)
     brand_splash_frame(&vk, 0.95f, TR("Starting the game..."));
+    // (2026-11-25, bug-fixer) the gamepads asked once here, behind the splash: GLFW starts its joysticks (DirectInput, XInput)
+    // on the first ask, ~110 ms, which was the Play's first frame (the pause menu's Start button: play_hitch 188 ms)
+#ifndef __ANDROID__ // (the Android layer has no joystick API: its gamepads come by the input events)
+    glfwJoystickPresent(GLFW_JOYSTICK_1);
+#endif
     brand_splash_end(&vk);
     // (A9.4) HDR10 after the splash (drawn in SDR): the swapchain made again in A2B10G10R10 / ST.2084 when the display has it;
     // the UI then goes through its own target (the SDR swapchain's format: ImGui's pipeline stays)
@@ -756,6 +761,7 @@ int main(int argc, char** argv) {
 
     int exit_code = 0;
     double prev = re_time_seconds(), bench_from = prev + 1.0, bench_until = bench_from + bench_s;
+    bool bench_offscreen = false; // (the visible suites' fps measure, off the screens)
     uint64_t frames = 0;
     double cpu_sum = 0.0, gpu_sum = 0.0, worst = 0.0, vr_pair_sum = 0.0;
     bool f11 = false, f10 = false;
@@ -1295,6 +1301,13 @@ int main(int argc, char** argv) {
             }
             s_was = busy;
             if (busy && bench_s > 0.0) bench_from = t1 + 0.5, bench_until = bench_from + bench_s, frames = 0, cpu_sum = gpu_sum = worst = 0.0;
+        }
+        // (2026-11-23) the visible suites (REALENGINE_MONITOR): the fps measure off the screens, as the editor's (main.c,
+        // re_test_window_offscreen: a shown window costs 9-12% of the GPU in Windows' composition)
+        if (on_monitor && min_fps > 0.0 && bench_s > 0.0 && frames == 0 && t0 >= bench_from && !bench_offscreen) {
+            re_test_window_offscreen(G.window, true), bench_offscreen = true;
+            printf("[RealEngine] Visible suite: the fps measure off the screens\n"), fflush(stdout);
+            bench_from = t0 + 0.25, bench_until = bench_from + bench_s;
         }
         // --bench: the same measure as the editor's (after a second of warm-up)
         if (bench_s > 0.0 && t0 >= bench_from) {

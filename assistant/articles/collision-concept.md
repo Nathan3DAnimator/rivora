@@ -1,6 +1,6 @@
 id: collision-concept
 kind: concept
-title: Colisão e sobreposição | Collision and overlap
+title: Colisão e sobreposição | Collision and overlap | Colisión y superposición
 keys: colisao, colidir, atravessar parede, passa por dentro, overlap, sobreposicao, trigger, gatilho, bloquear, collision, nao colide
 --- pt
 ```diagram compare
@@ -26,3 +26,15 @@ Example | wall, floor | coin, zone, automatic door
 - A **Trigger** (Actor > Add) is an invisible overlap-only box. [Add a Trigger](add:Trigger)
 - The prototyping pieces (Box, Stairs, Ramp...) collide already.
 - The character goes through something? Check the actor's collision in Details.
+--- es
+```diagram compare
+ | Colisión | Superposición
+Bloquea | sí | no
+Eventos BeginOverlap | no | sí
+Ejemplo | pared, suelo | moneda, zona, puerta automática
+```
+- **Colisión**: el actor bloquea (el personaje no lo atraviesa).
+- **Superposición (Overlap)**: el actor deja pasar, pero avisa: se ejecutan los eventos **BeginOverlap / EndOverlap**.
+- Un **Trigger** (Actor > Añadir) es una caja invisible solo de superposición. [Añadir un Trigger](add:Trigger)
+- Las piezas de prototipado (Box, Stairs, Ramp...) ya colisionan.
+- ¿El personaje atraviesa algo? Revisa la colisión del actor en Detalles.

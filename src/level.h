@@ -37,6 +37,9 @@ const char* level_stream_persistent(void);
 bool level_find(const char* name, char* out, size_t cap); // Content/**/<name>.rlevel (or a path)
 uint32_t level_stream_request(const char* name, bool load, bool visible); // the Blueprints' hook (its id)
 bool level_stream_done(uint32_t id);
+// (2026-11-24) a request's progress 0..1 and its end (result: 0 going, 1 loaded, 2 failed); by the level's name too
+float level_stream_progress(uint32_t id, int* result);
+float level_stream_state(const char* name, int* result);
 void level_stream_update(World* w, bool playing); // each frame: a read level's actors in, an unload's out
 // (2026-11-16, sublevels.c) a level file's bytes copied in under the id given (0: the next streaming id); out by id; a level
 // loaded by someone else named to Load / Unload Stream Level

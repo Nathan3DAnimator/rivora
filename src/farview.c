@@ -431,7 +431,9 @@ void farview_prepare(VkCtx* vk, const GiSettings* gi, const float sun[3]) {
             uint32_t tris[4];
             render_mesh_lods(s, tris, NULL);
             if (tris[0] < 200u) continue; // (a few triangles: the mesh is as cheap as its card)
-            if (!r->plant) { // (merge of the batch 7: a prop's card only where the view reaches far; in a small room a chest's handle
+            // (2026-11-25, item 4) a crowd of one mesh (256 instances and up: the Unamed's 5000 capsules) gets its card whatever
+            // the scene's reach: the cull swaps each instance by its own size on screen, and the card's cost is shared by all
+            if (!r->plant && r->count < 256u) { // (merge of the batch 7: a prop's card only where the view reaches far; in a small room a chest's handle
                 // became one, and an impostor's mere presence turns on the Masked pipelines: +0.7 ms GPU, +0.8 ms CPU in demo_fighting)
                 float dsw = r->rad * FARV_FOCAL_PX / FARV_REF_PX; // (the distance where it shrinks under the switch, ~1440p at 90 degrees)
                 float e[3] = { F.smx[0] - F.smn[0], F.smx[1] - F.smn[1], F.smx[2] - F.smn[2] };

@@ -30,7 +30,7 @@ static bool def_combo(const char* label, uint32_t* hash, bool effect) {
             snprintf(lab, sizeof lab, "%s  (%s)##%u", disp, name, i);
             if (igSelectable_Bool(lab, h == *hash, 0, (ImVec2){ 0, 0 })) *hash = h, ch = true;
         }
-        if (!n) igTextDisabled("%s", TR(effect ? "No Gameplay Effect yet: Content Browser > Add > Gameplay Effect." : "No Gameplay Ability yet: Content Browser > Add > Gameplay Ability."));
+        if (!n) igTextDisabled("%s", (effect ? TR("No Gameplay Effect yet: Content Browser > Add > Gameplay Effect.") : TR("No Gameplay Ability yet: Content Browser > Add > Gameplay Ability.")));
         igEndCombo();
     }
     return ch;
@@ -40,7 +40,7 @@ bool abil_ui_system(CAbilitySystem* c) {
     bool ch = false;
     igSeparatorText(TR("Starting Attributes"));
     igSetNextItemWidth(-1);
-    ch |= igInputTextWithHint("##attrs", "Mana 100, MaxMana 100, Stamina 50", c->attributes, sizeof c->attributes, 0, NULL, NULL);
+    ch |= igInputTextWithHint("##attrs", "Mana 100, MaxMana 100, Stamina 50", c->attributes, sizeof c->attributes, 0, NULL, NULL); // i18n: none (an example of the attributes)
     igSetItemTooltip("%s", TR("Name and value, separated by commas. Speed is the Character's Max Walk Speed; Damage multiplies the damage it deals; Defense reduces what it takes; X stays within 0 and MaxX."));
     igSeparatorText(TR("Starting Abilities"));
     for (int i = 0; i < ABIL_START_ABILITIES; i++) {

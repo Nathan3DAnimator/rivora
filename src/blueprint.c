@@ -361,8 +361,8 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
     // --- levels ---
     [BPK_OPEN_LEVEL] = { { "Open Level (by Name)", "Game", "Leaves this level for another of the project (Content/.../<Level Name>.rlevel).", false },
                          "i:exec:,i:name:Level Name,o:exec:" },
-    [BPK_LOAD_STREAM] = { { "Load Stream Level", "Game|Level Streaming", "Brings a level's actors into this one, read in the background; Completed when they are in.", false },
-                          "i:exec:,i:name:Level Name,i:bool:Make Visible After Load,i:bool:Should Block on Load,o:exec:Completed" },
+    [BPK_LOAD_STREAM] = { { "Load Stream Level", "Game|Level Streaming", "Brings a level's actors into this one, read in the background. Completed when it ends either way; then Loaded (its actors are in) or Failed (no such level, or its file couldn't be read). Progress: 0 to 1 while it loads (read it in a Tick or a widget binding).", false },
+                          "i:exec:,i:name:Level Name,i:bool:Make Visible After Load,i:bool:Should Block on Load,o:exec:Completed,o:exec:Loaded,o:exec:Failed,o:float:Progress" },
     [BPK_UNLOAD_STREAM] = { { "Unload Stream Level", "Game|Level Streaming", "Takes a streamed level's actors out.", false },
                             "i:exec:,i:name:Level Name,o:exec:Completed" },
     [BPK_GET_LEVEL_NAME] = { { "Get Current Level Name", "Game", "The persistent level's name.", true }, "o:string:" },
@@ -757,7 +757,7 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
     [BPK_RAIN_PROP_GET] = { { "Get Rain Property", "Weather|Rain", "Reads any field of the Rain by its name (as Set Rain Property). 0 with no Rain or no such field.", true },
         "i:name:Property,o:float:Return Value" },
     [BPK_RAIN_PRESET] = { { "Set Rain Preset", "Weather|Rain", "Applies a preset to the Rain, the look and the sound together: Drizzle, Light, Moderate, Heavy, Storm, Monsoon or Stylized. False: no such preset.", false },
-        "i:exec:,i:name:Preset,o:exec:,o:bool:Return Value" },
+        "i:exec:,i:int(ERainPreset):Preset,o:exec:,o:bool:Return Value" },
     [BPK_RAIN_DROP_COLOR] = { { "Set Rain Drop Color", "Weather|Rain", "Tints the drops and the splashes (1, 1, 1: clear water lit by the sky; brighter than 1 glows).", false },
         "i:exec:,i:vector:Color,o:exec:" },
     [BPK_ACTOR_WETNESS] = { { "Get Actor Wetness", "Weather|Rain", "How wet a moving actor is (a Character, a Skeletal Mesh, a vehicle, a physics body near the camera): 0 dry .. 1 soaked; -1 when the rain doesn't follow it. Self with no Target.", true },
@@ -765,7 +765,7 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
     [BPK_SET_ACTOR_WETNESS] = { { "Set Actor Wetness", "Weather|Rain", "Sets how wet a moving actor is (0..1): a character out of a lake is soaked at once and dries over the Rain's Actor Dry Time. Self with no Target.", false },
         "i:exec:,i:actor:Target,i:float:Wetness,o:exec:" },
     [BPK_RAIN_SHADING] = { { "Set Rain Shading Style", "Weather|Rain", "How the wet world is shaded: Realistic, Cinematic or Stylized (sets the shading fields; change any after with Set Rain Property: \"Darkening\", \"Water Film\", \"Film Roughness\", \"Puddle Clarity\", \"Puddle Edge\", \"Surface Splashes\", \"Wall Drops\", \"Wall Drop Size\", \"Drop Light\", \"Drop Opacity\", \"Rain Mist\"). False: no such style.", false },
-        "i:exec:,i:name:Style,o:exec:,o:bool:Return Value" },
+        "i:exec:,i:int(ERainShading):Style,o:exec:,o:bool:Return Value" },
     [BPK_SET_LIGHTING_LEVEL] = { { "Set Lighting Level Visible", "Game|Level Streaming", "Turns a Lighting Level (a sublevel marked Lighting in Window > Levels) on or off while the game runs: its lights and its baked lighting, added over the persistent level's and the other Lighting Levels' that are on. Any mix at once: day and a lamp-lit street, a storm over the night. Loads it when it isn't in. False: no such Lighting Level.", false },
         "i:exec:,i:name:Level Name,i:bool:Visible,o:exec:,o:bool:Return Value" },
     [BPK_GET_LIGHTING_LEVEL] = { { "Is Lighting Level Visible", "Game|Level Streaming", "True when a Lighting Level (Window > Levels) is on: its lights and its baked lighting shown.", true },
@@ -779,7 +779,7 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
     [BPK_ACR_STRENGTH] = { { "Set Active Ragdoll Strength", "Animation|Active Ragdoll", "How strongly the muscles follow the animation: 0 limp, 1 normal, above 1 stiff. Bone Name empty: the whole body; else that bone and every bone below it (an arm going slack, a wounded leg). Blend Time: seconds to get there.", false },
         "i:exec:,i:actor:Target,i:string:Bone Name,i:float:Strength,i:float:Blend Time,o:exec:" },
     [BPK_ACR_PROFILE] = { { "Set Muscle Profile", "Animation|Active Ragdoll", "A set of strengths per part of the body: Default, Relaxed, Tense, Protective (arms held up), Drunk (loose, sways), Limp. False: no such profile.", false },
-        "i:exec:,i:actor:Target,i:name:Profile,o:exec:,o:bool:Return Value" },
+        "i:exec:,i:actor:Target,i:int(EMuscleProfile):Profile,o:exec:,o:bool:Return Value" },
     [BPK_ACR_HIT] = { { "Apply Hit Reaction", "Animation|Active Ragdoll", "A hit on a bone: Impulse (cm/s) pushes its body, and its muscles (and those below it) drop to Weaken (0 limp .. 1 untouched), coming back over Recover Time seconds. A shot in the arm, a punch, a kick; strong enough it knocks the character down.", false },
         "i:exec:,i:actor:Target,i:string:Bone Name,i:vector:Impulse,i:float:Weaken,i:float:Recover Time,o:exec:" },
     [BPK_ACR_BALANCE] = { { "Get Balance State", "Animation|Active Ragdoll", "Where its balance is: 0 Balanced, 1 Stumbling, 2 Fallen, 3 Getting Up (-1: not an Active Ragdoll). Play a get-up sound or montage, stop the AI while it is down.", true },
@@ -842,7 +842,7 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
     [BPK_FP_FOCUS_DISTANCE] = { { "Get Focus Distance", "Camera|First Person", "Where the autofocus is now (cm; 0: no autofocus).", true }, // (Q12)
         "i:actor:Target,o:float:Return Value" },
     [BPK_FP_PRESET] = { { "Set First Person Camera Preset", "Camera|First Person", "Gives the pawn's camera a preset's values: \"Realistic\", \"Cinematic\", \"Arcade\", \"Horror\". False: no such preset or no camera.", false }, // (Q12)
-        "i:exec:,i:actor:Target,i:name:Preset,o:exec:,o:bool:Return Value" },
+        "i:exec:,i:actor:Target,i:int(EFirstPersonPreset):Preset,o:exec:,o:bool:Return Value" },
     [BPK_SHAKE_START] = { { "Start Camera Shake", "Camera|Camera Shake", "Plays a Camera Shake on the player's view (an asset's name, \"CS_Explosion\", or a built-in one: Explosion, Earthquake, Handheld, Hit, Gunshot, Footstep, Heartbeat, Dread) at Scale. Returns its handle for Stop Camera Shake.", false }, // (Q12)
         "i:exec:,i:name:Shake,i:float:Scale,o:exec:,o:int:Return Value" },
     [BPK_SHAKE_STOP] = { { "Stop Camera Shake", "Camera|Camera Shake", "Stops a shake by its handle: blending out, or at once.", false }, // (Q12)
@@ -861,13 +861,13 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
     [BPK_GET_TENSION] = { { "Get Tension", "Rendering|Horror", "The Tension Director's value now (0..1, the smoothed one): drive your own music, AI or effects from it.", true },
         "o:float:Return Value" },
     [BPK_TRIGGER_FILTER] = { { "Trigger Horror Filter", "Rendering|Horror", "A filter as an event: up to Intensity in Fade In seconds, held Hold seconds, gone in Fade Out. Filters: Hallucination (coarse colored noise, red, posterized, the blacks crushed), Black & White Blown Out, White Flash, TV Static, VHS, Chromatic Aberration, Distortion. A jump scare: White Flash 1, 0, 0.05, 0.1. False: no such filter.", false },
-        "i:exec:,i:name:Filter,i:float:Intensity,i:float:Fade In,i:float:Hold,i:float:Fade Out,o:exec:,o:bool:Return Value" },
+        "i:exec:,i:int(EHorrorFilter):Filter,i:float:Intensity,i:float:Fade In,i:float:Hold,i:float:Fade Out,o:exec:,o:bool:Return Value" },
     [BPK_SET_FILTER] = { { "Set Horror Filter", "Rendering|Horror", "Holds a filter at Intensity (0: off), faded over Fade seconds: VHS for a found-footage level, Distortion while poisoned. Stacks with the triggered ones (the strongest wins). False: no such filter.", false },
-        "i:exec:,i:name:Filter,i:float:Intensity,i:float:Fade,o:exec:,o:bool:Return Value" },
+        "i:exec:,i:int(EHorrorFilter):Filter,i:float:Intensity,i:float:Fade,o:exec:,o:bool:Return Value" },
     [BPK_CLEAR_FILTERS] = { { "Clear Horror Filters", "Rendering|Horror", "Every horror filter faded out over Fade seconds (the held ones and the events under way).", false },
         "i:exec:,i:float:Fade,o:exec:" },
     [BPK_GET_FILTER] = { { "Get Horror Filter", "Rendering|Horror", "A horror filter's intensity now (0..1): its event, its held value and the Sequencer's, the strongest.", true },
-        "i:name:Filter,o:float:Return Value" },
+        "i:int(EHorrorFilter):Filter,o:float:Return Value" },
     [BPK_SET_LETTERBOX] = { { "Set Letterbox", "Rendering|Horror", "Black bars closing to an aspect ratio over Blend Time seconds (2.39 scope, 2.2 the horror shorts', 1.85; 0: open again). For a cutscene, a scare, a memory.", false },
         "i:exec:,i:float:Aspect Ratio,i:float:Blend Time,o:exec:" },
     [BPK_DIP_BLACK] = { { "Dip to Black", "Rendering|Horror", "The picture fades to black in Fade In seconds, stays Hold, comes back in Fade Out: the cut between two blocks of the story, waking up after being caught.", false },
@@ -875,9 +875,9 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
     [BPK_DIP_WHITE] = { { "Dip to White", "Rendering|Horror", "The picture fades to white and back (Fade In, Hold, Fade Out): a flashback, a blast, a memory.", false },
         "i:exec:,i:float:Fade In,i:float:Hold,i:float:Fade Out,o:exec:" },
     [BPK_SCARE_RIG] = { { "Play Scare Rig", "Rendering|Horror", "A camera move on the player's view for Duration seconds (0: its own): Dolly Zoom (the lens widens while the camera pulls in: the room stretches behind the subject), Whip Pan (a snap aside and back), Dutch Angle (the horizon tilted). Intensity 1: the usual; more is stronger. False: no such rig.", false },
-        "i:exec:,i:name:Rig,i:float:Intensity,i:float:Duration,o:exec:,o:bool:Return Value" },
+        "i:exec:,i:int(EScareRig):Rig,i:float:Intensity,i:float:Duration,o:exec:,o:bool:Return Value" },
     [BPK_SET_LIGHT_FLICKER] = { { "Set Light Flicker", "Rendering|Horror", "A light's flicker pattern: None, Candle, Faulty Bulb, Strobe, Lightning or Pulse, how deep (Amount 0..1) and how fast (Speed x). The pattern's sound (Details > Light Flicker) plays in sync with its strikes. False: not a light or no such pattern.", false },
-        "i:exec:,i:actor:Target,i:name:Pattern,i:float:Amount,i:float:Speed,o:exec:,o:bool:Return Value" },
+        "i:exec:,i:actor:Target,i:int(ELightFlicker):Pattern,i:float:Amount,i:float:Speed,o:exec:,o:bool:Return Value" },
     [BPK_SET_LIGHT_CHANNELS] = { { "Set Lighting Channels", "Rendering|Horror", "Lighting Channels on an actor and its components: on a light, the meshes it lights (only those sharing a channel); on a mesh or a character, the lights that reach it. A hero light on channel 1 that lights only the player: Channel 0 off, Channel 1 on, on both.", false },
         "i:exec:,i:actor:Target,i:bool:Channel 0,i:bool:Channel 1,i:bool:Channel 2,o:exec:" },
     [BPK_SET_RIM_TARGET] = { { "Set Rim Light Target", "Rendering|Horror", "Makes a light a Rim Light behind an actor as the camera sees it (Distance behind, Height above): the silhouette's bright edge that cuts a character out of the dark. Target Actor empty: the player. Off: the light stays where it is.", false },
@@ -916,7 +916,7 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
     [BPK_SPLINE_SET_CLOSED] = { { "Set Closed Loop", "Splines", "Joins the last point back to the first (a loop: a race track, a patrol) or opens it.", false },
         "i:exec:,i:actor:Target,i:bool:Closed Loop,o:exec:" },
     [BPK_SPLINE_SET_TYPE] = { { "Set Spline Point Type", "Splines", "A point's type: \"Curve\" (automatic tangents), \"Curve Custom Tangent\", \"Linear\" (straight to the next) or \"Constant\" (a step).", false },
-        "i:exec:,i:actor:Target,i:int:Index,i:name:Type,o:exec:" },
+        "i:exec:,i:actor:Target,i:int:Index,i:int(ESplinePointType):Type,o:exec:" },
     [BPK_CABLE_ATTACH_END] = { { "Set Attach End To", "Splines|Cable", "Holds the cable's end on an actor (a socket or bone of its Skeletal Mesh when named): a rope tied to a hand, a hose to a car.", false },
         "i:exec:,i:actor:Target,i:actor:Actor,i:string:Socket Name,o:exec:,o:bool:Return Value" },
     [BPK_CABLE_ATTACH_START] = { { "Set Attach Start To", "Splines|Cable", "Holds the cable's start on an actor (and a socket or bone); none: the cable's own actor.", false },
@@ -942,7 +942,7 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
         "i:actor:Target,o:bool:Return Value,o:int:Count" },
     // --- (Q16) everything editable in the game (runtime_lighting.h, props.h, cvars.h) ---
     [BPK_BUILD_LIGHTING] = { { "Build Lighting (Async)", "Rendering|Lighting", "The editor's Build Lighting run in the game, for a level made while playing (procedural rooms, a PCG graph, spawned Static actors): the lightmaps and the baked probe volume of every Static mesh. Mode: Loading Screen (the game waits behind the loading screen, the bake as fast as the GPU goes) or Progressive (the game plays on: a slice of the bake each frame inside Budget ms of the GPU, the dynamic GI lighting the level until the lightmaps are ready, then they show). Quality: Preview or Production. The first pin goes on at once; Completed when the bake ends (Event On Lighting Built runs too). Started false: no hardware ray tracing, no Static mesh, or a bake already running.", false },
-                           "i:exec:,i:name:Mode,i:name:Quality,i:float:Budget ms,o:exec:,o:exec:Completed,o:bool:Started" },
+                           "i:exec:,i:int(ELightingBuildMode):Mode,i:int(ELightingQuality):Quality,i:float:Budget ms,o:exec:,o:exec:Completed,o:bool:Started" },
     [BPK_LIGHTING_PROGRESS] = { { "Get Lighting Build Progress", "Rendering|Lighting", "The game's Build Lighting: Progress 0..1, Building while it runs, Built once its lightmaps show. For a loading bar of your own (Mode Progressive) or a message.", true },
                               "o:float:Progress,o:bool:Building,o:bool:Built" },
     [BPK_CANCEL_LIGHTING] = { { "Cancel Lighting Build", "Rendering|Lighting", "Stops the game's Build Lighting: the dynamic GI goes on lighting the level; Event On Lighting Built runs with Success false.", false }, "i:exec:,o:exec:" },
@@ -1079,7 +1079,7 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
     [BPK_IS_OPEN_NOW] = { { "Is Open Now", "City", "True when Target (an Interactable with Smart Object Slots) is open at the clock's hour.", true },
         "i:actor:Target,o:bool:Return Value" },
     [BPK_SET_LOCO_STYLE] = { { "Set Locomotion Style", "Animation|Motion Matching", "How Target moves: Normal, Injured (a limp), Tired, Drunk or Carrying. Its Motion Matching takes the clips with that word in their names when it has them, else a layer bends the body; it eases in (no pop). The active ragdoll's limp sets Injured by itself.", false },
-        "i:exec:,i:actor:Target,i:name:Style,o:exec:,o:bool:Return Value" },
+        "i:exec:,i:actor:Target,i:int(ELocomotionStyle):Style,o:exec:,o:bool:Return Value" },
     [BPK_ADD_WARP_TARGET] = { { "Add or Update Warp Target", "Animation|Motion Warping", "Where Target's montage ends its Motion Warping window of this name: a place and a facing. Its root motion bends inside the window to arrive there: a vault onto a ledge, an attack that reaches its victim, a hand on a door handle.", false },
         "i:exec:,i:actor:Target,i:name:Warp Target Name,i:vector:Location,i:rotator:Rotation,o:exec:" },
     [BPK_REMOVE_WARP_TARGET] = { { "Remove Warp Target", "Animation|Motion Warping", "Forgets Target's Warp Target of this name (empty: all of Target's): its windows play the clip as it is.", false },
@@ -1102,14 +1102,31 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
         "o:exec:,o:actor:Other Actor,o:vector:Location,o:name:Window" },
     [BPK_PLAY_HIT_REACTION] = { { "Play Hit Reaction", "Animation|Montage", "Target reacts to a hit from Hit Location: its spine and head thrown away from it and springing back (Strength: 0.3 a slap, 1 a punch, 2 a hammer), and when Montage Prefix names a set (AM_Hit_Front, AM_Hit_Back, AM_Hit_Left, AM_Hit_Right) the montage of that side plays. Return Value: the side (Front, Back, Left or Right).", false },
         "i:exec:,i:actor:Target,i:vector:Hit Location,i:float:Strength,i:name:Montage Prefix,o:exec:,o:name:Return Value" },
-    [BPK_PRELOAD_LEVEL] = { { "Preload Level", "Game|Level Streaming", "Loads a level in the background without opening it: its file read in slices and its actors built apart (no BeginPlay, nothing drawn) at Load Speed (0.01 slow and light, e.g. behind a lobby; 1 as fast as it goes; 0: the Async Loading Speed). Open Level (by Name) of it later swaps it in at once, like a camera cut; not finished by then, the loading screen shows and it finishes at full speed.", false },
+    [BPK_PRELOAD_LEVEL] = { { "Preload Level", "Game|Level Streaming", "Loads a level in the background without opening it: its file read in slices and its actors built apart (no BeginPlay, nothing drawn) at Load Speed (min 0.01 slow and light, e.g. behind a lobby; max 1 as fast as it goes; 0: the Async Loading Speed). The first output goes on at once; Loaded when it is ready, Failed when it can't be (no such level, an unreadable file, cancelled); Progress 0 to 1 meanwhile. Open Level (by Name) of it then swaps it in at once, like a camera cut; not finished by then, the loading screen shows and it finishes at full speed.", false },
+        "i:exec:,i:name:Level Name,i:float:Load Speed,o:exec:,o:exec:Loaded,o:exec:Failed,o:float:Progress" },
+    [BPK_SET_LEVEL_LOAD_SPEED] = { { "Set Level Load Speed", "Game|Level Streaming", "Changes a preloading level's Load Speed while it loads (min 0.01, max 1; 0: back to the Async Loading Speed): low while the lobby plays, high when everyone pressed Play. Level Name empty: every preload.", false },
         "i:exec:,i:name:Level Name,i:float:Load Speed,o:exec:" },
-    [BPK_SET_LEVEL_LOAD_SPEED] = { { "Set Level Load Speed", "Game|Level Streaming", "Changes a preloading level's Load Speed while it loads (0.01 .. 1): low while the lobby plays, high when everyone pressed Play. Level Name empty: every preload.", false },
-        "i:exec:,i:name:Level Name,i:float:Load Speed,o:exec:" },
-    [BPK_SET_ASYNC_LOAD_SPEED] = { { "Set Async Loading Speed", "Game|Level Streaming", "The speed of every background load (0.01 .. 1; 1, the default, as fast as it goes): the preloads left at their default speed and Load Stream Level's reads. Low keeps the frame smooth while something big loads behind.", false },
+    [BPK_SET_ASYNC_LOAD_SPEED] = { { "Set Async Loading Speed", "Game|Level Streaming", "The speed of every background load (min 0.01, max 1; 1, the default, as fast as it goes): the preloads left at their default speed and Load Stream Level's reads. Low keeps the frame smooth while something big loads behind.", false },
         "i:exec:,i:float:Load Speed,o:exec:" },
-    [BPK_GET_PRELOAD_PROGRESS] = { { "Get Level Preload Progress", "Game|Level Streaming", "How far a preloading level is (0..1) and whether it is Ready (Open Level then swaps it in without a loading screen). Preloading: it was asked and hasn't failed.", true },
-        "i:name:Level Name,o:float:Return Value,o:bool:Ready,o:bool:Preloading" },
+    [BPK_GET_PRELOAD_PROGRESS] = { { "Get Level Preload Progress", "Game|Level Streaming", "How far a preloading level is (0..1) and whether it is Ready (Open Level then swaps it in without a loading screen). Preloading: it was asked and hasn't failed. Failed: it couldn't be preloaded.", true },
+        "i:name:Level Name,o:float:Return Value,o:bool:Ready,o:bool:Preloading,o:bool:Failed" },
+    [BPK_GET_STREAM_STATE] = { { "Get Stream Level State", "Game|Level Streaming", "A Load Stream Level's state by the level's name: Progress 0 to 1, Loaded (its actors are in) and Failed (it couldn't be loaded). Code reads it after load_stream_level returns; a widget binds a bar to Progress.", true },
+        "i:name:Level Name,o:float:Progress,o:bool:Loaded,o:bool:Failed" },
+    [BPK_SET_CULTURE] = { { "Set Current Culture", "Utilities|Internationalization", "Switches the game's texts to a culture of the project's localization (\"en\", \"pt-BR\", \"es\"...; empty: the native): the Widgets, the dialogue, the quests and the Blueprints' Text change at once, without a restart. Save to Config keeps it in the player's settings (Game User Settings: Culture). Return Value: its compiled table was found.", false },
+        "i:exec:,i:string:Culture,i:bool:Save to Config,o:exec:,o:bool:Return Value" },
+    [BPK_GET_CULTURE] = { { "Get Current Culture", "Utilities|Internationalization", "The culture the game's texts are in (its code: \"en\", \"pt-BR\"...).", true },
+        "o:string:Return Value" },
+    [BPK_GET_CULTURES] = { { "Get Localized Cultures", "Utilities|Internationalization", "The project's cultures (its localization's native and targets), for a language menu.", true },
+        "o:string[]:Return Value" },
+    // (2026-11-25, item 16) the actor's Groom (groom.c groom_of: on it or a component of it): on / off, simulated or static
+    [BPK_SET_GROOM_VISIBLE] = { { "Set Groom Visible", "Rendering|Groom", "Turns the actor's hair (its Groom, on it or a component of it) on or off: off, it is neither drawn nor simulated. Target: the actor (none: self).", false },
+        "i:exec:,i:actor:Target,i:bool:Visible,o:exec:" },
+    [BPK_SET_GROOM_SIMULATE] = { { "Set Groom Simulate", "Rendering|Groom", "The actor's hair simulated (Dynamic: it swings, falls, collides with the head and the body's Physics Asset) or static (it follows the skin only). Turned on, it starts from its combed shape.", false },
+        "i:exec:,i:actor:Target,i:bool:Simulate,o:exec:" },
+    [BPK_GET_GROOM_VISIBLE] = { { "Get Groom Visible", "Rendering|Groom", "Whether the actor's hair is on (false: off, or no Groom).", true },
+        "i:actor:Target,o:bool:Return Value" },
+    [BPK_GET_GROOM_SIMULATE] = { { "Get Groom Simulate", "Rendering|Groom", "Whether the actor's hair is simulated (Dynamic) or static (false: also no Groom).", true },
+        "i:actor:Target,o:bool:Return Value" },
     [BPK_CANCEL_PRELOAD] = { { "Cancel Level Preload", "Game|Level Streaming", "Stops preloading a level and frees what it read. Level Name empty: every preload.", false },
         "i:exec:,i:name:Level Name,o:exec:" },
     [BPK_ENTER_COVER] = { { "Enter Cover", "Character|Cover", "Takes Target (a Character) into cover against the nearest wall within Search Distance (cm, 0: 200): its back to it, glided there. In cover it moves only along the wall and stops at its ends; behind a low wall (under ~120 cm) it crouches. Return Value: a wall was found.", false },
@@ -1494,6 +1511,7 @@ static const NodeSpec g_nodes[BPN_KIND_COUNT] = {
 
 uint32_t bp_node_kind_count(void) { return BPN_KIND_COUNT; }
 const BpNodeDesc* bp_node_desc(uint32_t kind) { return kind < BPN_KIND_COUNT ? &g_nodes[kind].d : NULL; }
+const char* bp_node_pin_spec(uint32_t kind) { return kind < BPN_KIND_COUNT && g_nodes[kind].pins ? g_nodes[kind].pins : ""; }
 
 bool bp_kind_gameplay(uint32_t k) {
     if (k >= BPN_KIND_COUNT || !g_nodes[k].d.category) return false;
@@ -1654,14 +1672,53 @@ BpGraph* bp_add_graph(BpAsset* a, const char* name, int gkind) {
 // A spec's type: "float", "vector[]" (an array), "int{}" (a set), "wild<>" (a map), "wild2" (a map's value), "string*2"
 // (repeated: 2 + the pins added)
 // (2026-11-19) the engine's own enumerations on int pins ("int(EName)": the pin is an int, the graph shows a drop-down)
-static const struct { const char* name; const char* entries[8]; int n; } g_builtin_enums[] = {
+// (2026-11-25, item 13) the nodes whose option was typed as a name became these (a drop-down; the old names still read)
+static const struct { const char* name; const char* entries[12]; int n; } g_builtin_enums[] = {
     { "ETraceChannel", { "Visibility", "Camera", "World Static", "World Dynamic", "Pawn", "Landscape" }, 6 },
     { "EDrawDebugTrace", { "None", "For One Frame", "For Duration", "Persistent" }, 4 },
+    { "ESplinePointType", { "Curve", "Curve Custom Tangent", "Linear", "Constant" }, 4 },
+    { "ELocomotionStyle", { "Normal", "Injured", "Tired", "Drunk", "Carrying" }, 5 },
+    { "ELightFlicker", { "None", "Candle", "Faulty Bulb", "Strobe", "Lightning", "Pulse" }, 6 },
+    { "ELightingBuildMode", { "Progressive", "Loading Screen" }, 2 },
+    { "ELightingQuality", { "Preview", "Production" }, 2 },
+    { "EHorrorFilter", { "Hallucination", "Black & White Blown Out", "White Flash", "TV Static", "VHS", "Chromatic Aberration", "Distortion" }, 7 },
+    { "EScareRig", { "Dolly Zoom", "Whip Pan", "Dutch Angle" }, 3 },
+    { "ERainPreset", { "Drizzle", "Light Rain", "Moderate Rain", "Heavy Rain", "Storm", "Monsoon", "Stylized" }, 7 },
+    { "ERainShading", { "Realistic", "Cinematic Look", "Stylized" }, 3 },
+    { "EMuscleProfile", { "Default", "Relaxed", "Tense", "Protective", "Drunk", "Limp" }, 6 },
+    { "EFirstPersonPreset", { "Realistic", "Cinematic", "Arcade", "Horror" }, 4 },
+};
+// the other spellings the old name pins took (a saved .rbp, a script's string): the entry they mean
+static const struct { const char* name; const char* alias; int index; } g_enum_alias[] = {
+    { "ESplinePointType", "Custom", 1 }, { "ELocomotionStyle", "Carry", 4 }, { "ELightFlicker", "Faulty", 2 }, { "ELightFlicker", "Bulb", 2 },
+    { "ELightingBuildMode", "LoadingScreen", 1 }, { "ELightingBuildMode", "Blocking", 1 }, { "EHorrorFilter", "BW", 1 },
+    { "EHorrorFilter", "Flash", 2 }, { "EHorrorFilter", "Static", 3 }, { "EHorrorFilter", "Chromatic", 5 }, { "EHorrorFilter", "Alucinacao", 0 },
+    { "EScareRig", "Dutch", 2 }, { "EScareRig", "Whip", 1 }, { "EScareRig", "Vertigo", 0 }, { "ERainPreset", "Light", 1 },
+    { "ERainPreset", "Moderate", 2 }, { "ERainPreset", "Heavy", 3 }, { "ERainShading", "Cinematic", 1 }, { "EFirstPersonPreset", "Terror", 3 },
 };
 const char* const* bp_builtin_enum(const char* name, int* count) {
     for (size_t i = 0; name && name[0] && i < sizeof g_builtin_enums / sizeof g_builtin_enums[0]; i++)
         if (!strcmp(name, g_builtin_enums[i].name)) return *count = g_builtin_enums[i].n, g_builtin_enums[i].entries;
     return *count = 0, NULL;
+}
+int bp_builtin_enum_count(void) { return (int)(sizeof g_builtin_enums / sizeof g_builtin_enums[0]); }
+const char* bp_builtin_enum_name(int i) { return i >= 0 && i < bp_builtin_enum_count() ? g_builtin_enums[i].name : ""; }
+int bp_builtin_enum_index(const char* name, const char* text) {
+    int n = 0;
+    const char* const* en = bp_builtin_enum(name, &n);
+    if (!en || !text) return -1;
+    while (*text == ' ') text++;
+    for (int k = 0; k < n; k++)
+        if (!_stricmp(en[k], text)) return k;
+    for (size_t i = 0; i < sizeof g_enum_alias / sizeof g_enum_alias[0]; i++)
+        if (!strcmp(g_enum_alias[i].name, name) && !_stricmp(g_enum_alias[i].alias, text)) return g_enum_alias[i].index;
+    if (text[0] >= '0' && text[0] <= '9' && atoi(text) < n) return atoi(text); // (a digit: the index itself)
+    return -1;
+}
+const char* bp_builtin_enum_entry(const char* name, int index) {
+    int n = 0;
+    const char* const* en = bp_builtin_enum(name, &n);
+    return en && index >= 0 && index < n ? en[index] : "";
 }
 static char g_spec_ref[BP_NAME]; // (parse_type's "(EName)")
 static bool parse_type(const char* s, uint8_t* t, uint8_t* cont, int* repeat, uint8_t* wslot) {
@@ -1739,17 +1796,32 @@ static BpPin* add_pin(BpNode* n, int* base, int out, uint8_t type, uint8_t cont,
         uint8_t types[8];
         int k = split_parts(type, ref, names, types, refs);
         BpPin* first = NULL;
+        int run = 0; // (each pin of the whole numbered in order: 1 the first, the rest > 1, as before nesting)
         for (int i = 0; i < k; i++) {
             char nm[BP_NAME * 2];
             if (name && name[0]) snprintf(nm, sizeof nm, "%s %s", name, names[i]);
             else snprintf(nm, sizeof nm, "%s", names[i]);
-            BpPin* p = push_pin(n, out, types[i], nm, refs[i]);
-            if (!p) break;
-            p->sub = (uint8_t)(i + 1);
-            p->ptype = type;
-            snprintf(p->pname, sizeof p->pname, "%s", name ? name : "");
-            snprintf(p->pref, sizeof p->pref, "%s", ref ? ref : "");
-            if (!first) first = p;
+            // (2026-11-24) the part split again (n->split2): its own parts, each a pin of the whole
+            const char* n2[8];
+            const char* r2[8];
+            uint8_t t2[8];
+            int k2 = i < 4 && (n->split2 >> (bi * 4 + i) & 1ull) && bp_type_splittable(types[i]) ? split_parts(types[i], refs[i], n2, t2, r2) : 0;
+            for (int j = 0; j < (k2 ? k2 : 1); j++) {
+                char nm2[BP_NAME * 3];
+                if (k2) snprintf(nm2, sizeof nm2, "%s %s", nm, n2[j]);
+                BpPin* p = push_pin(n, out, k2 ? t2[j] : types[i], k2 ? nm2 : nm, k2 ? r2[j] : refs[i]);
+                if (!p) break;
+                p->sub = (uint8_t)(++run);
+                p->part = (uint8_t)i;
+                p->ptype = type;
+                snprintf(p->pname, sizeof p->pname, "%s", name ? name : "");
+                snprintf(p->pref, sizeof p->pref, "%s", ref ? ref : "");
+                if (k2) {
+                    p->sub2 = (uint8_t)(j + 1), p->ptype2 = types[i];
+                    snprintf(p->pref2, sizeof p->pref2, "%s", refs[i] ? refs[i] : "");
+                }
+                if (!first) first = p;
+            }
         }
         if (first) return first;
     }
@@ -2097,13 +2169,41 @@ bool bp_split_pin(BpAsset* a, BpGraph* g, BpNode* n, uint8_t pin, bool split) {
         if (!n->pins[p].sub || n->pins[p].sub == 1) bi++;
     if (bi < 0 || bi >= 16) return false;
     BpPin whole = n->pins[pin];
+    if (split && whole.sub && !whole.sub2) { // (2026-11-24) a part split again (Transform -> Location -> X, Y, Z)
+        if (whole.part >= 4 || whole.cont || !bp_type_splittable(whole.type)) return false;
+        bp_unlink_pin(g, n->id, pin);
+        n->split2 |= 1ull << (bi * 4 + whole.part);
+        bp_refresh_pins(a, g, n);
+        for (uint8_t p = pin, k = 0; p < n->npins && n->pins[p].sub2 && n->pins[p].part == whole.part; p++, k++) {
+            BpPin* q = &n->pins[p]; // (its parts start with its literal)
+            if (whole.type == BPT_VECTOR || whole.type == BPT_ROTATOR || whole.type == BPT_COLOR) q->lit.v[0] = whole.lit.v[k];
+        }
+        a->dirty = true, a->compiled = false;
+        return true;
+    }
+    if (!split && whole.sub2) { // (2026-11-24) the part's parts back into the part
+        uint8_t first = pin;
+        while (first > 0 && n->pins[first - 1].sub2 && n->pins[first - 1].part == whole.part && n->pins[first].sub2 > 1) first--;
+        BpValue lit = { { 0 } };
+        for (uint8_t p = first; p < n->npins && n->pins[p].sub2 && n->pins[p].part == whole.part && n->pins[p].sub > 0; p++) {
+            if (n->pins[p].sub2 <= 4) lit.v[n->pins[p].sub2 - 1] = n->pins[p].lit.v[0];
+            bp_unlink_pin(g, n->id, p);
+            if (p + 1 < n->npins && n->pins[p + 1].sub2 == 1) break; // (the next part's)
+        }
+        n->split2 &= ~(1ull << (bi * 4 + whole.part));
+        bp_refresh_pins(a, g, n);
+        if (first < n->npins && (whole.ptype2 == BPT_VECTOR || whole.ptype2 == BPT_ROTATOR || whole.ptype2 == BPT_COLOR)) n->pins[first].lit = lit;
+        a->dirty = true, a->compiled = false;
+        return true;
+    }
     if (split) {
         if (whole.sub || whole.cont || !bp_type_splittable(whole.type)) return false;
         bp_unlink_pin(g, n->id, pin);
         n->split |= (uint16_t)(1u << bi);
+        n->split2 &= ~(0xFull << (bi * 4)); // (2026-11-24) its parts whole at first
         bp_refresh_pins(a, g, n);
-        // the parts start with the whole's literal
-        for (uint8_t p = pin, k = 0; p < n->npins && n->pins[p].sub; p++, k++) {
+        // the parts start with the whole's literal (its own parts only: a split pin next to it has its own)
+        for (uint8_t p = pin, k = 0; p < n->npins && n->pins[p].sub && (p == pin || n->pins[p].sub > 1) && k < 4; p++, k++) {
             BpPin* q = &n->pins[p];
             if (whole.type == BPT_VECTOR || whole.type == BPT_ROTATOR || whole.type == BPT_COLOR) q->lit.v[0] = whole.lit.v[k];
             else if (whole.type == BPT_TRANSFORM && k == 2) q->lit.v[0] = q->lit.v[1] = q->lit.v[2] = 1.0f;
@@ -2118,6 +2218,7 @@ bool bp_split_pin(BpAsset* a, BpGraph* g, BpNode* n, uint8_t pin, bool split) {
             bp_unlink_pin(g, n->id, p);
         }
         n->split &= (uint16_t)~(1u << bi);
+        n->split2 &= ~(0xFull << (bi * 4)); // (its parts' splits go with it)
         bp_refresh_pins(a, g, n);
         if (first < n->npins && (whole.ptype == BPT_VECTOR || whole.ptype == BPT_ROTATOR || whole.ptype == BPT_COLOR)) n->pins[first].lit = lit;
     }
@@ -2257,10 +2358,10 @@ BpNode* bp_add_node(BpAsset* a, BpGraph* g, uint32_t kind, float x, float y, con
         if ((kind == BPK_SHAKE_START && p->type == BPT_FLOAT) || (kind == BPK_SHAKE_WORLD && !strcmp(p->name, "Falloff")) || (kind == BPK_HIDE_BONE && p->type == BPT_BOOL)) p->lit.v[0] = 1.0f;
         if (kind == BPK_SHAKE_WORLD && p->type == BPT_FLOAT && strcmp(p->name, "Falloff")) p->lit.v[0] = !strcmp(p->name, "Inner Radius") ? 300.0f : 2000.0f;
         if (kind == BPK_FP_RECOIL && p->type == BPT_FLOAT) p->lit.v[0] = !strcmp(p->name, "Pitch") ? 1.5f : !strcmp(p->name, "Kick") ? 1.0f : 0.0f;
-        if (kind == BPK_FP_PRESET && !strcmp(p->name, "Preset")) snprintf(p->slit, sizeof p->slit, "Realistic");
+        if (kind == BPK_FP_PRESET && !strcmp(p->name, "Preset")) p->lit.v[0] = 0.0f; // (Realistic)
         if (kind == BPK_HIDE_BONE && !strcmp(p->name, "Bone Name")) snprintf(p->slit, sizeof p->slit, "head");
-        if (kind == BPK_ACR_PROFILE && !strcmp(p->name, "Profile")) snprintf(p->slit, sizeof p->slit, "Default");
-        if (kind == BPK_SET_LOCO_STYLE && !strcmp(p->name, "Style")) snprintf(p->slit, sizeof p->slit, "Injured"); // (Q27.11)
+        if (kind == BPK_ACR_PROFILE && !strcmp(p->name, "Profile")) p->lit.v[0] = 0.0f; // (Default)
+        if (kind == BPK_SET_LOCO_STYLE && !strcmp(p->name, "Style")) p->lit.v[0] = 1.0f; // (Q27.11: Injured)
         if (kind == BPK_HUD_ADD_SCREEN && p->type == BPT_FLOAT) p->lit.v[0] = 120.0f; // (Height Offset: over a Character's head)
         if (kind == BPK_HUD_MESSAGE && p->type == BPT_FLOAT) p->lit.v[0] = 3.0f;
         if (kind == BPK_HUD_DAMAGE_NUMBER && p->type == BPT_FLOAT) p->lit.v[0] = 10.0f;
@@ -2271,31 +2372,31 @@ BpNode* bp_add_node(BpAsset* a, BpGraph* g, uint32_t kind, float x, float y, con
         if (kind == BPK_TOON_SET_PARAM && p->type == BPT_FLOAT) p->lit.v[0] = 3.0f;
         if (kind == BPK_TOON_SET_COLOR && !strcmp(p->name, "Parameter")) snprintf(p->slit, sizeof p->slit, "Shadow Color");
         if (kind == BPK_SET_ACTOR_OUTLINE && p->type == BPT_BOOL) p->lit.v[0] = 1.0f;
+        if ((kind == BPK_SET_GROOM_VISIBLE || kind == BPK_SET_GROOM_SIMULATE) && p->type == BPT_BOOL) p->lit.v[0] = 1.0f; // (2026-11-25)
         if (kind == BPK_SET_ACTOR_OUTLINE && p->type == BPT_FLOAT) p->lit.v[0] = 3.0f;
         if (kind == BPK_SET_ACTOR_OUTLINE && p->type == BPT_VECTOR) p->lit.v[0] = 1.0f, p->lit.v[1] = 0.1f, p->lit.v[2] = 0.05f;
         // (Q13) the horror kit's defaults: a scare's flash, a held filter, the rigs, the letterbox, the dips, a faulty bulb
-        if ((kind == BPK_TRIGGER_FILTER || kind == BPK_SET_FILTER || kind == BPK_GET_FILTER) && !strcmp(p->name, "Filter")) snprintf(p->slit, sizeof p->slit, "White Flash");
+        if ((kind == BPK_TRIGGER_FILTER || kind == BPK_SET_FILTER || kind == BPK_GET_FILTER) && !strcmp(p->name, "Filter")) p->lit.v[0] = 2.0f; // (White Flash)
         if (kind == BPK_TRIGGER_FILTER && p->type == BPT_FLOAT) p->lit.v[0] = !strcmp(p->name, "Intensity") ? 1.0f : !strcmp(p->name, "Fade In") ? 0.0f : !strcmp(p->name, "Hold") ? 0.05f : 0.15f;
         if (kind == BPK_SET_FILTER && p->type == BPT_FLOAT) p->lit.v[0] = !strcmp(p->name, "Intensity") ? 1.0f : 0.5f;
         if (kind == BPK_CLEAR_FILTERS && p->type == BPT_FLOAT) p->lit.v[0] = 0.5f;
         if ((kind == BPK_SET_TENSION || kind == BPK_ADD_TENSION) && p->type == BPT_FLOAT) p->lit.v[0] = !strcmp(p->name, "Blend Time") ? -1.0f : kind == BPK_SET_TENSION ? 1.0f : 0.2f;
         if (kind == BPK_SET_LETTERBOX && p->type == BPT_FLOAT) p->lit.v[0] = !strcmp(p->name, "Aspect Ratio") ? 2.39f : 1.0f;
         if ((kind == BPK_DIP_BLACK || kind == BPK_DIP_WHITE) && p->type == BPT_FLOAT) p->lit.v[0] = !strcmp(p->name, "Hold") ? 0.3f : 0.5f;
-        if (kind == BPK_SCARE_RIG && !strcmp(p->name, "Rig")) snprintf(p->slit, sizeof p->slit, "Dolly Zoom");
+        if (kind == BPK_SCARE_RIG && !strcmp(p->name, "Rig")) p->lit.v[0] = 0.0f; // (Dolly Zoom)
         if (kind == BPK_SCARE_RIG && p->type == BPT_FLOAT) p->lit.v[0] = !strcmp(p->name, "Intensity") ? 1.0f : 0.0f;
-        if (kind == BPK_SET_LIGHT_FLICKER && !strcmp(p->name, "Pattern")) snprintf(p->slit, sizeof p->slit, "Faulty Bulb");
+        if (kind == BPK_SET_LIGHT_FLICKER && !strcmp(p->name, "Pattern")) p->lit.v[0] = 2.0f; // (Faulty Bulb)
         if (kind == BPK_SET_LIGHT_FLICKER && p->type == BPT_FLOAT) p->lit.v[0] = 1.0f;
         if (kind == BPK_SET_LIGHT_CHANNELS && p->type == BPT_BOOL && !strcmp(p->name, "Channel 0")) p->lit.v[0] = 1.0f;
         if (kind == BPK_SET_RIM_TARGET && p->type == BPT_BOOL) p->lit.v[0] = 1.0f;
         if (kind == BPK_SET_RIM_TARGET && p->type == BPT_FLOAT) p->lit.v[0] = !strcmp(p->name, "Distance") ? 250.0f : 120.0f;
         if (kind >= BPK_SPLINE_LENGTH && kind <= BPK_CABLE_IMPULSE && p->type == BPT_BOOL) p->lit.v[0] = 1.0f; // (Q14: World Space, Closed Loop, End)
-        if (kind == BPK_SPLINE_SET_TYPE && !strcmp(p->name, "Type")) snprintf(p->slit, sizeof p->slit, "Curve");
+        if (kind == BPK_SPLINE_SET_TYPE && !strcmp(p->name, "Type")) p->lit.v[0] = 0.0f; // (Curve)
         if (kind == BPK_CABLE_SET_LENGTH && p->type == BPT_FLOAT) p->lit.v[0] = 500.0f;
         if (kind == BPK_CABLE_IMPULSE && p->type == BPT_FLOAT) p->lit.v[0] = 100.0f;
         if (kind == BPK_PCG_SET_PARAM && p->type == BPT_FLOAT) p->lit.v[0] = 1.0f; // (Q15)
         // (Q16) the bake while playing, in Preview; a light's intensity; the render's share
-        if (kind == BPK_BUILD_LIGHTING && !strcmp(p->name, "Mode")) snprintf(p->slit, sizeof p->slit, "Progressive");
-        if (kind == BPK_BUILD_LIGHTING && !strcmp(p->name, "Quality")) snprintf(p->slit, sizeof p->slit, "Preview");
+        if (kind == BPK_BUILD_LIGHTING && (!strcmp(p->name, "Mode") || !strcmp(p->name, "Quality"))) p->lit.v[0] = 0.0f; // (Progressive, Preview)
         if ((kind == BPK_SET_PROPERTY || kind == BPK_GET_PROPERTY) && !strcmp(p->name, "Property")) snprintf(p->slit, sizeof p->slit, "Intensity");
         if ((kind == BPK_SET_CVAR || kind == BPK_GET_CVAR) && !strcmp(p->name, "Name")) snprintf(p->slit, sizeof p->slit, "r.ScreenPercentage");
         if (kind == BPK_SET_CVAR && p->type == BPT_FLOAT) p->lit.v[0] = 100.0f;
@@ -2781,6 +2882,7 @@ bool bp_save(BpAsset* a) {
             if (n->wtype2) jw_kint(&w, "wtype2", n->wtype2);
             if (n->wref[0]) jw_kstr(&w, "wref", n->wref);
             if (n->split) jw_kint(&w, "split", n->split);
+            if (n->split2) jw_kint(&w, "split2lo", (long long)(uint32_t)n->split2), jw_kint(&w, "split2hi", (long long)(uint32_t)(n->split2 >> 32)); // (2026-11-24)
             jw_kint(&w, "extra", n->extra);
             if (n->net) jw_kint(&w, "net", n->net);
             jw_key(&w, "pins");
@@ -2934,10 +3036,11 @@ static BpAsset* parse_asset(const char* text, size_t len, const char* disk, uint
             if (n->wtype2 >= BPT_COUNT) n->wtype2 = 0;
             snprintf(n->wref, sizeof n->wref, "%s", json_get_str(no, "wref", ""));
             n->split = (uint16_t)json_get_int(no, "split", 0);
+            n->split2 = (uint64_t)(uint32_t)json_get_num(no, "split2lo", 0) | (uint64_t)(uint32_t)json_get_num(no, "split2hi", 0) << 32;
             // (a Sequence of the old files had three outputs: one added)
             n->extra = (uint8_t)json_get_int(no, "extra", kind == BPK_SEQUENCE ? 1 : 0);
             n->net = (uint8_t)json_get_int(no, "net", 0);
-            if (n->wtype || n->split || n->extra) bp_refresh_pins(a, g, n);
+            if (n->wtype || n->split || n->split2 || n->extra) bp_refresh_pins(a, g, n);
             const JsonValue* pins = json_get(no, "pins");
             for (size_t p = 0; p < json_len(pins); p++) {
                 const JsonValue* po = json_at(pins, p);
@@ -2946,6 +3049,11 @@ static BpAsset* parse_asset(const char* text, size_t len, const char* disk, uint
                     if (!strcmp(n->pins[k].name, pname)) {
                         json_get_floats(po, "lit", n->pins[k].lit.v, 4);
                         snprintf(n->pins[k].slit, sizeof n->pins[k].slit, "%s", json_get_str(po, "slit", n->pins[k].slit));
+                        if (n->pins[k].type == BPT_INT && n->pins[k].ref[0] && n->pins[k].slit[0]) { // (2026-11-25, item 13) a name pin made an enum
+                            int ix = bp_builtin_enum_index(n->pins[k].ref, n->pins[k].slit);
+                            if (ix >= 0) n->pins[k].lit.v[0] = (float)ix;
+                            n->pins[k].slit[0] = 0;
+                        }
                         break;
                     }
             }
@@ -2996,6 +3104,21 @@ static BpAsset* parse_asset(const char* text, size_t len, const char* disk, uint
     json_free(&doc);
     a->dirty = false;
     return a;
+}
+
+// (2026-11-24) the file read into an asset of its own (not the loaded one: the tests compare what was saved)
+BpAsset* bp_read_copy(const char* vpath) {
+    char disk[700];
+    disk_path(vpath, disk, sizeof disk);
+    size_t len = 0;
+    char* text = read_text(disk, &len);
+    if (!text) return NULL;
+    BpAsset* a = parse_asset(text, len, disk, bp_vpath_hash(vpath));
+    free(text);
+    return a;
+}
+void bp_free_copy(BpAsset* a) {
+    if (a) free_asset(a);
 }
 
 BpAsset* bp_load(const char* vpath) {
@@ -3199,4 +3322,20 @@ void bp_template_graph(BpAsset* a) {
     BpNode* jump = bp_add_node(a, g, BPK_JUMP, -420, 420, NULL, NULL);
     bp_link(g, key->id, 0, jump->id, 0);
     snprintf(tick->comment, sizeof tick->comment, "Walk with W/A/S/D, look with the mouse");
+}
+// (2026-11-24, the user: "the load speed sliders with limits, no value too high or too low") A float pin's range: its
+// literal's drag clamps to it and its tooltip says it (bp_editor.c lit_widget); the VM clamps the same (level_preload.c)
+bool bp_pin_range(int kind, const char* pin, float* lo, float* hi) {
+    static const struct { int kind; const char* pin; float lo, hi; } R[] = {
+        { BPK_PRELOAD_LEVEL, "Load Speed", 0.0f, 1.0f },       // (0: the Async Loading Speed)
+        { BPK_SET_LEVEL_LOAD_SPEED, "Load Speed", 0.0f, 1.0f }, // (0: back to the Async Loading Speed)
+        { BPK_SET_ASYNC_LOAD_SPEED, "Load Speed", 0.01f, 1.0f },
+    };
+    for (size_t i = 0; pin && i < sizeof R / sizeof R[0]; i++)
+        if (R[i].kind == kind && !strcmp(R[i].pin, pin)) {
+            if (lo) *lo = R[i].lo;
+            if (hi) *hi = R[i].hi;
+            return true;
+        }
+    return false;
 }

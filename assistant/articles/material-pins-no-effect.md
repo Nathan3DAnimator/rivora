@@ -1,6 +1,6 @@
 id: material-pins-no-effect
 kind: concept
-title: Verniz, vidro, subsuperfície e os pinos "ainda sem efeito" | Coat, glass, subsurface and the "no effect yet" inputs
+title: Verniz, vidro, subsuperfície e os pinos "ainda sem efeito" | Coat, glass, subsurface and the "no effect yet" inputs | Pines del material que no tienen efecto
 keys: veludo, velvet, sheen, iridescencia, iridescence, bolha de sabao, soap bubble, pelicula fina, thin film, sem efeito, ainda sem efeito, pino cinza, entrada cinza, verniz, clearcoat, coat, transmissao, transmission, vidro, subsurface, subsuperficie, pele, anisotropico, anisotropic, metal escovado, brushed metal, sheen, aveludado, specular tint, thin film, ior, glossy, no effect yet, greyed input, pintura de carro, car paint, masked transmissao, cabelo transmissao, alpha e transmissao, hair transmission
 --- pt
 ```diagram steps
@@ -23,7 +23,6 @@ O **Principled BSDF** tem todos os pinos do Blender. Por texel (podem receber te
 - Um glTF com verniz, transmissão ou sheen avisa no Registro de Saída ao importar.
 - No **Glossy BSDF** valem Color, Roughness e Normal. [Vidro e translúcidos](article:glass-translucent)
 - **Masked, Two Sided e Translucent:** os lóbulos extras (IOR, subsuperfície, especular, anisotropia, coat) funcionam em materiais **Opaque**, **Masked** e **Two Sided** (cabelo, folhas, cartões com coat ou brilho anisotrópico). Só no **Translucent** os pinos ficam cinza. Num **Masked** a **Transmissão** não vira vidro: o recorte pelo Alpha vale. Voltar a Transmissão para 0 devolve o material ao normal na hora.
-
 --- en
 ```diagram steps
 Principled BSDF: the inputs with a value (no link)
@@ -45,3 +44,24 @@ The **Principled BSDF** has all of Blender's inputs. Per texel (they take textur
 - A glTF with clearcoat, transmission or sheen says so in the Output Log when imported.
 - In the **Glossy BSDF**, Color, Roughness and Normal count. [Glass and translucency](article:glass-translucent)
 - **Masked, Two Sided and Translucent:** the extra lobes (IOR, subsurface, specular, anisotropy, coat) work on **Opaque**, **Masked** and **Two Sided** materials (hair, leaves, cards with a coat or an anisotropic sheen). Only on **Translucent** are their pins grey. On a **Masked** one **Transmission** doesn't make it glass: the cut by the Alpha wins. Setting Transmission back to 0 brings the material back at once.
+--- es
+```diagram steps
+Principled BSDF: las entradas con un valor (sin enlace)
+El material hornea color, normal, roughness y metallic por texel
+Coat, Anisotropic, Subsurface, Specular, IOR y Transmission pasan a ser constantes del material
+El shader añade el barniz, estira el brillo, deja pasar la luz por la piel, lo convierte en vidrio
+```
+El **Principled BSDF** tiene todas las entradas de Blender. Por texel (aceptan texturas y nodos): **Base Color, Metallic, Roughness, Alpha, Normal, Emission Color y Emission Strength**.
+- **Como valor del material** (un número o color en la entrada, sin enlace):
+  - **Coat** (Weight, Roughness, IOR, Tint): una capa de barniz encima, con su propio brillo sobre la normal de la superficie (el mapa de normales queda debajo). Pintura de auto, madera barnizada.
+  - **Anisotropic** y **Anisotropic Rotation**: el brillo estirado a lo largo de la UV, como en el metal cepillado.
+  - **Subsurface** (Weight, Radius, Scale): la luz pasa el terminador, más lejos en los canales con mayor radio (piel: rojo), sin el borde duro de la sombra.
+  - **IOR**, **Specular IOR Level** y **Specular Tint**: el reflejo de los no metales (agua 1,33, vidrio 1,5, diamante 2,4).
+  - **Transmission Weight**: el material se dibuja como translúcido (vidrio), dejando pasar esa parte de la luz.
+  - **Sheen** (Weight, Roughness, Tint): el borde claro de luz en el contorno de telas como el terciopelo y de superficies polvorientas.
+  - **Thin Film** (Thickness en nm, IOR): los colores de una burbuja de jabón, aceite sobre agua, una lente con recubrimiento.
+- ¿**Enlazaste un nodo o una textura** a una de esas entradas? Por ahora solo cuenta el valor: la entrada aparece **en gris** y el nodo recibe el **"!" naranja**.
+- **Sin efecto todavía**: Diffuse Roughness, Coat Normal y las entradas IOR/Anisotropy de Subsurface. El valor se guarda para cuando existan.
+- Un glTF con clearcoat, transmission o sheen lo avisa en el Registro de salida al importarlo.
+- En el **Glossy BSDF** cuentan Color, Roughness y Normal. [Vidrio y translucidez](article:glass-translucent)
+- **Masked, Two Sided y Translucent:** los lóbulos extra (IOR, subsurface, specular, anisotropy, coat) funcionan en materiales **Opaque**, **Masked** y **Two Sided** (cabello, hojas, tarjetas con un coat o un brillo anisotrópico). Solo en **Translucent** sus pines están en gris. En uno **Masked**, **Transmission** no lo convierte en vidrio: manda el recorte por el Alpha. Volver a poner Transmission en 0 devuelve el material al instante.

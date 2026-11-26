@@ -111,3 +111,4 @@ exemplo, exemplos, demo, demos, demonstracao, sample, samples, jogo pronto, jogo
 vidro, glass, transparente, transparent, translucido, translucent, opacidade, opacity
 idioma, lingua, language, traducao, translation, ingles, portugues, english, portuguese
 atualizar, atualizacao, update, updates, versao nova, new version, upgrade
+cabelo, hair, cabello, fios, strands, hebras, groom, pelo, fur, pelagem

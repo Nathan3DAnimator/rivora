@@ -1,6 +1,6 @@
 id: report-bug
 kind: howto
-title: Relatar um bug ou sugerir algo | Report a bug or suggest something
+title: Relatar um bug ou sugerir algo | Report a bug or suggest something | Informar de un error o enviar una sugerencia
 keys: bug, erro, crash, travou, fechou sozinho, relatar, reportar, sugestao, ideia, feedback
 --- pt
 - **Ajuda > Relatar um Bug...** manda o que aconteceu (com o contexto do editor) para o desenvolvedor. [Mostrar onde](show:Help>Report a Bug...)
@@ -10,3 +10,7 @@ keys: bug, erro, crash, travou, fechou sozinho, relatar, reportar, sugestao, ide
 - **Help > Report a Bug...** sends what happened (with the editor's context) to the developer. [Show me where](show:Help>Report a Bug...)
 - **Help > Send a Suggestion...** for ideas. [Show me where](show:Help>Send a Suggestion...)
 - After a crash, the editor asks to send its report the next time it opens.
+--- es
+- **Ayuda > Report a Bug...** envía lo que ocurrió (con el contexto del editor) al desarrollador. [Muéstrame dónde](show:Help>Report a Bug...)
+- **Ayuda > Send a Suggestion...** para ideas. [Muéstrame dónde](show:Help>Send a Suggestion...)
+- Tras un fallo (crash), el editor pide enviar su informe la próxima vez que se abre.

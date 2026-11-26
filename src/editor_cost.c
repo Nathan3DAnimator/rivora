@@ -218,7 +218,7 @@ void editor_cost_frame(Editor* ed, const DvContext* c) {
         }
     }
     if (xf)
-        igTextDisabled("%s", TR((xf->flags & TRANSFORM_MOBILITY_MASK) == MOBILITY_STATIC ? "GI: Static (lightmap when built, else the surface cache)"
+        igTextDisabled("%s", TR((xf->flags & TRANSFORM_MOBILITY_MASK) == MOBILITY_STATIC ? TR("GI: Static (lightmap when built, else the surface cache)")
                                                                               : "GI: Movable (the surface cache and the probes, every frame)"));
     igEnd();
 }

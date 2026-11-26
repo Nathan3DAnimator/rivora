@@ -1,4 +1,6 @@
 // The asset viewers and the Content Browser's thumbnails (asset_viewer.h).
+#include "editor_docs.h"
+#include "editor_host.h" // (item 9)
 #include "asset_viewer.h"
 #include "asset_viewport.h"
 
@@ -6,6 +8,7 @@
 #include "theme.h"
 #include <ctype.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +25,7 @@
 #include "bp_preview.h"
 #include "content.h"
 #include "i18n.h"
+#include "io_json.h"
 #include "mat_editor.h"
 #include "tex_settings.h"
 #include "material.h"
@@ -566,8 +570,18 @@ static uint8_t* raster_thumb(const RasterSrc* s) {
     return out;
 }
 
+// (2026-11-25, bug-fixer) A thumbnail's key: the project's Content and the path (by the path alone, another project's
+// asset at the same path showed the first project's picture)
+static uint32_t thumb_key(const char* vpath) {
+    uint32_t h = 2166136261u;
+    for (const char* s = content_root(); *s; s++) h = (h ^ (uint8_t)*s) * 16777619u;
+    h = (h ^ (uint8_t)'|') * 16777619u;
+    for (const char* s = vpath; *s; s++) h = (h ^ (uint8_t)*s) * 16777619u;
+    return h ? h : 1u;
+}
+
 static Thumb* thumb_find(const char* vpath, int kind, bool add) {
-    uint32_t h = hash_str(vpath);
+    uint32_t h = thumb_key(vpath);
     for (int i = 0; i < g_nth; i++)
         if (g_th[i].hash == h) return &g_th[i];
     if (!add || !g_th || g_nth >= THUMB_MAX) return NULL;
@@ -781,6 +795,8 @@ uint32_t asset_mesh_used_verts(const uint32_t* idx, uint32_t first, uint32_t cou
     return n;
 }
 
+#include "asset_viewer_details.inc" // (2026-11-24, item 8) the Details' search and sections, the mesh's LODs and Build
+
 bool asset_viewer_handles(const char* vpath) {
     const char* dot = strrchr(vpath, '.');
     if (!dot) return false;
@@ -922,18 +938,48 @@ int tex_settings_apply(const char* vpath) {
     re_dir_walk(w.dir, apply_walk, &w);
     return w.mats;
 }
+// (2026-11-24, item 8) Unreal's LOD Bias: the mips dropped at the top, kept as the Max Size the materials read it at
+static uint16_t tex_bias_size(uint32_t sw, uint32_t sh, int bias) {
+    uint32_t side = sw > sh ? sw : sh;
+    if (bias <= 0 || !side) return 0;
+    side >>= bias > 15 ? 15 : bias;
+    return (uint16_t)(side ? side : 1);
+}
+static int tex_bias_of(uint32_t sw, uint32_t sh, uint16_t max_size) {
+    uint32_t side = sw > sh ? sw : sh;
+    int b = 0;
+    while (max_size && side > max_size && b < 15) side >>= 1, b++;
+    return b;
+}
+static unsigned g_tex_gen; // (asset_tex_set changed a texture's settings: the panel reads them again)
+bool asset_tex_set(const char* vpath, int compression, int lod_bias) {
+    TexSettings s;
+    tex_settings_get(vpath, &s);
+    if (compression >= 0 && compression < TEXZ_COUNT) s.compression = (uint8_t)compression;
+    if (lod_bias == 0) s.max_size = 0;
+    else if (lod_bias > 0) {
+        uint32_t w = V.src_w, h = V.src_h;
+        char disk[600];
+        if (strcmp(V.vpath, vpath) && vpath_disk(vpath, disk, sizeof disk)) free(mat_load_image_rgba(disk, &w, &h)); // (its size)
+        s.max_size = tex_bias_size(w, h, lod_bias);
+    }
+    s.saved = tex_settings_save(vpath, &s);
+    g_tex_gen++;
+    return s.saved;
+}
+
 static void tex_settings_panel(const char* vpath, uint32_t sw, uint32_t sh) {
     if (!vpath || !vpath[0]) return;
     static char shown[600];
     static TexSettings s;
     static char note[160];
-    if (strcmp(shown, vpath)) snprintf(shown, sizeof shown, "%s", vpath), tex_settings_get(vpath, &s), note[0] = 0;
-    igSeparatorText(TR("Texture Settings"));
+    static unsigned gen;
+    if (strcmp(shown, vpath) || gen != g_tex_gen) snprintf(shown, sizeof shown, "%s", vpath), tex_settings_get(vpath, &s), note[0] = 0, gen = g_tex_gen;
     bool ch = false;
     // the fields as wide as the column less its longest label (the labels on their right, whole in every language)
-    static const char* const LB[5] = { "Color Space", "Max Size", "Compression", "Filter", "Wrap" };
+    static const char* const LB[6] = { "Color Space", "Max Size", "Compression", "Filter", "Wrap", "LOD Bias" };
     float lw = 0.0f;
-    for (int k = 0; k < 5; k++) {
+    for (int k = 0; k < 6; k++) {
         ImVec2_c ts = igCalcTextSize(TR(LB[k]), NULL, false, -1.0f);
         if (ts.x > lw) lw = ts.x;
     }
@@ -958,6 +1004,11 @@ static void tex_settings_panel(const char* vpath, uint32_t sw, uint32_t sh) {
         }
         igEndCombo();
     }
+    int mips = 1; // (2026-11-24) the LOD Bias: the same Max Size by mips
+    for (uint32_t m = sw > sh ? sw : sh; m > 1; m >>= 1) mips++;
+    int bias = tex_bias_of(sw, sh, s.max_size);
+    igSetNextItemWidth(fw);
+    if (mips > 1 && igSliderInt(TR("LOD Bias"), &bias, 0, mips - 1, "%d", 0)) s.max_size = tex_bias_size(sw, sh, bias), ch = true;
     static const char* const CZ[TEXZ_COUNT] = { "BC7", "Uncompressed" };
     int z = s.compression;
     igSetNextItemWidth(fw);
@@ -991,7 +1042,7 @@ static void draw_texture(void) {
         return;
     }
     ImVec2 avail = igGetContentRegionAvail();
-    float side = igGetFontSize() * 15.0f, vw = avail.x - side - igGetStyle()->ItemSpacing.x, vh = avail.y;
+    float side = igGetFontSize() * 20.0f, vw = avail.x - side - igGetStyle()->ItemSpacing.x, vh = avail.y;
     if (vw < 64 || vh < 64) return;
     ImVec2 o = igGetCursorScreenPos();
     igInvisibleButton("##tex_view", (ImVec2){ vw, vh }, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | // tips: none (a canvas or a tile drawn with its own name: no description over the work)
@@ -1033,15 +1084,31 @@ static void draw_texture(void) {
     }
     ImDrawList_PopClipRect(dl);
     igSameLine(0, -1);
-    igBeginGroup();
+    // (2026-11-24, item 8) the Details as the Texture Editor's: a search, sections that fold
+    igBeginChild_Str("tex_details", (ImVec2){ side, vh }, 0, 0);
+    static char find[64];
+    av_details_search(find, sizeof find);
     igText("%s", V.name);
-    igTextDisabled("%u x %u%s", V.src_w, V.src_h, V.w != V.src_w ? TR(" (shown smaller)") : "");
-    igTextDisabled(TR("%.1f KB on disk"), (double)V.bytes / 1024.0);
-    igTextDisabled("%s", V.alpha ? TR("Has alpha") : TR("No alpha"));
-    igSeparator();
-    igText("%s", TR("Channels"));
-    static const char* names[4] = { "R", "G", "B", "A" };
+    if (av_section("Texture", "size dimensions alpha disk format mips memory")) {
+        const char* ext = strrchr(V.name, '.');
+        TexSettings ts;
+        tex_settings_get(V.vpath, &ts);
+        uint32_t rw = V.src_w, rh = V.src_h;
+        while (ts.max_size && (rw > ts.max_size || rh > ts.max_size) && rw > 1 && rh > 1) rw /= 2, rh /= 2;
+        double mb = (double)rw * rh * (ts.compression == TEXZ_NONE ? 4.0 : 1.0) * 1.333 / (1024.0 * 1024.0);
+        av_row(TR("Imported"), "%u x %u%s", V.src_w, V.src_h, V.w != V.src_w ? TR(" (shown smaller)") : "");
+        av_row(TR("Displayed"), "%u x %u", rw, rh);
+        av_row(TR("File Format"), "%s", ext ? ext + 1 : "?");
+        av_row(TR("On Disk"), "%.1f KB", (double)V.bytes / 1024.0);
+        av_row(TR("Format"), "%s", ts.compression == TEXZ_NONE ? "RGBA8 (32 bpp)" : "BC7 (8 bpp)");
+        av_row(TR("Mips"), "%d", V.mips);
+        av_row(TR("Resource Size"), "%.2f MB", mb);
+        av_row(TR("Alpha"), "%s", V.alpha ? TR("Has alpha") : TR("No alpha"));
+    }
+    if (av_section("Texture Settings", "color space srgb linear normal compression bc7 filter wrap address tiling max size lod bias mip")) tex_settings_panel(V.vpath, V.src_w, V.src_h);
     bool changed = false;
+    if (av_section("Channels", "red green blue alpha r g b a mip level exposure hdr")) {
+    static const char* names[4] = { "R", "G", "B", "A" };
     for (int c = 0; c < 4; c++) {
         if (c) igSameLine(0, -1);
         changed |= igCheckbox(names[c], &V.ch[c]);
@@ -1063,15 +1130,26 @@ static void draw_texture(void) {
         }
         igTextDisabled("%s", TR("HDR (Radiance): a texture reads it at 0 EV."));
     }
+    }
     if (changed) view_upload();
-    tex_settings_panel(V.vpath, V.src_w, V.src_h);
-    igSeparator();
-    igText(TR("Zoom: %.0f%%"), V.zoom * 100.0f);
-    if (igButton(TR("Fit"), (ImVec2){ 0, 0 })) V.zoom = fit, V.pan[0] = V.pan[1] = 0;
-    igSameLine(0, -1);
-    if (igButton("1:1", (ImVec2){ 0, 0 })) V.zoom = 1.0f, V.pan[0] = V.pan[1] = 0;
-    igTextDisabled("%s", TR("Wheel: zoom | drag: pan"));
-    igEndGroup();
+    if (av_section("Actions", "reimport reload refresh file")) {
+        if (igButton(TR("Reimport"), (ImVec2){ 0, 0 })) { // (its file read again: painted elsewhere, saved over)
+            char vp[600];
+            snprintf(vp, sizeof vp, "%s", V.vpath);
+            asset_viewer_open(vp);
+        }
+        igSameLine(0, -1);
+        igTextDisabled("%s", TR("Reads its file again."));
+    }
+    if (av_section("View", "zoom fit 1:1 pan")) {
+        igText(TR("Zoom: %.0f%%"), V.zoom * 100.0f);
+        if (igButton(TR("Fit"), (ImVec2){ 0, 0 })) V.zoom = fit, V.pan[0] = V.pan[1] = 0;
+        igSameLine(0, -1);
+        if (igButton("1:1", (ImVec2){ 0, 0 })) V.zoom = 1.0f, V.pan[0] = V.pan[1] = 0;
+        igTextDisabled("%s", TR("Wheel: zoom | drag: pan"));
+    }
+    av_details_end();
+    igEndChild();
 }
 
 // The preview's material: the one named like the mesh's slot (the importers write SM_<object>_<material>), or picked
@@ -1167,9 +1245,10 @@ static void material_combo(void) {
     igPopTextWrapPos();
 }
 
+static void mesh_details_panel(SkelMesh* sk, bool sockets, bool busy);
 static void draw_mesh(void) {
     ImVec2 avail = igGetContentRegionAvail();
-    float side = igGetFontSize() * 15.0f, vw = avail.x - side - igGetStyle()->ItemSpacing.x, vh = avail.y;
+    float side = igGetFontSize() * 20.0f, vw = avail.x - side - igGetStyle()->ItemSpacing.x, vh = avail.y;
     if (vw < 64 || vh < 64) return;
     ImVec2 o = igGetCursorScreenPos();
     // (Q7) the asset viewport: the view modes (UV with its layout, LOD by the distance or forced), the light, the camera
@@ -1190,28 +1269,167 @@ static void draw_mesh(void) {
     V.grid = V.vp.grid;
     if (res.socket >= 0) V.vp.socket = res.socket;
     igSetCursorScreenPos((ImVec2){ o.x + vw + igGetStyle()->ItemSpacing.x, o.y });
-    igBeginGroup();
+    // (2026-11-24, item 8) the Details as the Static Mesh Editor's: a search, sections that fold, the options that
+    // change the asset (LOD Settings, Build Settings: asset_viewer_details.inc)
+    igBeginChild_Str("sm_details", (ImVec2){ side, vh }, 0, 0);
+    mesh_details_panel(sk, sc.skel != NULL, res.busy);
+    igEndChild();
+}
+
+static void mesh_reopen(void) { // (made again: its counts, bounds and LODs read again; the preview's material kept)
+    uint32_t mat = V.material;
+    char vp[600];
+    snprintf(vp, sizeof vp, "%s", V.vpath);
+    asset_viewer_open(vp);
+    V.material = mat;
+}
+
+static void mesh_details_panel(SkelMesh* sk, bool sockets, bool busy) {
+    static char find[64], msg[240];
+    static AssetMeshBuild b;
+    static char b_for[600];
+    if (strcmp(g_mi_for, V.vpath)) snprintf(g_mi_for, sizeof g_mi_for, "%s", V.vpath), mesh_info_load(V.vpath, &g_mi);
+    if (strcmp(b_for, V.vpath)) snprintf(b_for, sizeof b_for, "%s", V.vpath), lod_settings_load(V.vpath, &b), msg[0] = 0;
+    bool file = strncmp(V.vpath, "#mesh/", 6) && g_mi.ok;
+    av_details_search(find, sizeof find);
     igText("%s", V.name);
-    igTextDisabled(TR("%u triangles, %u vertices"), V.tris, V.verts);
-    igTextDisabled(TR("Size: %.0f x %.0f x %.0f cm"), V.mx[0] - V.mn[0], V.mx[1] - V.mn[1], V.mx[2] - V.mn[2]);
-    igSeparator();
-    igCheckbox(TR("Grid"), &V.grid);
-    material_combo();
-    uint32_t lt[4];
-    float le[4];
-    uint32_t nl = render_mesh_lods(V.mesh, lt, le);
-    if (nl > 1) { // (Q7) its LODs (the viewport's LOD menu forces one)
-        igSeparatorText(TR("LODs"));
-        for (uint32_t l = 0; l < nl && l < 4; l++) igTextDisabled(TR("LOD %u: %u triangles, error %.2f cm"), l, lt[l], le[l]);
+    if (av_section("Asset Details", "name path size bounds triangles vertices uv lightmap colors file disk")) {
+        av_row(TR("Path"), "%s", V.vpath);
+        av_row(TR("Triangles"), "%u", V.tris);
+        av_row(TR("Vertices"), "%u", V.verts);
+        av_row(TR("Approx Size"), "%.0f x %.0f x %.0f cm", V.mx[0] - V.mn[0], V.mx[1] - V.mn[1], V.mx[2] - V.mn[2]);
+        if (file) {
+            av_row(TR("UV Channels"), "%s", (g_mi.flags & RMESH_NO_ATLAS) ? TR("1 (UV 0)") : TR("2 (UV 0, Lightmap)"));
+            av_row(TR("Vertex Colors"), "%s", (g_mi.flags & RMESH_COLORS) ? TR("Yes") : TR("No"));
+            av_row(TR("On Disk"), "%.1f KB", (double)g_mi.file_bytes / 1024.0);
+        }
     }
-    const PreviewStats* ps = render_preview_stats();
-    if (ps->views) igTextDisabled(TR("GPU %.2f ms | CPU %.2f ms | %ux MSAA"), ps->gpu_ms, ps->last_cpu_ms, ps->msaa);
-    if (igButton(TR("Frame (F)"), (ImVec2){ 0, 0 })) avp_frame(&V.vp, V.mn, V.mx);
-    if (sk && sc.skel) { // (2026-11-23) the sockets: Add Socket, name, place, rotation, preview mesh, delete; saved at once
-        avp_socket_panel(&V.vp, sk, -1);
-        if (sk->dirty && !res.busy) anim_mesh_sockets_save(V.vpath, sk->sockets, sk->nsockets), sk->dirty = false;
+    if (av_section("Material Slots", "material slot element")) material_combo();
+    if (file && av_section("LOD Settings", "lod level of detail reduction reduce triangles percent simplify auto compute regenerate")) {
+        igPushTextWrapPos(0.0f);
+        igSetNextItemWidth(-igGetFontSize() * 9.5f);
+        igSliderInt(TR("Number of LODs"), &b.lods, 1, RMESH_MAX_LODS, "%d", 0);
+        for (int l = 1; l < b.lods && l < RMESH_MAX_LODS; l++) { // (each a share of LOD 0, never more than the one before)
+            char lb[48];
+            snprintf(lb, sizeof lb, "LOD %d##lodpct%d", l, l);
+            if (b.percent[l] <= 0.0f) b.percent[l] = b.percent[l - 1] * 0.5f;
+            igSetNextItemWidth(-igGetFontSize() * 9.5f);
+            igSliderFloat(lb, &b.percent[l], 0.5f, 100.0f, TR("%.1f%% of the triangles"), ImGuiSliderFlags_Logarithmic);
+            if (b.percent[l] > b.percent[l - 1]) b.percent[l] = b.percent[l - 1];
+        }
+        int mt = (int)b.min_tris;
+        igSetNextItemWidth(-igGetFontSize() * 9.5f);
+        if (igDragInt(TR("Min Triangles"), &mt, 4.0f, 4, 100000, "%d", 0)) b.min_tris = (unsigned)(mt < 4 ? 4 : mt);
+        if (igButton(TR("Apply LOD Settings"), (ImVec2){ 0, 0 }) && !busy) {
+            if (asset_mesh_rebuild(V.vpath, &b, false, false, msg, sizeof msg)) mesh_reopen();
+        }
+        igSameLine(0, -1);
+        if (igButton(TR("Automatic LODs"), (ImVec2){ 0, 0 }) && !busy) {
+            AssetMeshBuild a = b;
+            a.lods = 0;
+            if (asset_mesh_rebuild(V.vpath, &a, false, false, msg, sizeof msg)) mesh_reopen();
+        }
+        igTextDisabled("%s", TR("Made again from LOD 0 and saved in the mesh: the level's actors use them at once. The renderer picks a LOD by its error on screen."));
+        igPopTextWrapPos();
     }
-    igEndGroup();
+    // (2026-11-24, item 4) the mesh's own settings the renderer and the physics read (.rlod beside it), a Skeletal Mesh's too:
+    // its DAG serves all its instances (standing, rigid, and live skins with their clusters widened: cull.comp pass 6)
+    if (file && av_section("Nanite Settings", "nanite clusters dag fallback percent ray tracing rays collision complexity simple complex lightmap uv unwrap")) {
+        igPushTextWrapPos(0.0f);
+        static const char* nanite_names[3] = { "Auto", "On", "Off" };
+        int ni = b.nanite < 0 ? 0 : b.nanite == 1 ? 1 : 2;
+        igSetNextItemWidth(-igGetFontSize() * 9.5f);
+        if (igCombo_Str_arr(TR("Enable Nanite Support"), &ni, nanite_names, 3, -1)) b.nanite = ni == 0 ? -1 : ni == 1 ? 1 : 0;
+        igSetItemTooltip("%s", TR("Its triangles in clusters, culled and simplified on the GPU by their size on screen (Auto: from 16 384 triangles, a Skeletal Mesh from 4096; On: from 512)."));
+        if (b.fallback_pct <= 0.0f) b.fallback_pct = 100.0f;
+        igSetNextItemWidth(-igGetFontSize() * 9.5f);
+        igSliderFloat(TR("Fallback Triangle Percent"), &b.fallback_pct, 1.0f, 100.0f, "%.0f%%", 0);
+        igSetItemTooltip("%s", TR("The share of LOD 0's triangles the ray tracing sees (its coarsest LOD still holding it): fewer for the rays, the same picture."));
+        { // (as loaded: its DAG; the rays' LOD for the percent above, its triangles and its error)
+            uint32_t lcl = 0, lt[4] = { 0 };
+            float le[4] = { 0 };
+            bool rigid = false;
+            uint32_t dag = render_mesh_nanite(V.mesh, &lcl, &rigid), nl = render_mesh_lods(V.mesh, lt, le), fl = 0;
+            for (uint32_t l = 1; l < nl; l++)
+                if ((float)lt[l] >= (float)lt[0] * b.fallback_pct * 0.01f) fl = l;
+            if (dag) igText(TR("Nanite: %u clusters in its DAG"), dag);
+            else igTextDisabled("%s", TR("Nanite: off (drawn by its LODs)"));
+            igSetItemTooltip("%s", TR("As loaded: Apply Nanite and Collision builds it again. A Skeletal Mesh's DAG serves its animated instances too."));
+            igText(TR("Fallback: LOD %u, %u triangles, error %.2f cm"), fl, lt[fl], le[fl]);
+            igSetItemTooltip("%s", TR("The LOD the ray tracing sees for this percent: its triangles and how far it strays from LOD 0 (cm)."));
+            if (rigid) {
+                igTextDisabled("%s", TR("Rigid skin: drawn as a Static Mesh moved by its bone"));
+                igSetItemTooltip("%s", TR("Every vertex on one bone: no skinning, its LODs, shadow and rays as any mesh's."));
+            }
+        }
+        static const char* coll_names[3] = { "Project Default", "Simple", "Complex" };
+        int cc = b.collision >= 0 && b.collision <= 2 ? b.collision : 0;
+        igSetNextItemWidth(-igGetFontSize() * 9.5f);
+        if (igCombo_Str_arr(TR("Collision Complexity"), &cc, coll_names, 3, -1)) b.collision = cc;
+        igSetItemTooltip("%s", TR("Project Default: each actor's Use Complex Collision. Simple: a hull or a box. Complex: its triangles collide (static actors)."));
+        if (igButton(TR("Apply Nanite and Collision"), (ImVec2){ 0, 0 }) && !busy) {
+            lod_settings_save(V.vpath, &b);
+            if (g_vk) render_meshes_reload(g_vk); // (the renderer and the physics read them at the load)
+            snprintf(msg, sizeof msg, "%s", TR("Saved beside the mesh: the renderer and the physics use them now."));
+        }
+        igSetItemTooltip("%s", TR("Saves these settings beside the mesh (.rlod) and reads every mesh again: the level's actors use them at once."));
+        if (!(g_mi.flags & RMESH_SKINNED)) {
+            igSameLine(0, -1);
+            if (igButton(TR("Generate Lightmap UVs"), (ImVec2){ 0, 0 }) && !busy) {
+                AssetMeshBuild a = b;
+                a.lightmap = true;
+                if (asset_mesh_rebuild(V.vpath, &a, false, false, msg, sizeof msg)) mesh_reopen();
+            }
+            igSetItemTooltip("%s", TR("Unwraps a second UV for the baked lighting (written into the mesh: Build Lighting gives it its own texels)."));
+        }
+        igPopTextWrapPos();
+    }
+    if (file && av_section("Build Settings", "build normals smoothing angle hard soft scale recompute size")) {
+        igPushTextWrapPos(0.0f);
+        igSetNextItemWidth(-igGetFontSize() * 9.5f);
+        igSliderFloat(TR("Smoothing Angle"), &b.smoothing_deg, 0.0f, 180.0f, "%.0f deg", 0);
+        if (igButton(TR("Recompute Normals"), (ImVec2){ 0, 0 }) && !busy) {
+            if (asset_mesh_rebuild(V.vpath, &b, true, false, msg, sizeof msg)) mesh_reopen();
+        }
+        if (b.scale <= 0.0f) b.scale = 1.0f;
+        igSetNextItemWidth(-igGetFontSize() * 9.5f);
+        igDragFloat(TR("Build Scale"), &b.scale, 0.01f, 0.01f, 100.0f, "%.2f", 0);
+        if (igButton(TR("Apply Scale"), (ImVec2){ 0, 0 }) && !busy && b.scale != 1.0f) {
+            if (asset_mesh_rebuild(V.vpath, &b, false, true, msg, sizeof msg)) mesh_reopen();
+            b.scale = 1.0f;
+        }
+        igTextDisabled("%s", TR("Written into the mesh's file (a reimport brings the original back)."));
+        igPopTextWrapPos();
+    }
+    if (msg[0]) igTextWrapped("%s", msg);
+    if (file && av_section("Statistics", "statistics memory lod triangles vertices gpu cost kb")) {
+        if (igBeginTable("sm_stats", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp, (ImVec2){ 0, 0 }, 0)) {
+            igTableSetupColumn("LOD", 0, 0.5f, 0), igTableSetupColumn(TR("Triangles"), 0, 1.0f, 0), igTableSetupColumn("%", 0, 0.6f, 0);
+            igTableSetupColumn(TR("Vertices"), 0, 1.0f, 0), igTableSetupColumn("KB", 0, 0.8f, 0);
+            igTableHeadersRow();
+            for (uint32_t l = 0; l < g_mi.nlods && l < RMESH_MAX_LODS; l++) {
+                igTableNextRow(0, 0);
+                igTableNextColumn(), igText("%u", l);
+                igTableNextColumn(), igText("%u", g_mi.tris[l]);
+                igTableNextColumn(), igText("%.0f", g_mi.tris[0] ? 100.0 * g_mi.tris[l] / g_mi.tris[0] : 0.0);
+                igTableNextColumn(), igText("%u", g_mi.verts[l]);
+                igTableNextColumn(), igText("%.0f", g_mi.mem_kb[l]);
+            }
+            igEndTable();
+        }
+        av_row(TR("GPU Memory"), "%.1f KB", g_mi.total_kb);
+        for (uint32_t l = 1; l < g_mi.nlods && l < RMESH_MAX_LODS; l++) av_row("", TR("LOD %u: error %.2f cm"), l, g_mi.err[l]);
+        const PreviewStats* ps = render_preview_stats();
+        if (ps->views) av_row(TR("Preview"), TR("GPU %.2f ms | CPU %.2f ms | %ux MSAA"), ps->gpu_ms, ps->last_cpu_ms, ps->msaa);
+    }
+    if (sk && sockets && av_section("Sockets", "socket attach point")) avp_socket_panel(&V.vp, sk, -1); // (2026-11-23: Add Socket, name, place...)
+    if (sk && sockets && sk->dirty && !busy) anim_mesh_sockets_save(V.vpath, sk->sockets, sk->nsockets), sk->dirty = false;
+    if (av_section("Preview", "grid frame view camera")) {
+        igCheckbox(TR("Grid"), &V.grid);
+        if (igButton(TR("Frame (F)"), (ImVec2){ 0, 0 })) avp_frame(&V.vp, V.mn, V.mx);
+        igTextDisabled("%s", TR("The viewport's menus: view mode (Wireframe, UV, Normals...), LOD, light and camera."));
+    }
+    av_details_end();
 }
 
 AssetViewerState asset_viewer_state(void) {
@@ -1224,7 +1442,7 @@ AssetViewerState asset_viewer_state(void) {
     return s;
 }
 int asset_thumb_state(const char* vpath) {
-    uint32_t h = hash_str(vpath);
+    uint32_t h = thumb_key(vpath);
     for (int i = 0; g_th && i < g_nth; i++)
         if (g_th[i].hash == h) return re_atomic_load(&g_th[i].state);
     return -1;
@@ -1234,10 +1452,16 @@ void asset_viewer_draw(void) {
     g_raster_budget = 1;
     dead_collect(false);
     live_step();
-    if (!V.kind) return;
+    static bool was, to_host; // (item 9) shown again: a tab of the Editors window
+    if (!V.kind) {
+        was = false;
+        return;
+    }
+    if (!was) to_host = was = true;
     char title[300];
     snprintf(title, sizeof title, "%s - %s###asset_viewer", V.name, V.kind == ASSET_STATIC_MESH ? TR("Static Mesh") : TR("Texture"));
     igSetNextWindowSize((ImVec2){ igGetFontSize() * 64, igGetFontSize() * 40 }, ImGuiCond_FirstUseEver);
+    edhost_doc(&to_host);
     bool open = true;
     if (igBegin(title, &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         if (V.kind == ASSET_TEXTURE_SOURCE) draw_texture();
@@ -1370,8 +1594,29 @@ bool asset_selectable_material(const char* label, bool selected, const char* pat
     return asset_selectable(label, selected, path, dot && !_stricmp(dot, ".rmi") ? ASSET_MATERIAL_INSTANCE : ASSET_MATERIAL);
 }
 
-void asset_viewer_close(void) {
+void asset_viewer_close(void) { // (as its window's x: the HDR's pixels and the path too)
     V.kind = 0;
     free(V.px), V.px = NULL;
+    free(V.hdr), V.hdr = NULL;
     tex_release(&V.tex);
+    V.vpath[0] = 0;
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+void asset_viewer_doc_paths(void (*cb)(const char* path, void* user), void* user) { // (item 9: the layout's documents)
+    if (V.kind && V.vpath[0]) cb(V.vpath, user);
+}
+
+int asset_viewer_docs(int op, struct Editor* ed, char* names, size_t cap) { // (its edits are saved as they're made)
+    (void)ed, (void)names, (void)cap;
+    if (!V.kind) return 0;
+    if (op == DOCS_CLOSE) asset_viewer_close();
+    return op == DOCS_OPEN || op == DOCS_CLOSE;
+}
+
+// (2026-11-25, the test project_switch) The thumbnail's file for vpath in the open project (add: asked for when missing); NULL: none
+const char* asset_viewer_test_thumb(const char* vpath, bool add) {
+    Thumb* t = thumb_find(vpath, ASSET_TEXTURE_SOURCE, add);
+    return t ? t->disk : NULL;
 }

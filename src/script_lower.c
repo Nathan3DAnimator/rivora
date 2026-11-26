@@ -183,6 +183,16 @@ static bool feed(Low* L, Val v, BpNode* n, int pi, int line, int col) {
         else snprintf(p->slit, sizeof p->slit, "%g", v.num);
         return true;
     case BPT_BOOL: case BPT_INT: case BPT_FLOAT: case BPT_BYTE: case BPT_INT64:
+        if (t == ST_STRING && p->type == BPT_INT && p->ref[0]) { // (2026-11-25, item 13) an enum's entry by its name: "Injured"
+            int ix = bp_builtin_enum_index(p->ref, v.str);
+            if (ix >= 0) return p->lit.v[0] = (float)ix, true;
+            int ne = 0;
+            const char* const* en = bp_builtin_enum(p->ref, &ne);
+            char opts[400] = "";
+            for (int k = 0; en && k < ne; k++) snprintf(opts + strlen(opts), sizeof opts - strlen(opts), "%s\"%s\"", k ? ", " : "", en[k]);
+            s_diag(L->c, line, col, true, "\"%s\" isn't one of %s", v.str ? v.str : "", opts);
+            return false;
+        }
         if (t == ST_STRING) break;
         if (t == ST_VECTOR) break;
         if (p->type == BPT_INT64) {
@@ -1324,6 +1334,7 @@ bool s_lower(SCtx* c, SClass* cls, struct BpAsset* a) {
         var_ref(bv, ty);
         bv->editable = f->editable;
         bv->save_game = f->save_game; // (@savegame, [SaveGame]: save_progress.h)
+        if (f->asset_ref) bv->type = BPT_NAME, snprintf(bv->ref, sizeof bv->ref, "%s", f->asset_ref); // (2026-11-24: Level, Sound...: a typed asset reference)
         if (ty & ST_ARRAY) bv->cont = BPC_ARRAY;
         if (v.ok && v.lit && !v.none) {
             if ((v.ty & 0x7F) == ST_STRING) snprintf(bv->sdef, sizeof bv->sdef, "%s", v.str ? v.str : "");

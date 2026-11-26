@@ -1,6 +1,6 @@
 id: scalability
 kind: howto
-title: Escalabilidade e qualidade gráfica | Scalability and graphics quality
+title: Escalabilidade e qualidade gráfica | Scalability and graphics quality | Escalabilidad y calidad gráfica
 keys: vrs, variable rate shading, sombreamento de taxa variavel, gtao, ssao, oclusao de ambiente, ambient occlusion, cantos escuros, escalabilidade, qualidade grafica, baixo medio alto epico, low medium high epic, presets, configuracoes graficas, pc fraco, notebook, msaa, anti aliasing, modo desempenho, modo qualidade, mapa de sombra, shadow map, sem ray tracing, gpu sem rt, luz atravessa parede
 --- pt
 - **Configurações** (canto superior direito do editor): Baixo, Médio, Alto, Épico. [Mostrar onde](show:Settings)
@@ -22,3 +22,13 @@ keys: vrs, variable rate shading, sombreamento de taxa variavel, gtao, ssao, ocl
 - **Screen space ambient occlusion (GTAO)**, from **High** up: corners (wall and floor, wall and ceiling, furniture against a wall) get the soft shadow of the indirect light. It costs ~0.3 ms at 1440p.
 - **Variable Rate Shading** (Project Settings > Rendering, off by default): shades flat areas once per 2×2 pixels (~0.6 ms less in the main pass at 1440p). Depth edges always keep the full rate (no light leaking past the edge), the rate follows motion and doesn't flip from frame to frame: the shimmer stays close to no VRS.
 - The packaged game has its own in Project Settings > Rendering, and the project can be **Performance** or **Quality** (the path tracer as the game's view).
+--- es
+- **Settings** (arriba a la derecha del editor): Bajo, Medio, Alto, Épico. [Muéstrame dónde](show:Settings)
+- Cada función costosa tiene presets: sombras, GI, nubes, niebla volumétrica, MSAA/TSR.
+- **Sombras de las luces locales** (puntual, foco, rectangular): con ray tracing desde **Medio**. En **Bajo**, y en una GPU sin ray tracing con cualquier preset, vienen de **mapas de sombra**: las luces que más importan en pantalla (tamaño, distancia, intensidad) reciben un mapa, las demás no proyectan ninguno.
+  - Cuántas luces reciben un mapa: Bajo 8, Medio 16, Alto 24, Épico 32. La resolución de cada una sigue su tamaño en pantalla.
+  - Los mapas se conservan: solo se vuelve a dibujar lo que cambió (la luz se movió, un objeto se movió dentro de su alcance).
+  - Una luz proyecta sombras solo con **Cast Shadows** activado (los Detalles de la luz). Desactivarlo en luces decorativas pequeñas ahorra presupuesto.
+- **Oclusión ambiental en espacio de pantalla (GTAO)**, desde **Alto**: las esquinas (pared y suelo, pared y techo, muebles contra una pared) reciben la sombra suave de la luz indirecta. Cuesta ~0,3 ms a 1440p.
+- **Variable Rate Shading** (Project Settings > Rendering, desactivado por defecto): sombrea las zonas planas una vez por cada 2×2 píxeles (~0,6 ms menos en el pase principal a 1440p). Los bordes de profundidad siempre mantienen la tasa completa (sin luz que se cuele por el borde), la tasa sigue el movimiento y no cambia de un fotograma a otro: el centelleo queda cerca del de sin VRS.
+- El juego empaquetado tiene el suyo en Project Settings > Rendering, y el proyecto puede ser **Performance** o **Quality** (el path tracer como la vista del juego).

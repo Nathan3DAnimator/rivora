@@ -9,6 +9,7 @@
 #include "async.h"
 #include "bp_editor.h"
 #include "editor.h"
+#include "i18n.h"
 #include "platform.h"
 #include "script.h"
 #include <stdlib.h>
@@ -149,7 +150,7 @@ static const Case g_cases[] = {
     { "simulated fire like niagara fluids", "fire", 2, false },
     { "a engine tem restir para muitas luzes", "many-lights", 2, false },
     { "VK_ERROR_DEVICE_LOST in vkWaitSemaphores", "gpu-crash", 1, false }, // (the crash report's message pasted)
-    { "luz atravessa a parede", "scalability|shadows-pro|lights", 3, false },
+    { "luz atravessa a parede", "scalability|shadows-pro|lights|gi-fallback", 3, false }, // (Q27.12: the fallback GI's lamps never light through a wall)
     { "sombra da luz pontual sem ray tracing", "shadows-pro|scalability", 3, false },
     { "como marcar o inimigo como atordoado com tag", "gameplay-tags", 2, false },
     { "valor diferente em cada ator no details", "variable-concept", 3, false },
@@ -198,6 +199,16 @@ static const Case g_cases[] = {
     { "agx tonemapper stylized look", "render-styles", 2, false },
     { "xyzzy qwfp zzkv", NULL, 0, true },                           // (nonsense: offered as a suggestion)
 };
+// (2026-11-25) a query as printed: its "_" as spaces, so a pasted error ("VK_ERROR_DEVICE_LOST") never matches the
+// suite's failure pattern (FAIL|VUID|DEVICE_LOST) by itself
+static const char* shown(const char* q) {
+    static char b[256];
+    snprintf(b, sizeof b, "%s", q);
+    for (char* c = b; *c; c++)
+        if (*c == '_') *c = ' ';
+    return b;
+}
+
 static bool wanted(const char* want, const char* id) {
     char w[200];
     snprintf(w, sizeof w, "%s", want);
@@ -246,6 +257,33 @@ static void check_recipes(void) {
     if (failed || compiled < 20) T.ok = false;
 }
 
+// (2026-11-25) asked in a Spanish editor: the articles' Spanish sections and the controls' Spanish in the index
+static const Case g_cases_es[] = {
+    { "como cambio el idioma del editor a español", "language", 3, false },
+    { "plugins integrados del editor para dispersar objetos", "editor-plugins-kit", 3, false },
+    { "traducir el juego a otros idiomas", "game-localization", 3, false },
+    { "cargar el mapa en el lobby sin trabas", "level-preload", 3, false },
+};
+static void check_es(void) {
+    int keep = i18n_language();
+    i18n_set_language(LANG_ES);
+    assistant_relang();
+    for (size_t i = 0; i < sizeof g_cases_es / sizeof g_cases_es[0]; i++) {
+        const Case* c = &g_cases_es[i];
+        AsHit hits[8];
+        bool weak = false;
+        int n = assistant_search(c->q, hits, 8, &weak), at = -1;
+        for (int k = 0; k < n && at < 0; k++)
+            if (assistant_doc(hits[k].doc) && wanted(c->want, assistant_doc(hits[k].doc)->id)) at = k;
+        bool good = at >= 0 && at < c->within;
+        printf("[RealEngine] Assistant (es): \"%s\" -> %s (wanted at %d)%s\n", shown(c->q), n ? assistant_doc(hits[0].doc)->id : "-", at + 1, good ? "" : "  WRONG");
+        if (!good) T.ok = false;
+        else T.answered++;
+    }
+    i18n_set_language(keep);
+    assistant_relang();
+}
+
 static void check_cases(void) {
     for (size_t i = 0; i < sizeof g_cases / sizeof g_cases[0]; i++) {
         const Case* c = &g_cases[i];
@@ -262,7 +300,7 @@ static void check_cases(void) {
         }
         const AsDoc* top = n ? assistant_doc(hits[0].doc) : NULL;
         bool good = c->weak ? weak : (at >= 0 && at < c->within);
-        printf("[RealEngine] Assistant: \"%s\" -> %s (%s%s)%s\n", c->q, top ? top->id : "-", c->want ? "wanted at " : "weak expected",
+        printf("[RealEngine] Assistant: \"%s\" -> %s (%s%s)%s\n", shown(c->q), top ? top->id : "-", c->want ? "wanted at " : "weak expected",
                c->want ? (at >= 0 ? (char[2]){ (char)('1' + at), 0 } : "none") : "", good ? "" : "  WRONG");
         if (!good) { // (what came before it: the articles to tell apart)
             T.ok = false;
@@ -272,6 +310,7 @@ static void check_cases(void) {
             }
         } else T.answered++;
     }
+    check_es();
     // the time of a question (the whole base: articles, functions, controls)
     double t0 = re_time_seconds();
     AsHit hits[24];
@@ -328,7 +367,7 @@ bool assistant_test_check(Editor* ed) {
     printf("[RealEngine] Assistant: %d articles (%u KB, version %s), %u documents, %u terms, %u words; built in %.1f ms; "
            "a question %.3f ms; %d of %d answered right; offline copy %s, removed %s\n",
            assistant_article_count(), assistant_base_bytes() / 1024u, assistant_version(), s.docs, s.terms, s.vocab, s.build_ms, T.query_ms,
-           T.answered, (int)(sizeof g_cases / sizeof g_cases[0]), T.offline_seen ? "written" : "MISSING", T.removed ? "yes" : "NO");
+           T.answered, (int)(sizeof g_cases / sizeof g_cases[0] + sizeof g_cases_es / sizeof g_cases_es[0]), T.offline_seen ? "written" : "MISSING", T.removed ? "yes" : "NO");
     bool ok = T.ok && T.phase == 5 && T.offline_seen && T.removed;
     if (T.query_ms > 2.0) printf("[RealEngine] FAIL: Assistant: a question took %.3f ms (2 at most)\n", T.query_ms), ok = false;
     if (!T.offline_seen || !T.removed) printf("[RealEngine] FAIL: Assistant: the offline copy wasn't written or removed\n");

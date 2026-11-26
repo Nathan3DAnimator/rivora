@@ -1,7 +1,7 @@
 // (Q19, notas-dev/importar-tlender.md) The conversion report of an import: what came in the same, what was converted
 // into an Engine equivalent, what was baked (on the GPU, into a texture or a curve) and what was lost, each with its
 // reason. The importer (a worker; one import at a time) fills it; the editor's main thread publishes it when the import
-// is done (Window > Import Report) and it is written next to the assets (<folder>/ImportReport.txt).
+// is done (Window > Import Report) and it is written to the project's Saved/ImportReports/<source>.txt (never into Content: 2026-11-24).
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -25,7 +25,8 @@ typedef struct ImpRepItem {
 void imprep_begin(const char* src);
 void imprep_add(int kind, int cat, const char* owner, const char* item, const char* reason_fmt, ...);
 void imprep_counts(unsigned out[IMPREP_KIND_COUNT]);
-// Written to <folder_disk>/ImportReport.txt (UTF-8: a summary line, then a line per item by kind). False when it could
+// Written to <project>/Saved/ImportReports/<source name>.txt, the project being the folder that holds the Content folder
+// folder_disk is in (UTF-8: a summary line, then a line per item by kind). False when it could
 // not write the file. imprep_summary: the counts at the end of the importer's line ("; report: 3 same, ...")
 bool imprep_finish(const char* folder_disk, char* text, size_t text_cap);
 void imprep_summary(char* text, size_t text_cap);

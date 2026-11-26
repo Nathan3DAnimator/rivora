@@ -1,6 +1,6 @@
 id: fps-frame
 kind: concept
-title: O que são FPS e ms | What FPS and ms are
+title: O que são FPS e ms | What FPS and ms are | FPS y tiempo de fotograma
 keys: fps, quadros por segundo, ms, milissegundos, frame time, o que e fps, fps baixo, jogo lento, frame
 --- pt
 ```diagram bars ms
@@ -24,3 +24,14 @@ keys: fps, quadros por segundo, ms, milissegundos, frame time, o que e fps, fps 
 - **ms**: how long a frame takes (1000 / FPS). 16.7 ms = 60 FPS; 5 ms = 200 FPS.
 - The status bar shows both, with the CPU's and the GPU's time (who is costing).
 - Slow? [Performance](article:performance).
+--- es
+```diagram bars ms
+30 FPS: 33.3
+60 FPS: 16.7
+120 FPS: 8.3
+200 FPS (el objetivo): 5
+```
+- **FPS**: cuántas imágenes por segundo dibuja el juego. 60 es fluido; Rivora Engine apunta a 200 en el PC de desarrollo.
+- **ms**: cuánto tarda un fotograma (1000 / FPS). 16,7 ms = 60 FPS; 5 ms = 200 FPS.
+- La barra de estado muestra ambos, con el tiempo de la CPU y el de la GPU (quién está costando).
+- ¿Va lento? [Rendimiento](article:performance).

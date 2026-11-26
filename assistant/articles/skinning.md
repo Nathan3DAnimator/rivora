@@ -1,6 +1,6 @@
 id: skinning
 kind: concept
-title: Skinning suave: roupas e corpos que dobram | Smooth skinning: clothes and bodies that bend
+title: Skinning suave: roupas e corpos que dobram | Smooth skinning: clothes and bodies that bend | Skinning: personajes que se doblan sin costuras
 keys: skinning, skin, pele, pesos, weights, vertex groups, grupos de vertices, vestido cortado, roupa cortada, roupa rasgada, costura, emenda, seam, dress, cloth, personagem cortado, skin cache, deformar, deform, skeletal mesh, reimportar, reimport, camadas de roupa, roupa atravessando, visualizador vazio, skeletal mesh vazio, preview vazio, nao aparece no editor, empty viewer
 --- pt
 ```diagram steps
@@ -18,7 +18,6 @@ Os personagens antigos eram **cortados em partes rígidas por osso**: dava roupa
 ## Desempenho
 Medido com a Delight (5 peles, 57 mil vértices) dançando, em 1440p: **495 fps**, 0,004 ms de CPU. A linha `Skins:` do `--bench` mostra quantas peles foram dobradas no último quadro.
 - **Editores:** o Skeletal Mesh, as animações, o Blend Space e o Anim Graph mostram a pele deformada pela pose (antes só as partes antigas apareciam e a Delight ficava vazia).
-
 --- en
 ```diagram steps
 Tlender / glTF / FBX (per-vertex weights) | Import: one skin per material (4 bones per vertex) | Animation: the bones' palette | The GPU bends the vertices each pose | Ray traced shadows and GI on the bent skin
@@ -35,3 +34,19 @@ Older characters were **cut into rigid parts by bone**: clothes looked "cut" and
 ## Performance
 Measured with the Delight (5 skins, 57 thousand vertices) dancing at 1440p: **495 fps**, 0.004 ms of CPU. The `Skins:` line of `--bench` shows how many skins were bent in the last frame.
 - **Editors:** the Skeletal Mesh, the animations, the Blend Space and the Anim Graph show the skin bent by the pose (before, only the old parts showed and the Delight was empty).
+--- es
+```diagram steps
+Tlender / glTF / FBX (pesos por vértice) | Importación: un skin por material (4 huesos por vértice) | Animación: la paleta de huesos | La GPU dobla los vértices en cada pose | Sombras y GI por trazado de rayos sobre el skin doblado
+```
+## Qué es
+Un personaje importado con una **armature** se convierte en un **Skeletal Mesh** con **skins**: cada vértice sigue hasta **4 huesos** con los pesos que pintaste en el Tlender (o que vienen en glTF y FBX). La GPU dobla los vértices en cada pose (como el *Skin Cache* de Unreal), así que un vestido, un delantal y unas mangas se mueven enteros, sin costuras y sin que una capa de tela atraviese a otra.
+- Solo se ejecuta cuando cambia la pose: un personaje quieto no cuesta nada.
+- Las sombras y la GI por trazado de rayos ven el skin doblado (su BLAS se actualiza con él).
+- Las mallas sujetas a un hueso sin pesos (un sombrero, un arma) entran en el skin con peso 1 en ese hueso.
+
+## Un personaje importado antes de esta versión
+Los personajes antiguos estaban **cortados en piezas rígidas por hueso**: la ropa parecía "cortada" y las costuras parpadeaban. El editor avisa en los Detalles del actor. Clic derecho en el Skeletal Mesh en el Explorador de contenidos > **Reimport** (o el botón **Reimport** en Detalles): vuelve a leer el archivo de origen en la misma carpeta y los actores ya colocados reciben los skins al instante. Para los personajes importados antes de que existiera Reimport, el editor pregunta dónde está el archivo (una vez; después lo recuerda).
+
+## Rendimiento
+Medido con la Delight (5 skins, 57 mil vértices) bailando a 1440p: **495 fps**, 0,004 ms de CPU. La línea `Skins:` de `--bench` muestra cuántos skins se doblaron en el último fotograma.
+- **Editores:** el Skeletal Mesh, las animaciones, el Blend Space y el Anim Graph muestran el skin doblado por la pose (antes solo se veían las piezas antiguas y la Delight aparecía vacía).

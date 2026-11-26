@@ -18,7 +18,7 @@
 #define ST_TILE (64u * 1024u)      // texels baked a frame while a variant climbs, at first (then by its measured cost)
 #define ST_TILE_MS 0.4             // the GPU time a frame's tile aims at (timestamps around it)
 #define ST_DOWN_DELAY 2.0          // s of lower need before a variant goes down
-#define ST_GRAVE 64                // old textures waiting for the frames in flight
+#define ST_GRAVE 1024              // old textures waiting for the frames in flight (2026-11-24: was 64; a bake every frame buries 3-6)
 #define ST_HASH 4096u              // material hash -> asset (open addressing, > 2x MAT_MAX_ASSETS)
 
 static Variant g_inst_var[MAT_MAX_ASSETS]; // a Material Instance's own variant (update_instance)
@@ -40,6 +40,7 @@ static struct {
     uint32_t want[MAT_MAX_ASSETS];
     double low_since[MAT_MAX_ASSETS];
     bool pin[MAT_MAX_ASSETS];                        // always at full size (a crowd's: not in the sweep)
+    bool force[MAT_MAX_ASSETS];                      // (2026-11-24) baked live at 256: climbs to its full size in tiles, then off
     int16_t base[MAT_MAX_ASSETS];                    // the material whose program an asset bakes with (st_hash_build)
     uint32_t hkey[ST_HASH];
     uint16_t hval[ST_HASH];
@@ -110,7 +111,7 @@ static Variant* st_variant(uint32_t i, const Compiled** pc) {
     const Compiled* c = b >= 0 && M.comp[b].valid ? &M.comp[b] : NULL;
     if (!c || c->animated || (c->flags & MATF_UDIM)) return NULL; // (Q18: a UDIM material's tiles stream on their own)
     Variant* v = m->instance ? &g_inst_var[i] : &M.comp[i].v;
-    if (!v->own || !v->tex[0] || !M.tex[v->tex[0]].image) return NULL;
+    if (!v->own || !v->tex[0] || !M.tex[v->tex[0]].image || v->pend_at) return NULL; // (2026-11-24: a frame bake's swap pending)
     *pc = c;
     return v;
 }
@@ -138,17 +139,49 @@ static uint32_t stream_res(const Compiled* c, const Variant* v) {
     return M.stats.tex_bytes + st_bytes(start, c) <= S.budget / 10 * 9 ? start : lo; // (no room: the least, to climb)
 }
 
+// (2026-11-24) The graves of what earlier frames buried, the GPU idle: what this frame buried stays (its command buffer,
+// not submitted yet, may still use it: a streaming job's textures it baked tiles into, a bake's new ones). Before, a full
+// grave freed everything: with a bake every frame (a value dragged) it filled in ~15 frames and the frame being recorded
+// wrote textures already destroyed (the GPU lost)
+static void st_drain_submitted(void) {
+    vkDeviceWaitIdle(M.vk->device);
+    uint64_t now = M.vk->frame_number + RE_FRAMES_IN_FLIGHT + 1; // (this frame's burials' mark)
+    for (uint32_t i = 0; i < S.ngrave;) {
+        if (S.grave[i].at >= now) {
+            i++;
+            continue;
+        }
+        for (int k = 0; k < 3; k++) tex_free(S.grave[i].tex[k]);
+        S.grave[i] = S.grave[--S.ngrave];
+    }
+    for (uint32_t i = 0; i < S.nbgrave;) {
+        if (S.bgrave[i].at >= now) {
+            i++;
+            continue;
+        }
+        gpu_buf_destroy(M.vk, &S.bgrave[i].b);
+        S.bgrave[i] = S.bgrave[--S.nbgrave];
+    }
+}
+
 static void st_bury(const uint32_t tex[3]) {
     if (!tex[0] && !tex[1] && !tex[2]) return;
     uint64_t at = M.vk->frame_number + RE_FRAMES_IN_FLIGHT + 1;
-    if (S.ngrave >= ST_GRAVE) { // (full: the GPU waited for once)
-        vkDeviceWaitIdle(M.vk->device);
-        for (uint32_t i = 0; i < S.ngrave; i++)
-            for (int k = 0; k < 3; k++) tex_free(S.grave[i].tex[k]);
-        S.ngrave = 0;
+    if (S.ngrave >= ST_GRAVE) st_drain_submitted(); // (full: the GPU waited for once)
+    if (S.ngrave >= ST_GRAVE) { // (all of this frame's: kept for good rather than freed under its commands; never seen)
+        static bool said;
+        if (!said) printf("[RealEngine] aviso: texturas enterradas demais num quadro (%u)\n", ST_GRAVE), said = true;
+        return;
     }
     memcpy(S.grave[S.ngrave].tex, tex, sizeof S.grave[0].tex);
     S.grave[S.ngrave++].at = at;
+}
+
+// (2026-11-24) a buffer a frame's commands read (the BC7 blocks, the old mips' buffer), freed once they ran; false: full
+static bool st_bury_buf(GpuBuf b) {
+    if (S.nbgrave >= ST_GRAVE) return false;
+    S.bgrave[S.nbgrave].b = b, S.bgrave[S.nbgrave++].at = M.vk->frame_number + RE_FRAMES_IN_FLIGHT + 1;
+    return true;
 }
 
 static void st_bury1(uint32_t t) {
@@ -159,6 +192,7 @@ static void st_bury1(uint32_t t) {
 // The old textures no frame in flight reads any more (all: the GPU is idle)
 static void st_drain(bool all) {
     uint64_t fn = M.vk->frame_number;
+    prog_drain(all); // (2026-11-24: the programs a bake in flight read)
     for (uint32_t i = 0; i < S.ngrave;) {
         if (!all && S.grave[i].at > fn) {
             i++;
@@ -256,7 +290,7 @@ void mat_stream_pass_end(void) {
         }
         streamed++;
         uint32_t cur = M.tex[v->tex[0]].w, lo = c->res < ST_MIN ? c->res : ST_MIN, w = cur; // unseen: keeps its size
-        if (S.pin[i]) w = c->res;
+        if (S.pin[i] || S.force[i]) w = c->res;
         else if (S.need[i] > 0.0f) {
             w = lo;
             while ((float)w < S.need[i] && w < c->res) w <<= 1;
@@ -294,7 +328,7 @@ void mat_stream_pass_end(void) {
     }
     for (uint32_t i = 0; i < M.n; i++) {
         if (!cs[i]) continue;
-        bool seen = S.need[i] > 0.0f || S.pin[i];
+        bool seen = S.need[i] > 0.0f || S.pin[i] || S.force[i];
         uint32_t w = seen ? full[i] >> S.bias : (drop_unseen ? floor_res[i] : full[i]);
         if (w < floor_res[i]) w = floor_res[i];
         const Variant* v = M.mats[i]->instance ? &g_inst_var[i] : &M.comp[i].v;
@@ -377,15 +411,36 @@ static void st_work(VkCommandBuffer cmd) {
     if (j->row < j->res) return;
     gpu_barrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT,
                 VK_ACCESS_2_TRANSFER_READ_BIT);
-    for (int k = 0; k < 3; k++) // (the blits: inside a frame the Kaiser mips cost the texture_streaming test 200 -> 97 fps)
-        if (j->tex[k]) tex_mips(cmd, j->tex[k]);
+    // (the blits: inside a frame the Kaiser mips cost the texture_streaming test 200 -> 97 fps). (2026-11-25) A forced climb's
+    // end (a material's first bake, a live edit: once per material) gets the Kaiser mips, wrapping, as a whole bake does: its
+    // blits left a tiling texture's seam in its small mips, a light line every tile far off (the RPG demo's grass, 1 m)
+    bool hq = j->asset >= 0 && j->asset < MAT_MAX_ASSETS && S.force[j->asset] && M.mip;
+    if (hq) {
+        // (its buffer: grown only where the old one can be buried, the frame's command buffer known; mip_buf_reserve
+        // without it destroys the old one, which this recording frame may have used: an invalid command buffer)
+        VkDeviceSize need = (VkDeviceSize)(j->res > 1 ? j->res / 2 : 1) * (j->res > 1 ? j->res / 2 : 1) * (j->tex[2] ? 8u : 4u);
+        if (!M.mip_buf.buffer || M.mip_buf.size < need) { // (this frame's command buffer: the old one buried, not destroyed)
+            VkCommandBuffer was = M.fcmd;
+            M.fcmd = cmd;
+            mip_buf_reserve(j->res, j->tex[2] != 0);
+            M.fcmd = was;
+        }
+        hq = M.mip_buf.buffer && M.mip_buf.size >= need;
+    }
+    for (int k = 0; k < 3; k++)
+        if (j->tex[k]) {
+            if (hq) tex_mips_hq(cmd, j->tex[k], k == 0, true);
+            else tex_mips(cmd, j->tex[k]);
+        }
+    if (hq) gpu_barrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+    if (j->asset >= 0 && j->asset < MAT_MAX_ASSETS && S.force[j->asset]) { if (hq) M.stats.climb_hq++; else M.stats.climb_blit++; }
     for (int k = 0; k < 2 && bc7_on(); k++) { // the color and the normal compressed in this frame too (the RGBA8 ones buried)
         GpuBuf blk = { 0 };
         uint32_t n = j->tex[k] ? tex_to_bc7(cmd, j->tex[k], &blk) : 0u;
         if (!n) continue;
         st_bury1(j->tex[k]);
         j->tex[k] = n;
-        if (S.nbgrave >= ST_GRAVE) vkDeviceWaitIdle(M.vk->device), st_drain(true);
+        if (S.nbgrave >= ST_GRAVE) st_drain_submitted(); // (2026-11-24: not this frame's)
         S.bgrave[S.nbgrave].b = blk, S.bgrave[S.nbgrave++].at = M.vk->frame_number + RE_FRAMES_IN_FLIGHT + 1;
     }
     j->swap_at = M.vk->frame_number + RE_FRAMES_IN_FLIGHT;
@@ -402,15 +457,28 @@ static void st_slot_tex(uint32_t slot, const uint32_t tex[3]) {
     g->tex_base = tex[0], g->tex_nrm = tex[1], g->tex_emis = tex[2];
 }
 
-// A variant's textures into its slot, and a material's own into the slots that share them: its instances without their
-// own, the actors' (the streaming's swaps, a bake's BC7 compression)
+// (2026-11-24) The variant whose textures a variant without its own draws with: an actor's dynamic instance of a Material
+// Instance that has its own, that instance's; else the material's (before, an actor's instance of such a Material
+// Instance showed its parent's look until one of its values was set)
+static const Variant* share_of(const Variant* v, const Compiled* c) {
+    if (v >= &M.dyn[0].v && v <= &M.dyn[MAT_MAX_DYNAMIC - 1].v) {
+        const Dyn* d = (const Dyn*)((const uint8_t*)v - offsetof(Dyn, v));
+        const Material* dm = d->m;
+        int mi = dm && dm->instance ? mat_index(dm) : -1;
+        if (mi >= 0 && g_inst_var[mi].own && compiled_of(dm) == c) return &g_inst_var[mi];
+    }
+    return &c->v;
+}
+
+// A variant's textures into its slot, and into the slots that share them: a material's instances without their own, the
+// actors' (the streaming's swaps, a bake's BC7 compression, a bake that made new ones)
 static void st_share(const Compiled* c, const Variant* v) {
     st_slot_tex(v->slot, v->tex);
-    if (v != &c->v) return;
-    for (uint32_t i = 0; i < M.n; i++)
-        if (M.mats[i]->instance && !g_inst_var[i].own && compiled_of(M.mats[i]) == c) st_slot_tex(g_inst_var[i].slot, v->tex);
+    if (v == &c->v)
+        for (uint32_t i = 0; i < M.n; i++)
+            if (M.mats[i]->instance && !g_inst_var[i].own && compiled_of(M.mats[i]) == c) st_slot_tex(g_inst_var[i].slot, v->tex);
     for (uint32_t i = 0; i < M.ndyn; i++)
-        if (!M.dyn[i].v.own && compiled_of(M.dyn[i].m) == c) st_slot_tex(M.dyn[i].v.slot, v->tex);
+        if (!M.dyn[i].v.own && compiled_of(M.dyn[i].m) == c && share_of(&M.dyn[i].v, c) == v) st_slot_tex(M.dyn[i].v.slot, v->tex);
 }
 
 static void st_swap(void) {
@@ -423,6 +491,7 @@ static void st_swap(void) {
     st_bury(old);
     if (j->down) M.stats.downs++;
     else M.stats.ups++;
+    if (!j->down && j->asset >= 0 && j->asset < MAT_MAX_ASSETS && j->res >= j->c->res) S.force[j->asset] = false; // (2026-11-24: the live bake's climb done)
     j->asset = -1;
 }
 

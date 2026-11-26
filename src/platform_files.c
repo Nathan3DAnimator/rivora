@@ -1,5 +1,6 @@
 #include "platform_files.h"
 #include "rpak.h"
+#include "platform.h" // (g_platform_synthetic_input)
 
 #include <stdlib.h>
 #include <string.h>
@@ -194,6 +195,7 @@ int re_run_command(const char* cmdline, const char* log_path) {
 }
 
 void re_show_in_explorer(const char* path) {
+    if (g_platform_synthetic_input) return; // (the tests' input, the UI sweep: no Explorer window)
     wchar_t w[1100], args[1200];
     if (!wide(path, w, 1100)) return;
     for (wchar_t* p = w; *p; p++)

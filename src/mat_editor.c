@@ -1,7 +1,11 @@
 // The Material Editor (mat_editor.h): Blender's / the Tlender's shader nodes on a canvas (header colors by category,
 // socket colors by type, links), Shift+A / right click adds a node by category, Details edits the selected node, the
 // baked textures are previewed; a Material Instance shows its parent's parameters with their overrides.
+#include "editor_docs.h"
+#include "editor_host.h" // (item 9: its windows are tabs of the Editors window)
 #include "mat_editor.h"
+#include "mat_pack.h" // (2026-11-25: the GPU's limits on the fields)
+#include "ui_number.h" // (2026-11-25, item 20: a typed value past the slider is kept)
 
 #include "theme.h"
 #include <math.h>
@@ -46,7 +50,8 @@ static bool mat_accept(const char* item, void* user) {
     return mat_def_named(u->defs, u->nd, item) && (!u->shown[0] || strcmp(u->shown[0], item)) && (!u->shown[1] || strcmp(u->shown[1], item));
 }
 
-static struct {
+// (2026-11-25, item 9) One per material open (Unreal opens each in its own tab): E is the one drawing now
+typedef struct MatEd {
     Material* m;
     bool open;
     int sel;              // the selected node (-1: none)
@@ -71,9 +76,37 @@ static struct {
     bool unsaved;
     VkDescriptorSet preview[3]; // base, normal, emission (the preview sphere's glow)
     VkImageView preview_view[3];
-} E = { .sel = -1, .drag_node = -1, .link_from = -1, .link_to = -1, .link_in = -1, .add_from = -1, .add_in = -1 };
+    bool host;                 // (item 9) docks into the Editors window on its next frame
+    bool focus;                // brought to the front on its next frame (opened again)
+    AssetViewport vp;          // its preview's camera, light and view mode (Q7)
+    const Material* canvas_shown; // (the graph's selection: cleared when another material shows)
+    int details_shown;         // (the selection the Details' tabs last followed)
+    struct { char last[MAT_PATH]; int tiles, lo, hi, offer; char pat[MAT_PATH], what[24]; } udim; // (udim_info's)
+    VkDescriptorSet anim_sets[2][MAT_ANIM_MAX]; // (frame_tex's: an animated material's frames)
+    VkImageView anim_views[2][MAT_ANIM_MAX];
+} MatEd;
+#define MED_MAX 4 // (the GPU previews are 8 at once: render_preview.c's PV_MAX)
+static const MatEd g_med_init = { .sel = -1, .drag_node = -1, .link_from = -1, .link_to = -1, .link_in = -1, .add_from = -1, .add_in = -1,
+                                  .details_shown = -2 };
+static MatEd g_med[MED_MAX];
+static MatEd* g_me = &g_med[0];
+static int g_med_last; // (the one focused last: what E is between frames)
+#define E (*g_me)
 
-static const char* L(const char* en, const char* pt) { return i18n_language() == LANG_PT_BR && pt ? pt : en; }
+// (2026-11-25, item 12) A node's text in the editor's language: Portuguese its own label (the Tlender's); English and Spanish
+// through the tables, by its English (an option written only in Portuguese: its English from mat_i18n.c)
+const char* mat_ui_en(const char* pt);
+static const char* L(const char* en, const char* pt) {
+    if (en && pt && !strcmp(en, pt)) en = mat_ui_en(pt);
+    if (i18n_language() == LANG_PT_BR && pt && pt[0]) return pt;
+    return TR(en);
+}
+// a combo's options in the editor's language (a frame's copy of the pointers)
+static const char* const* L_items(const char* const* items, int count) {
+    static const char* out[64];
+    for (int i = 0; i < count && i < 64; i++) out[i] = L(items[i], items[i]);
+    return out;
+}
 
 static void touch(void) {
     E.unsaved = true;
@@ -89,17 +122,42 @@ static bool vpath_to_path(const char* vpath, char* out, size_t cap) {
     return true;
 }
 
+static void tex_retire(VkDescriptorSet set);
+static void med_release(MatEd* e) { // a slot let go: its preview's textures retired (the GPU may still read them)
+    for (int k = 0; k < 3; k++) tex_retire(e->preview[k]);
+    for (int w = 0; w < 2; w++)
+        for (int k = 0; k < MAT_ANIM_MAX; k++) tex_retire(e->anim_sets[w][k]);
+    *e = g_med_init;
+}
+// (item 9) A material opened: its own editor (a tab), or the one it already has brought to the front; with all of
+// them taken, the one focused longest ago gives its place (saved first when it can be)
+static void med_take(Material* m) {
+    int at = -1;
+    for (int i = 0; i < MED_MAX && at < 0; i++)
+        if (g_med[i].open && g_med[i].m == m) at = i;
+    if (at >= 0) {
+        g_me = &g_med[at], g_med_last = at;
+        E.focus = true;
+        return;
+    }
+    for (int i = 0; i < MED_MAX && at < 0; i++)
+        if (!g_med[i].open) at = i;
+    if (at < 0) {
+        at = (g_med_last + 1) % MED_MAX;
+        if (g_med[at].unsaved && g_med[at].m) mat_save(g_med[at].m);
+    }
+    med_release(&g_med[at]);
+    g_me = &g_med[at], g_med_last = at;
+    E.m = m, E.open = true, E.host = true;
+}
+
 void mat_editor_open(const char* vpath) {
     if (content_defer_open(vpath)) return;
     char path[600];
     if (!vpath_to_path(vpath, path, sizeof path)) return;
     Material* m = mat_load(path);
     if (!m) return;
-    E.m = m;
-    E.open = true;
-    E.sel = -1;
-    E.unsaved = false;
-    E.status[0] = 0;
+    med_take(m);
 }
 
 static void unique_path(const char* folder_vpath, const char* base, const char* ext, char* out, size_t cap) {
@@ -120,16 +178,14 @@ bool mat_editor_add_menu(const char* folder_vpath, int part) {
     if (part == 0 && ui_menu_item(ICON_IMAGE, TR("Material"), NULL, false, ok)) {
         unique_path(folder_vpath, "M_NewMaterial", "rmat", path, sizeof path);
         Material* m = mat_create(path, false, NULL);
-        if (m) {
-            E.m = m, E.open = true, E.sel = -1, made = true;
-        }
+        if (m) med_take(m), made = true;
     }
     // (Q6) Material Instance is no longer listed here with every material: it is made from a material's right click
     // (Create > Material Instance); the advanced Material submenu has the Material itself
     if (part == 1 && ui_menu_item(ICON_IMAGE, TR("Material"), NULL, false, ok)) {
         unique_path(folder_vpath, "M_NewMaterial", "rmat", path, sizeof path);
         Material* m = mat_create(path, false, NULL);
-        if (m) E.m = m, E.open = true, E.sel = -1, made = true;
+        if (m) med_take(m), made = true;
     }
     if (part == 1) igSetItemTooltip("%s", TR("A Material Instance is made from its material: right click the material > Create > Material Instance."));
     return made;
@@ -447,7 +503,7 @@ static bool node_fields(MatGraph* g, int i, const MatNodeDef* d, const Geo* q, f
             if (igCheckbox(L(pd->label, pd->label), &b)) n->prop[p] = b, ch = true;
         } else {
             igSetNextItemWidth(x1 - x0);
-            ch |= igCombo_Str_arr("##p", &n->prop[p], (const char* const*)pd->items, pd->count, -1);
+            ch |= igCombo_Str_arr("##p", &n->prop[p], L_items((const char* const*)pd->items, pd->count), pd->count < 64 ? pd->count : 64, -1);
         }
         act |= igIsItemActivated();
         igPopID();
@@ -507,8 +563,7 @@ static bool node_fields(MatGraph* g, int i, const MatNodeDef* d, const Geo* q, f
 }
 
 static void draw_canvas(ImVec2 origin, ImVec2 size) {
-    static const Material* shown;
-    if (shown != E.m) shown = E.m, memset(E.msel, 0, sizeof E.msel), E.box = false; // (another material: nothing selected)
+    if (E.canvas_shown != E.m) E.canvas_shown = E.m, memset(E.msel, 0, sizeof E.msel), E.box = false; // (another material: nothing selected)
     MatGraph* g = E.m->graph;
     ImDrawList* dl = igGetWindowDrawList();
     ImGuiIO* io = igGetIO_Nil();
@@ -670,7 +725,7 @@ static void draw_canvas(ImVec2 origin, ImVec2 size) {
             const MatPropDef* pd = &d->props[p];
             char v[140];
             if (!pd->items) snprintf(v, sizeof v, "%s %s", n->prop[p] ? "[x]" : "[ ]", L(pd->label, pd->label));
-            else snprintf(v, sizeof v, "%s", n->prop[p] >= 0 && n->prop[p] < pd->count ? pd->items[n->prop[p]] : "?");
+            else snprintf(v, sizeof v, "%s", n->prop[p] >= 0 && n->prop[p] < pd->count ? L(pd->items[n->prop[p]], pd->items[n->prop[p]]) : "?");
             float y = q->props_y + (float)p * 20.0f * z;
             ImDrawList_AddRectFilled(dl, V2(q->p0.x + 8 * z, y + z), V2(q->p1.x - 8 * z, y + 19 * z), THA(TK_N5, 200), 3.0f * z, 0);
             ImDrawList_AddText_Vec2(dl, V2(q->p0.x + 12 * z, y + 3 * z), TH(TK_N14), v, NULL);
@@ -696,7 +751,7 @@ static void draw_canvas(ImVec2 origin, ImVec2 size) {
                     const char* b = strrchr(n->image, '/');
                     const char* b2 = strrchr(n->image, '\\');
                     if (b2 > b) b = b2;
-                    snprintf(v, sizeof v, "%s", n->image[0] ? (b ? b + 1 : n->image) : L("(no image)", "(sem imagem)"));
+                    snprintf(v, sizeof v, "%s", n->image[0] ? (b ? b + 1 : n->image) : TR("(no image)"));
                 }
                 ImDrawList_AddText_Vec2(dl, V2(q->p0.x + 10 * z, y), TH(TK_N14), v, NULL);
             }
@@ -873,7 +928,7 @@ static void draw_canvas(ImVec2 origin, ImVec2 size) {
                 if (!find_match(defs[k]->name, find) && !find_match(defs[k]->label, find)) continue;
                 char lb[160];
                 snprintf(lb, sizeof lb, "%s##%d", L(defs[k]->name, defs[k]->label), k);
-                if (ui_menu_item(ICON_MATERIAL, lb, mat_category_name(defs[k]->category), false, true) || (enter && !shown_n)) pick = defs[k];
+                if (ui_menu_item(ICON_MATERIAL, lb, TR(mat_category_name(defs[k]->category)), false, true) || (enter && !shown_n)) pick = defs[k];
                 shown_n++;
             }
             if (!shown_n) igTextDisabled("%s", TR("Nothing found."));
@@ -954,12 +1009,9 @@ menu_done:
 // others beside it) offers to read the whole set (Unreal's Texture Sample on a UDIM texture: the tile from the UV).
 // The disk is read when the path changes, not every frame
 static bool udim_info(MatNode* n) {
-    static char last[MAT_PATH];
-    static int tiles, lo, hi, offer;
-    static char pat[MAT_PATH], what[24];
-    if (strcmp(last, n->image)) {
-        snprintf(last, sizeof last, "%s", n->image);
-        tiles = lo = hi = offer = 0, pat[0] = what[0] = 0;
+    if (strcmp(E.udim.last, n->image)) {
+        snprintf(E.udim.last, sizeof E.udim.last, "%s", n->image);
+        E.udim.tiles = E.udim.lo = E.udim.hi = E.udim.offer = 0, E.udim.pat[0] = E.udim.what[0] = 0;
         char full[MAT_PATH * 2];
         if (!strncmp(n->image, "/Content", 8)) snprintf(full, sizeof full, "%s%s", mat_root(), n->image + 8);
         else snprintf(full, sizeof full, "%s", n->image);
@@ -968,24 +1020,24 @@ static bool udim_info(MatNode* n) {
         if (fl > 6 && !_stricmp(full + fl - 6, ".rudim")) {
             UdimFile* f = calloc(1, sizeof *f);
             if (f && udim_open(full, f, NULL, 0)) {
-                tiles = (int)f->count, lo = (int)f->tiles[0].udim, hi = (int)f->tiles[f->count - 1].udim;
-                snprintf(what, sizeof what, "%s %u", f->format == UDIM_FMT_BC5 ? "BC5" : f->format == UDIM_FMT_BC7 ? "BC7" : "RGBA8", f->tiles[0].width);
+                E.udim.tiles = (int)f->count, E.udim.lo = (int)f->tiles[0].udim, E.udim.hi = (int)f->tiles[f->count - 1].udim;
+                snprintf(E.udim.what, sizeof E.udim.what, "%s %u", f->format == UDIM_FMT_BC5 ? "BC5" : f->format == UDIM_FMT_BC7 ? "BC7" : "RGBA8", f->tiles[0].width);
                 udim_close(f);
             }
             free(f);
         } else if (udim_is_path(full)) {
-            tiles = udim_find_tiles(full, u, UDIM_MAX_TILES);
-            if (tiles) lo = u[0], hi = u[tiles - 1];
-        } else if (udim_detect(full, NULL, 0) && udim_pattern_of(n->image, pat, sizeof pat, NULL))
-            offer = 1;
+            E.udim.tiles = udim_find_tiles(full, u, UDIM_MAX_TILES);
+            if (E.udim.tiles) E.udim.lo = u[0], E.udim.hi = u[E.udim.tiles - 1];
+        } else if (udim_detect(full, NULL, 0) && udim_pattern_of(n->image, E.udim.pat, sizeof E.udim.pat, NULL))
+            E.udim.offer = 1;
     }
-    if (tiles) {
-        igTextDisabled(TR("UDIM: %d tiles (%d - %d) %s"), tiles, lo, hi, what);
+    if (E.udim.tiles) {
+        igTextDisabled(TR("UDIM: %d tiles (%d - %d) %s"), E.udim.tiles, E.udim.lo, E.udim.hi, E.udim.what);
         igSetItemTooltip("%s", TR("Each tile of the UV (1001 at 0..1, 1002 to its right, 1011 above) reads its own image; the material is baked per tile and each tile streams on its own (only the tiles seen stay resident)."));
     } else if (udim_is_path(n->image))
         igTextColored(THV(TK_WARN), "%s", TR("UDIM: no tile found"));
-    if (offer && igButton(TR("Use as UDIM"), (ImVec2){ 0, 0 })) {
-        snprintf(n->image, sizeof n->image, "%s", pat);
+    if (E.udim.offer && igButton(TR("Use as UDIM"), (ImVec2){ 0, 0 })) {
+        snprintf(n->image, sizeof n->image, "%s", E.udim.pat);
         return true;
     }
     return false;
@@ -1030,6 +1082,16 @@ static bool sect(const char* title, const char* keys, bool open) {
     return igCollapsingHeader_TreeNodeFlags(title, open ? ImGuiTreeNodeFlags_DefaultOpen : 0);
 }
 
+// (2026-11-25, the tester's block of items 3/5) the tests' view of the Details: the last frame the Emission Intensity field
+// was drawn in a material's, in an instance's (its parent's parameter: a scalar), and how the base color thumbnail was drawn
+static int g_test_ei_mat_frame = -1, g_test_ei_mi_frame = -1, g_test_ei_mi_scalar, g_test_base_how = -1;
+static float g_test_base_tint[3], g_test_base_solid[3];
+void mat_editor_test_ei(int* mat_frame, int* mi_frame, int* mi_scalar) { *mat_frame = g_test_ei_mat_frame, *mi_frame = g_test_ei_mi_frame, *mi_scalar = g_test_ei_mi_scalar; }
+void mat_editor_test_base(int* how, float tint[3], float solid[3]) {
+    *how = g_test_base_how;
+    for (int k = 0; k < 3; k++) tint[k] = g_test_base_tint[k], solid[k] = g_test_base_solid[k];
+}
+
 static void details_material(Material* m) {
     MatGraph* g = m->graph;
     if (sect(TR("Material"), "domain blend mode opacity mask clip two sided shading model eye iris glow texture resolution emissive light emission dominio mistura opacidade recorte dois lados modelo olho iris brilho resolucao emissao luz emissiva", true)) {
@@ -1040,7 +1102,7 @@ static void details_material(Material* m) {
             igSetItemTooltip("%s", TR("Surface: an actor's material. Light Function: a pattern a light projects (Emission, else Base Color; a Time node animates it): a projector's slide, blinds, clouds passing, a flickering bulb. Set it in a Spot, Point or Directional light's Light Function."));
         }
         int bm = m->blend_mode;
-        static const char* const blend_names[MAT_BLEND_COUNT] = { "Opaque", "Masked", "Translucent" };
+        const char* blend_names[MAT_BLEND_COUNT] = { TR("Opaque"), TR("Masked"), TR("Translucent") };
         if (igCombo_Str_arr(PL(TR("Blend Mode")), &bm, blend_names, MAT_BLEND_COUNT, -1)) m->blend_mode = (uint8_t)bm, touch();
         igSetItemTooltip("%s", TR("Masked: the pixels whose Alpha (the Principled BSDF's) is under the clip value are cut (hair, leaves, fences). Translucent: the Alpha is the opacity (glass, water, smoke), drawn over the scene in any order; no shadow."));
         if (m->blend_mode == MAT_BLEND_MASKED &&
@@ -1057,10 +1119,10 @@ static void details_material(Material* m) {
         if (m->shading_model == MAT_SHADING_EYE) {
             if (igSliderFloat(PL(TR("Iris Radius")), &m->eye_iris_radius, 0.02f, 0.5f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) touch();
             igSetItemTooltip("%s", TR("The iris's radius in UV units, around the UV's center (0.5, 0.5)."));
-            if (igSliderFloat(PL(TR("Iris Depth")), &m->eye_iris_depth, 0.0f, 1.0f, "%.2f cm", ImGuiSliderFlags_AlwaysClamp)) touch();
+            if (ui_slider_float(PL(TR("Iris Depth")), &m->eye_iris_depth, 0.0f, 1.0f, 0.0f, 3.4e38f, "%.2f cm", 0)) touch();
             igSetItemTooltip("%s", TR("How far the cornea's dome stands over the iris at its center: the iris shifts as the view turns."));
             // (Q13) the eyes that shine in the dark: the light sent back toward its source
-            if (igSliderFloat(PL(TR("Eye Glow")), &m->eye_glow, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+            if (ui_slider_float(PL(TR("Eye Glow")), &m->eye_glow, 0.0f, MAT_GLOW8_MAX, 0.0f, MAT_GLOW8_MAX, "%.2f", 0)) {
                 if (m->eye_glow_color[0] + m->eye_glow_color[1] + m->eye_glow_color[2] <= 0.0f)
                     m->eye_glow_color[0] = 0.85f, m->eye_glow_color[1] = 1.0f, m->eye_glow_color[2] = 0.7f; // (a cat's: green-gold)
                 touch();
@@ -1079,10 +1141,18 @@ static void details_material(Material* m) {
         if (igCombo_Str_arr(PL(TR("Texture Resolution")), &cur, names, 5, -1)) m->resolution = sizes[cur], touch();
         igSetItemTooltip("%s", TR("The size the material is baked at (its textures in the game): an imported material takes its largest image's, up to 4096."));
         // (2026-11-23) its glow lighting the scene (lights.c: a point light per actor; the GI's rays see it too)
-        if (igSliderFloat(PL(TR("Emissive Light")), &m->emissive_light, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) touch();
+        if (ui_slider_float(PL(TR("Emissive Light")), &m->emissive_light, 0.0f, 4.0f, 0.0f, 3.4e38f, "%.2f", 0)) touch();
         igSetItemTooltip("%s", TR("How much its glow (the Emission) lights what is around it: each actor with it lights like a lamp and bounces in the GI. 0: it glows but lights nothing."));
-        if (m->emissive_light > 0.0f && igCheckbox(PL(TR("Emissive Shadows")), &m->emissive_shadows)) touch();
-        igSetItemTooltip("%s", TR("Its glow's light casts ray traced shadows (what stands in the way blocks it). Costs about 1 ms at 1440p in a scene without other shadowed local lights; needs ray tracing."));
+        // (2026-11-25, the tester's block of items 3/5) each control right before its own tooltip: the Emission Intensity had
+        // been put between Emissive Shadows and its tooltip (the slider got two, the checkbox none)
+        if (m->emissive_light > 0.0f) {
+            if (igCheckbox(PL(TR("Emissive Shadows")), &m->emissive_shadows)) touch();
+            igSetItemTooltip("%s", TR("Its glow's light casts ray traced shadows (what stands in the way blocks it). Costs about 1 ms at 1440p in a scene without other shadowed local lights; needs ray tracing."));
+        }
+        // (2026-11-24) the emission times it at run time (the parameter MAT_EMISSION_INTENSITY: no bake, an edit writes the slots)
+        if (ui_slider_float(PL(TR("Emission Intensity")), &m->emission_intensity, 0.0f, 100.0f, 0.0f, 3.4e38f, "%.2f", ImGuiSliderFlags_Logarithmic)) touch();
+        g_test_ei_mat_frame = igGetFrameCount(); // (the test: the field shown in this material's Details)
+        igSetItemTooltip("%s", TR("Multiplies the emission at run time, without a bake (1: as baked). A Material Instance and a Blueprint's Set Scalar Parameter Value on Materials (Emission Intensity) change it too."));
         if (m->avg_emis[0] + m->avg_emis[1] + m->avg_emis[2] > 0.0f)
             igTextDisabled(TR("Mean emission: %.0f nits"), (0.2126f * m->avg_emis[0] + 0.7152f * m->avg_emis[1] + 0.0722f * m->avg_emis[2]) * 100.0f);
         if (m->vcol == MAT_VCOL_OTHER)
@@ -1090,11 +1160,11 @@ static void details_material(Material* m) {
     }
     if ((m->blend_mode == MAT_BLEND_TRANSLUCENT || m->transmissive) &&
         sect(TR("Refraction"), "refraction thickness dispersion glass refracao espessura dispersao vidro", true)) { // (2026-11-16) glass
-        if (igSliderFloat(PL(TR("Refraction")), &m->refraction, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) touch();
+        if (ui_slider_float(PL(TR("Refraction")), &m->refraction, 0.0f, 2.0f, 0.0f, 3.4e38f, "%.2f", 0)) touch();
         igSetItemTooltip("%s", TR("How much the glass bends what is seen through it, by its IOR (the Principled BSDF's) and its normal: 0 off, 1 real."));
         if (igSliderFloat(PL(TR("Refraction Thickness")), &m->refr_thickness, 0.0f, 100.0f, "%.1f cm", ImGuiSliderFlags_Logarithmic)) touch();
         igSetItemTooltip("%s", TR("How far the view travels inside it (cm): a window pane ~1, a glass or a bottle ~5, a lens or a crystal block more."));
-        if (igSliderFloat(PL(TR("Dispersion")), &m->dispersion, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) touch();
+        if (ui_slider_float(PL(TR("Dispersion")), &m->dispersion, 0.0f, 1.0f, 0.0f, 3.4e38f, "%.2f", 0)) touch();
         igSetItemTooltip("%s", TR("The colors split where it bends the most, as a prism or cut crystal (0: none)."));
     }
     { // (2026-11-17, Q4) Transmission: the Principled BSDF's weight here, its mode, the absorption, the colored shadow
@@ -1127,19 +1197,19 @@ static void details_material(Material* m) {
     if (m->shading_model != MAT_SHADING_EYE && m->shading_model != MAT_SHADING_TOON && // (Q27.8) the city at night's surfaces
         sect(TR("Surface Effects"), "retroreflection metallic flakes paint car reflector retrorrefletor flocos metalicos pintura carro efeitos superficie",
              m->retro > 0.0f || m->flakes > 0.0f)) {
-        if (igSliderFloat(PL(TR("Retroreflection")), &m->retro, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+        if (ui_slider_float(PL(TR("Retroreflection")), &m->retro, 0.0f, MAT_GLOW8_MAX, 0.0f, MAT_GLOW8_MAX, "%.2f", 0)) {
             if (m->retro_color[0] + m->retro_color[1] + m->retro_color[2] <= 0.0f) m->retro_color[0] = m->retro_color[1] = m->retro_color[2] = 1.0f;
             touch();
         }
         igSetItemTooltip("%s", TR("Sends the light back toward where it came from: a road sign, a cat's eye on the road, a vest's stripes or a reflector shine in the headlights. 0: none."));
         if (m->retro > 0.0f && igColorEdit3(PL(TR("Retroreflection Color")), m->retro_color, ImGuiColorEditFlags_Float)) touch();
-        if (igSliderFloat(PL(TR("Metallic Flakes")), &m->flakes, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+        if (ui_slider_float(PL(TR("Metallic Flakes")), &m->flakes, 0.0f, 4.0f, 0.0f, 3.4e38f, "%.2f", 0)) {
             if (m->flake_size <= 0.0f) m->flake_size = 0.04f, m->flake_spread = 0.35f;
             touch();
         }
         igSetItemTooltip("%s", TR("Tiny metal flakes under the coat that glint one by one in the light: a car's metallic paint. 0: none."));
         if (m->flakes > 0.0f) {
-            if (igSliderFloat(PL(TR("Paint Flake Size")), &m->flake_size, 0.005f, 1.0f, "%.3f cm", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic)) touch();
+            if (ui_slider_float(PL(TR("Paint Flake Size")), &m->flake_size, 0.005f, 1.0f, MAT_FLAKE_SIZE_MIN, 3.4e38f, "%.3f cm", ImGuiSliderFlags_Logarithmic)) touch();
             igSetItemTooltip("%s", TR("Each flake's size: smaller ones glint finer and blend into a soft shine farther away."));
             if (igSliderFloat(PL(TR("Flake Spread")), &m->flake_spread, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) touch();
             igSetItemTooltip("%s", TR("How far the flakes tilt from the surface: more, they glint over a wider angle around the highlight."));
@@ -1195,7 +1265,7 @@ static void details_material(Material* m) {
             if (igButton("x##detail", (ImVec2){ 0, 0 })) m->detail_path[0] = 0, touch();
             if (m->detail_tiling <= 0.01f) m->detail_tiling = 8.0f;
             if (igDragFloat(PL(TR("Detail Tiling")), &m->detail_tiling, 0.1f, 1.0f, 256.0f, "%.1fx", 0)) touch();
-            if (igSliderFloat(PL(TR("Detail Strength")), &m->detail_strength, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) touch();
+            if (ui_slider_float(PL(TR("Detail Strength")), &m->detail_strength, 0.0f, 2.0f, 0.0f, 3.4e38f, "%.2f", 0)) touch();
         }
     }
     // (B11) a landscape's painted layers: three materials blended over this one where the Landscape's Paint tool put them
@@ -1242,7 +1312,7 @@ static void details_node(MatGraph* g) {
     // the node: its name in its category's color, what it is, its label
     igTextColored(igColorConvertU32ToFloat4(mat_category_color(d->category)), "%s", L(d->name, d->label));
     igSameLine(0, 8);
-    igTextDisabled("%s  |  %s", mat_category_name(d->category), d->idname);
+    igTextDisabled("%s  |  %s", TR(mat_category_name(d->category)), d->idname);
     bool ch = false;
     igInputTextWithHint(PL(TR("Label")), TR("the title shown on the node"), n->label, sizeof n->label, 0, NULL, NULL);
     if (n->type == NODE_RGB || n->type == NODE_VALUE) {
@@ -1261,8 +1331,8 @@ static void details_node(MatGraph* g) {
         igPushID_Int(100 + p);
         if (!pd->items) {
             bool b = n->prop[p] != 0;
-            if (igCheckbox(pd->label, &b)) n->prop[p] = b, ch = true;
-        } else if (igCombo_Str_arr(pd->label, &n->prop[p], (const char* const*)pd->items, pd->count, -1)) {
+            if (igCheckbox(L(pd->label, pd->label), &b)) n->prop[p] = b, ch = true;
+        } else if (igCombo_Str_arr(L(pd->label, pd->label), &n->prop[p], L_items((const char* const*)pd->items, pd->count), pd->count < 64 ? pd->count : 64, -1)) {
             ch = true;
         }
         igPopID();
@@ -1353,9 +1423,8 @@ static void details(void) {
     Material* m = E.m;
     MatGraph* g = m->graph;
     bool node = E.sel >= 0 && E.sel < g->node_count;
-    static int shown = -2; // (the selection the tabs last followed: a new one picks its tab)
-    bool follow = shown != E.sel;
-    shown = E.sel;
+    bool follow = E.details_shown != E.sel; // (the selection the tabs last followed: a new one picks its tab)
+    E.details_shown = E.sel;
     igSetNextItemWidth(-1.0f);
     igInputTextWithHint("##dfind", TR("Search details"), g_dfind, sizeof g_dfind, 0, NULL, NULL);
     if (igBeginTabBar("##dtabs", 0)) {
@@ -1412,9 +1481,16 @@ static void instance_panel(void) {
         igSetItemTooltip("%s", TR("Override the parent's value"));
         igSameLine(0, 6);
         float* v = k >= 0 ? m->params[k].value : (float*)pp->value;
+        // (2026-11-25) the Emission Intensity a scalar always (a parent compiled before listed it as a color: a gray swatch)
+        bool ei = !strcmp(pp->name, MAT_EMISSION_INTENSITY), color = pp->kind && !ei;
         if (k < 0) igBeginDisabled(true);
-        if (pp->kind) ch |= igColorEdit4(pp->name, v, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-        else ch |= igDragFloat(pp->name, v, 0.01f, 0, 0, "%.3f", 0);
+        if (color) ch |= igColorEdit4(pp->name, v, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+        else if (ui_num_float(pp->name, v, 0.01f, 0.0f, 0.0f, 0.0f, 0.0f, "%.3f", 0)) {
+            if (ei && v[0] < 0.0f) v[0] = 0.0f; // (no negative glow)
+            v[1] = v[2] = v[3] = v[0]; // (a scalar: every lane the same, as the bake reads it)
+            ch = true;
+        }
+        if (ei) g_test_ei_mi_frame = igGetFrameCount(), g_test_ei_mi_scalar = !color;
         if (k < 0) igEndDisabled();
         igPopID();
     }
@@ -1457,12 +1533,10 @@ static void tex_retire(VkDescriptorSet set) {
 }
 
 static ImTextureID frame_tex(int which, uint32_t frame) {
-    static VkDescriptorSet sets[2][MAT_ANIM_MAX];
-    static VkImageView views[2][MAT_ANIM_MAX];
     VkImageView v = mat_preview_frame_view(E.m, which, frame);
     uint32_t k = frame % MAT_ANIM_MAX;
-    VkDescriptorSet* set = &sets[which ? 1 : 0][k];
-    VkImageView* view = &views[which ? 1 : 0][k];
+    VkDescriptorSet* set = &E.anim_sets[which ? 1 : 0][k];
+    VkImageView* view = &E.anim_views[which ? 1 : 0][k];
     if (v != *view) {
         tex_retire(*set);
         *set = v ? ImGui_ImplVulkan_AddTexture(v, VK_IMAGE_LAYOUT_GENERAL) : VK_NULL_HANDLE;
@@ -1537,7 +1611,6 @@ void mat_sphere_draw(ImDrawList* dl, ImVec2 o, float size, const Material* m, Im
 
 // (Q7) the asset viewport: the material on a preview mesh (Unreal's sphere, cube, cylinder, plane or any Static Mesh)
 // drawn by the GPU with its baked textures, in any view mode, the light and the camera of every asset editor
-static AssetViewport g_mat_vp;
 static uint32_t g_mat_mesh = SHAPE_SPHERE;
 static void preview_view(float size) {
     ImVec2 o = igGetCursorScreenPos();
@@ -1548,16 +1621,16 @@ static void preview_view(float size) {
     AvpScene sc;
     memset(&sc, 0, sizeof sc);
     sc.draws = &d, sc.ndraws = 1, sc.sel_bone = sc.sel_body = sc.sel_constraint = -1;
-    avp_draw(&g_mat_vp, BP_PV_KEY_MATERIAL, o.x, o.y, size, h, &sc, NULL);
+    avp_draw(&E.vp, g_me == g_med ? BP_PV_KEY_MATERIAL : 0x200u + 48u + (unsigned)(g_me - g_med), o.x, o.y, size, h, &sc, NULL);
     igSetCursorScreenPos((ImVec2){ o.x, o.y + h + 4.0f });
     static const char* const shapes[SHAPE_COUNT] = { "Cube", "Sphere", "Cylinder", "Cone", "Plane" };
     uint32_t slot = render_mesh_slot(g_mat_mesh);
     igSetNextItemWidth(size * 0.6f);
     if (igBeginCombo(TR("Preview Mesh"), g_mat_mesh < SHAPE_COUNT ? TR(shapes[g_mat_mesh]) : render_mesh_name(slot), 0)) {
         for (uint32_t k = 0; k < SHAPE_COUNT; k++)
-            if (igSelectable_Bool(TR(shapes[k]), g_mat_mesh == k, 0, (ImVec2){ 0, 0 })) g_mat_mesh = k, g_mat_vp.cam.framed = false;
+            if (igSelectable_Bool(TR(shapes[k]), g_mat_mesh == k, 0, (ImVec2){ 0, 0 })) g_mat_mesh = k, E.vp.cam.framed = false;
         for (uint32_t sl = SHAPE_COUNT; sl < render_mesh_count(); sl++)
-            if (asset_selectable_mesh(render_mesh_name(sl), slot == sl, render_mesh_id(sl))) g_mat_mesh = render_mesh_id(sl), g_mat_vp.cam.framed = false;
+            if (asset_selectable_mesh(render_mesh_name(sl), slot == sl, render_mesh_id(sl))) g_mat_mesh = render_mesh_id(sl), E.vp.cam.framed = false;
         igEndCombo();
     }
 }
@@ -1608,30 +1681,41 @@ static void preview(void) {
         if (!E.preview[k]) continue;
         if (k) igSameLine(0, 6);
         ImTextureRef_c ref = { NULL, (ImTextureID)(uintptr_t)E.preview[k] };
-        igImage(ref, (ImVec2){ s, s }, (ImVec2){ 0, 0 }, (ImVec2){ 1, 1 });
+        float tint[3], solid[3];
+        int how = k == 0 ? mat_preview_base(E.m, tint, solid) : MAT_PREVIEW_IMAGE;
+        if (how == MAT_PREVIEW_SOLID) { // (2026-11-25: a folded base color is its slot's coefficients, the texture only roots)
+            ImVec2 a = igGetCursorScreenPos();
+            float c[3];
+            for (int j = 0; j < 3; j++) c[j] = powf(fminf(fmaxf(solid[j], 0.0f), 1.0f), 1.0f / 2.2f); // (linear to the screen's)
+            ImDrawList_AddRectFilled(igGetWindowDrawList(), a, (ImVec2){ a.x + s, a.y + s }, igColorConvertFloat4ToU32((ImVec4){ c[0], c[1], c[2], 1.0f }), 0.0f, 0);
+            igDummy((ImVec2){ s, s });
+        } else {
+            ImVec4 t = { fminf(tint[0], 1.0f), fminf(tint[1], 1.0f), fminf(tint[2], 1.0f), 1.0f };
+            igImageWithBg(ref, (ImVec2){ s, s }, (ImVec2){ 0, 0 }, (ImVec2){ 1, 1 }, THVA(TK_ACCENT, 0.0f), t); // (no background: alpha 0)
+        }
+        if (k == 0) g_test_base_how = how, memcpy(g_test_base_tint, tint, sizeof tint), memcpy(g_test_base_solid, solid, sizeof solid); // (the base color's)
         igSetItemTooltip("%s", k ? TR("Normal (xy), roughness, metallic") : TR("Base color"));
     }
 }
 
 struct GLFWwindow* g_mat_editor_window;
 
-void mat_editor_draw(struct Editor* ed, double now) {
-    (void)now;
-    g_mat_editor_window = ed->window;
-    mated_test_setup();
-    tex_grave_drain(false);
-    if (!E.open || !E.m) return;
+static void med_draw(int slot) {
     if (E.dirty_at > 0.0 && igGetTime() >= E.dirty_at) { // the batched edits: one bake
         mat_mark_dirty(E.m);
         E.dirty_at = 0.0;
     }
     igSetNextWindowSize((ImVec2){ igGetFontSize() * 70, igGetFontSize() * 40 }, ImGuiCond_FirstUseEver);
     mated_test_window();
-    char title[200];
-    snprintf(title, sizeof title, "%s%s - %s###mat_editor", E.m->name, E.unsaved ? "*" : "",
-             E.m->instance ? TR("Material Instance") : TR("Material Editor"));
+    edhost_doc(&E.host); // (item 9) a tab of the Editors window, beside the other editors
+    if (E.focus) igSetNextWindowFocus(), E.focus = false;
+    char title[200], id[24] = "###mat_editor"; // (the first keeps its old id: the saved layouts know it)
+    if (slot) snprintf(id, sizeof id, "###mat_editor%d", slot);
+    snprintf(title, sizeof title, "%s%s - %s%s", E.m->name, E.unsaved ? "*" : "",
+             E.m->instance ? TR("Material Instance") : TR("Material Editor"), id);
     bool open = true;
     if (igBegin(title, &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        if (igIsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) g_med_last = slot;
         if (igButton(TR("Save"), (ImVec2){ 0, 0 }) ||
             (igIsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && igGetIO_Nil()->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_S, false))) {
             if (E.dirty_at > 0.0) mat_mark_dirty(E.m), E.dirty_at = 0.0;
@@ -1674,9 +1758,69 @@ void mat_editor_draw(struct Editor* ed, double now) {
         }
     }
     igEnd();
-    if (!open) E.open = false;
+    if (!open) med_release(g_me); // (its tab's X: the slot free, the preview's textures retired)
 }
 
-bool mat_editor_focused(void) { return E.open && igIsWindowFocused(ImGuiFocusedFlags_AnyWindow) && E.m; }
+void mat_editor_draw(struct Editor* ed, double now) {
+    (void)now;
+    g_mat_editor_window = ed->window;
+    mated_test_setup();
+    tex_grave_drain(false);
+    for (int i = 0; i < MED_MAX; i++) // (item 9) every material open: a window (a tab) each
+        if (g_med[i].open && g_med[i].m) g_me = &g_med[i], med_draw(i);
+    g_me = &g_med[g_med_last]; // (between frames E is the one focused last: the tests', the menus')
+    if (!E.open) // (closed: any other one open)
+        for (int i = 0; i < MED_MAX; i++)
+            if (g_med[i].open) g_me = &g_med[i], g_med_last = i;
+}
 
-void mat_editor_close(void) { E.open = false; }
+static bool med_any_open(void) {
+    for (int i = 0; i < MED_MAX; i++)
+        if (g_med[i].open && g_med[i].m) return true;
+    return false;
+}
+
+bool mat_editor_focused(void) { return med_any_open() && igIsWindowFocused(ImGuiFocusedFlags_AnyWindow); }
+
+void mat_editor_close(void) {
+    for (int i = 0; i < MED_MAX; i++)
+        if (g_med[i].open) med_release(&g_med[i]);
+    g_me = &g_med[0], g_med_last = 0;
+}
+
+void mat_editor_doc_paths(void (*cb)(const char* path, void* user), void* user) { // (item 9: the layout's documents)
+    for (int i = 0; i < MED_MAX; i++)
+        if (g_med[i].open && g_med[i].m && g_med[i].m->path[0]) cb(g_med[i].m->path, user);
+}
+
+int mat_editor_open_count(void) {
+    int n = 0;
+    for (int i = 0; i < MED_MAX; i++) n += g_med[i].open && g_med[i].m;
+    return n;
+}
+
+// (2026-11-25, bug-fixer) Its documents for editor_docs.h: a project switch and the editor's close end them before
+// the systems free what they point at
+static int med_docs_one(MatEd* e, int op, char* names, size_t cap) {
+    bool open = e->open && e->m;
+    if (op == DOCS_CLOSE) {
+        if (e->open) med_release(e);
+        return open;
+    }
+    if (!open) return 0;
+    if (op == DOCS_OPEN) return 1;
+    if (!e->unsaved) return 0;
+    if (op == DOCS_UNSAVED) return editor_docs_add_name(names, cap, e->m->name), 1;
+    if (e->dirty_at > 0.0) mat_mark_dirty(e->m), e->dirty_at = 0.0;
+    if (!mat_save(e->m)) return 1;
+    e->unsaved = false;
+    return 0;
+}
+// (item 9: every material open, each its own)
+int mat_editor_docs(int op, struct Editor* ed, char* names, size_t cap) {
+    (void)ed;
+    int n = 0;
+    for (int i = 0; i < MED_MAX; i++) n += med_docs_one(&g_med[i], op, names, cap);
+    if (op == DOCS_CLOSE) g_me = &g_med[0], g_med_last = 0;
+    return n;
+}

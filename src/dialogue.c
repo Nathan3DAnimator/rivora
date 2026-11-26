@@ -1,6 +1,7 @@
 // Dialogue (dialogue.h, notas-dev/dialogo.md): the Dialogue assets (.rdlg, JSON), the rules that walk them (one core for
 // the game and the editor's preview), the game's conversation (its widget, camera, voice, pause, events) and the
 // memory of what was said, saved with Save Game to Slot.
+#include "loc.h" // (2026-11-24) the game's localization
 #include "dialogue.h"
 
 #include <ctype.h>
@@ -75,6 +76,7 @@ static struct {
     char shown_text[DLG_TEXT];
     uint32_t shown_bytes, last_bytes;
     int last_node, last_nopts, last_lang;
+    uint32_t last_loc; // (2026-11-24) the localization's revision: a culture change writes the texts again
     bool last_choosing;
     float idle;                // seconds since all the line showed (a Line without wait)
 } R;
@@ -526,15 +528,20 @@ static bool system_spanish(void) {
 int dlg_language(void) {
     if (S.lang >= 0) return S.lang;
     if (gus_applied()->language < 0 && system_spanish()) return 2; // (the game follows the system, and it is Spanish)
-    return gus_language() == LANG_PT_BR ? 1 : 0;
+    return gus_language() == LANG_PT_BR ? 1 : gus_language() == LANG_ES ? 2 : 0;
 }
 void dlg_set_language(int lang) { S.lang = lang >= 0 && lang < DLG_LANGS ? lang : -1; }
 
 const char* dlg_node_text(const Dialogue* d, const DlgNode* n, int lang) {
-    (void)d;
     if (!n) return "";
+    if (d && loc_active()) { // (2026-11-24) the project's localization first (its culture's table: loc.h)
+        char ns[LOC_NS], key[LOC_KEY];
+        loc_dlg_key(d, n, ns, sizeof ns, key, sizeof key);
+        const char* t = loc_text(ns, key, NULL);
+        if (t) return t;
+    }
     if (lang > 0 && lang < DLG_LANGS && n->text[lang][0]) return n->text[lang];
-    if (lang == 1) return tr_lang(n->text[0], LANG_PT_BR); // (i18n's table: "Yes", "Goodbye"... already translated)
+    if (lang == 1 || lang == 2) return tr_lang(n->text[0], lang == 1 ? LANG_PT_BR : LANG_ES); // (i18n's table: "Yes", "Goodbye"... already translated)
     return n->text[0];
 }
 static const char* player_name(const Dialogue* d, int lang) {
@@ -1122,7 +1129,7 @@ static void set_widget(World* w) {
     if (!R.widget || !R.active || R.st.node < 0) return;
     DlgView v;
     dlg_view_get(&v);
-    bool node_changed = R.last_node != v.node || R.last_choosing != v.choosing || R.last_lang != dlg_language();
+    bool node_changed = R.last_node != v.node || R.last_choosing != v.choosing || R.last_lang != dlg_language() || R.last_loc != loc_revision();
     if (node_changed) {
         ui_set_text(R.widget, "Speaker", v.speaker ? v.speaker : "");
         ui_set_visible(R.widget, "Speaker", v.speaker && v.speaker[0]);
@@ -1148,7 +1155,7 @@ static void set_widget(World* w) {
         ui_set_visible(R.widget, "Hint", !v.choosing);
         R.last_nopts = (int)v.noptions;
     }
-    R.last_node = v.node, R.last_choosing = v.choosing, R.last_lang = dlg_language();
+    R.last_node = v.node, R.last_choosing = v.choosing, R.last_lang = dlg_language(), R.last_loc = loc_revision();
 }
 
 void dlg_tick(World* w, float dt) {

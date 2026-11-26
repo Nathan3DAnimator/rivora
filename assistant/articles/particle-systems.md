@@ -1,6 +1,6 @@
 id: particle-systems
 kind: recipe
-title: Sistemas de partículas (como o Niagara) | Particle systems (like Niagara)
+title: Sistemas de partículas (como o Niagara) | Particle systems (like Niagara) | Sistemas de partículas (como Niagara)
 keys: particulas, particles, particle system, sistema de particulas, niagara, emissor, emitter, modulo, module, fogo, fire, fumaca, smoke, faisca, sparks, chuva, rain, neve, snow, explosao, explosion, magia, magic, poeira, dust, chafariz, fountain, destrocos, debris, spawn system, sprite, malha de particula, mesh particles, vfx, efeito visual, visual effects, milhoes de particulas, gpu particles
 --- pt
 ```diagram steps
@@ -58,3 +58,31 @@ class Torch extends Actor
 ```
 Pick the system in the Details of the *Spawn System at Location* node. *Activate System*, *Deactivate System*, *Set Spawn Rate Scale* and *Is System Active* control a placed one.
 See also [Tlender particles](article:particles-tlender).
+--- es
+```diagram steps
+Explorador de contenidos > Añadir > Visual Effects (una plantilla) | Doble clic: emisores y su pila de módulos | "+" en cada etapa (recientes y recomendados arriba) | Arrástralo al nivel o Spawn System at Location
+```
+## Cómo funciona
+Un **Particle System** (`.rparticle`) tiene **emisores**; cada emisor es una **pila de módulos** en las etapas de Niagara:
+- **Emitter**: *Spawn Rate* (partículas por segundo) y *Spawn Burst* (todas a la vez).
+- **Particle Spawn**: *Lifetime*, *Shape Location* (punto, esfera, caja, cono, disco o la malla del actor), *Initial Velocity*, *Size*, *Color*, *Rotation*.
+- **Particle Update**: *Gravity*, *Drag*, *Curl Noise*, *Vortex*, *Point Attraction*, *Wind*, *Collision*, *Speed Limit*, *Kill Box*, *Color/Size Over Life*.
+- **Render**: *Sprite Renderer* (iluminado como humo, o brillante y aditivo como el fuego) o *Mesh Renderer* (una malla en cada partícula, con la sombra del sol).
+
+**El editor (como el de Niagara):** una barra de herramientas con Save, Browse, Play/Pause, Restart y la velocidad; **Preview** a la izquierda (arrastra para orbitar, rueda para hacer zoom); **System Overview** en el centro, un nodo por emisor con sus grupos de colores (Emitter, Particle Spawn, Particle Update, Render); **Selection** a la derecha con los parámetros de cada módulo (vectores, colores HDR, opciones, interruptores); abajo **Curves** (Color y Size Over Life, arrastrando los puntos) y **Timeline** (la generación y las ráfagas de cada emisor; arrastra para recorrer).
+
+Módulos nuevos: *Emitter State* (para siempre, una vez o N ciclos, con un retraso; una ráfaga en cada ciclo), *Sub UV Animation* (un flipbook de la textura del sprite), *Scale by Speed* (tamaño y opacidad según la velocidad), *Camera Offset* y las formas de *cylinder* y *torus*.
+
+Todo se ejecuta en la GPU: 5 millones de partículas a más de 200 fps en 1440p. Las mallas pequeñas en pantalla se vuelven sprites de su color, y las partículas pequeñas se vuelven puntos (un vértice cada una). **Preview in Level** muestra cada cambio al instante.
+
+```blueprint
+Event BeginPlay -> Spawn System at Location ( Location, Rotation, true )
+```
+```real
+class Torch extends Actor
+    event BeginPlay()
+        var fx = SpawnSystemAtLocation("PS_Fire", GetActorLocation(), MakeRotator(0, 0, 0), false)
+        fx.SetParticleColor(MakeLinearColor(1, 0.4, 0.1, 1))
+```
+Elige el sistema en los Detalles del nodo *Spawn System at Location*. *Activate System*, *Deactivate System*, *Set Spawn Rate Scale* e *Is System Active* controlan uno colocado.
+Mira también [Partículas del Tlender](article:particles-tlender).

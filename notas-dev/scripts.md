@@ -1,5 +1,7 @@
 # Scripts: programação por código (Real, C#, Python, C)
 
+> (25/11/2026, item 13) A linguagem "Real" se chama **Rivora Script** na tela; a extensão nova é `.rvs` e `.real` continua abrindo (`script_lang_of`); `SL_REAL`, os nomes internos e o resto desta nota mantêm "Real".
+
 Pedido de 2026-11-06: programar o jogo em código, não só em C. São quatro linguagens:
 - C#, Python e C;
 - a linguagem própria **Real**.
@@ -62,6 +64,13 @@ registradores** da VM. Daí:
   - o arquivo é a classe; o pai vem de `// parent: Character`;
   - globais são os campos; funções `void BeginPlay(void)`;
   - casts `(float)x`; `#include` ignorado.
+
+- **C++ (`.cpp`, `.rcpp`; 2026-11-25, item 13)**: o caminho do C# (`parse_brace_file`) com `SL_CPP`: o léxico tira `std::`
+  e troca `auto`->var, `vector`->List, `FVector`/`FRotator`/`FString`/`FLinearColor`/`int32`/`AActor`..., `to_string`->str;
+  o parser aceita `class X : public Actor { public: ... };`, rótulos de acesso, `const`/`override`/`final`/`noexcept` depois
+  dos parâmetros, `= default;`, `for (const auto& x : xs)` (vira for each), `static_cast<T>(e)`, `++i;`, `T&` (valor) e
+  os campos editáveis (como o C). Fora: templates, exceções, ponteiros, sobrecarga. O teste `scripts` tem a mesma classe
+  em C++ (TestCpp). Código nativo: o `plugin_api.hpp` e o Novo Plugin > C++ (teste `plugin_template`).
 
 ## O que vira o quê
 - **Eventos da engine pelo nome**, em qualquer grafia:

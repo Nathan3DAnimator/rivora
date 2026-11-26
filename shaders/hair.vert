@@ -27,6 +27,21 @@ void main() {
     HairVec4 P = HairVec4(pc.vertices);
     uint at = g.first + s * g.pts + j;
     vec4 a = P.v[at], b = P.v[at + 1u];
+    mat3x4 sk = groom_skin(g, pc.vertices, pc.instances, s); // (2026-11-25, item 16: on a skin, bent by its root's bones)
+    a.xyz = groom_skin_point(sk, a.xyz), b.xyz = groom_skin_point(sk, b.xyz);
+    // (2026-11-25, item 16) simulated with leaders (groom.c lead_strands): past the first bmax.w strands a strand follows its
+    // leader: the leader's simulated points plus its own offset from the leader at rest (bind: the rest points, actor
+    // space), turned into the world by the actor's rows (inv's inverse)
+    bool follower = g.dyn != 0u && g.pal != 0u && s >= uint(g.bmax.w);
+    uint L = s;
+    vec3 off0 = vec3(0.0), off1 = vec3(0.0);
+    if (follower) {
+        L = HairUint(pc.vertices).v[g.pal + s];
+        mat3 R = inverse(transpose(mat3(g.inv[0].xyz, g.inv[1].xyz, g.inv[2].xyz)));
+        uint rc = g.bind + s * g.pts + j, rl = g.bind + L * g.pts + j, sl = g.first + L * g.pts + j;
+        off0 = R * (P.v[rc].xyz - P.v[rl].xyz), off1 = R * (P.v[rc + 1u].xyz - P.v[rl + 1u].xyz);
+        a = vec4(P.v[sl].xyz + off0, a.w), b = vec4(P.v[sl + 1u].xyz + off1, b.w);
+    }
     vec3 wa = groom_world(g, a.xyz), wb = groom_world(g, b.xyz);
     bool tip_end = k == 1u || k == 2u || k == 4u;   // (two triangles: a a' b' / a b' b)
     float side = k == 0u || k == 1u || k == 3u ? -1.0 : 1.0;
@@ -45,7 +60,7 @@ void main() {
     wp += sd * (0.5 * ew * side);
 #ifdef HAIR_VELOCITY
     vec3 pa = tip_end ? b.xyz : a.xyz; // (the point in actor space by last frame's rows; the ribbon's width as now)
-    if (g.dyn != 0u) pa = P.v[g.prev_first + s * g.pts + j + (tip_end ? 1u : 0u)].xyz; // (simulated: last step's world point)
+    if (g.dyn != 0u) pa = P.v[g.prev_first + L * g.pts + j + (tip_end ? 1u : 0u)].xyz + (tip_end ? off1 : off0); // (simulated: last step's world point; a follower: its leader's and its offset)
     vec3 pw = vec3(dot(g.prev[0], vec4(pa, 1.0)), dot(g.prev[1], vec4(pa, 1.0)), dot(g.prev[2], vec4(pa, 1.0))) + sd * (0.5 * ew * side);
     gl_Position = f.view_proj * vec4(wp, 1.0);
     o_cur = gl_Position;

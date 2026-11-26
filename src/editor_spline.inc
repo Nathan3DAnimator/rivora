@@ -3,6 +3,7 @@
 // meshes made when missing (SM_SplineRoad, SM_SplinePipe: rings along X, so a piece bends smoothly); the test scene
 // `splines`, its script and its check. Included by editor.c.
 static void label_cell(const char* label);
+static void label_cell_text(const char* shown); // (editor.c: a label already translated)
 static bool row_float(const char* label, float* v, float speed, float mn, float mx, const char* fmt);
 static bool row_check(const char* label, uint32_t* v);
 static bool row_color(const char* label, float c[3], bool hdr);
@@ -201,7 +202,7 @@ static bool spline_details(Editor* ed, World* w, Entity e, CRail* rl) {
             for (uint32_t i = 0; i < rl->npoints; i++) {
                 char lb[32];
                 snprintf(lb, sizeof lb, "%s %u", TR("Point"), i + 1);
-                label_cell(lb);
+                label_cell_text(lb);
                 igPushID_Int((int)i + 7000);
                 igSetNextItemWidth(-1);
                 ch |= igDragFloat3("##pt", rl->points[i], 10.0f, -10000000.0f, 10000000.0f, "%.0f", 0);

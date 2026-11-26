@@ -1,6 +1,6 @@
 id: timer-delay
 kind: recipe
-title: Esperar alguns segundos | Wait a few seconds
+title: Esperar alguns segundos | Wait a few seconds | Esperar unos segundos
 keys: esperar, aguardar, delay, depois de segundos, temporizador, timer, contagem regressiva, bomba relogio, wait seconds, cooldown
 --- pt
 **Delay** pausa só aquele evento: o resto do jogo continua.
@@ -48,3 +48,26 @@ class Bomb extends Actor
 ```
 
 To repeat every so often, use **Set Timer by Event** with Looping on.
+--- es
+**Delay** pausa solo ese evento: el resto del juego sigue.
+
+```blueprint
+Event BeginPlay
+  -> Print String ( "3..." )
+  -> Delay ( Duration = 3.0 )
+  -> Print String ( "Boom!" )
+  -> Destroy Actor
+```
+```real
+class Bomb extends Actor
+    @editable
+    var fuse = 3.0
+
+    event BeginPlay()
+        print("Tick tock...")
+        Delay(fuse)
+        print("Boom!")
+        DestroyActor()
+```
+
+Para repetir cada cierto tiempo, usa **Set Timer by Event** con Looping activado.

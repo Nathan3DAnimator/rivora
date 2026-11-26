@@ -54,3 +54,7 @@ const char* ui_prop_label(const char* label);
 const char* ui_tip_find(const char* label);
 // For the tests: the table and its size
 const UiTip* ui_tips_table(int* count);
+// (2026-11-25, item 12) The Spanish descriptions (ui_tips_table_es.c, the editor's: label -> text), given at startup
+typedef struct UiTipEs { const char* label; const char* text; } UiTipEs;
+void ui_tips_set_es(const UiTipEs* t, int count);
+const char* ui_tip_es(const char* label); // its Spanish text (NULL: none)

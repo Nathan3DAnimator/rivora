@@ -1,6 +1,6 @@
 id: traffic
 kind: howto
-title: Trânsito: carros nas ruas sozinhos | Traffic: cars driving the streets by themselves
+title: Trânsito: carros nas ruas sozinhos | Traffic: cars driving the streets by themselves | Tráfico: autos que recorren las calles solos
 keys: transito, traffic, carros, cars, ruas, streets, via, road, semaforo, traffic light, signal, cruzamento, junction, intersection, fila, queue, cidade, city, npc cars
 --- pt
 ```diagram steps
@@ -20,3 +20,12 @@ Spline with Traffic Road | Ends within 6 m: a junction | Signal Green Time: ligh
 - **Junctions**: a road's end within 6 m of another's start. Where three roads or more meet, **Signal Green Time** turns the lights on (each direction's green, 2 s of all red between).
 - Each car is a driver with its own speed, acceleration, braking and distance: it keeps its distance from the car ahead, queues at the red, waits for the next lane's start to clear and picks a way out at the junction.
 - Cost: 1568 cars on a grid of 112 roads, 0.5 ms of CPU.
+--- es
+```diagram steps
+Spline con Traffic Road | Extremos a menos de 6 m: un cruce | Signal Green Time: semáforos | Jugar: los autos circulan, se detienen en rojo, giran
+```
+- Coloca una **Spline** (Actor > Añadir > Spline) y en Detalles > **Road** marca **Traffic Road**. Cuando el juego se ejecuta, los autos recorren sus carriles solos.
+- **Lanes Each Way** (1-4), **One Way**, **Speed Limit** (km/h), **Traffic Density** (autos por cada 100 m de carril), **Lane Width**.
+- **Cruces**: el extremo de una calle a menos de 6 m del inicio de otra. Donde se encuentran tres calles o más, **Signal Green Time** activa los semáforos (el verde de cada dirección, 2 s de todo en rojo entre ellos).
+- Cada auto es un conductor con su propia velocidad, aceleración, frenado y distancia: mantiene la distancia con el auto de adelante, hace fila en el rojo, espera a que se libere el inicio del carril siguiente y elige una salida en el cruce.
+- Costo: 1568 autos en una grilla de 112 calles, 0,5 ms de CPU.

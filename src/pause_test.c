@@ -27,6 +27,7 @@
 static bool g_fail;
 static Entity g_box, g_mover, g_ticker; // (g_ticker: Tick When Paused)
 static double g_t;
+static double g_opt_worst; // (2026-11-25, bug-fixer) the longest frame from the Options opening to their first click (ms)
 static int g_step;
 static float g_box_z, g_mover_z, g_ticker_z, g_box_z_resumed;
 static bool g_jump_f, g_jump_space, g_saved, g_options_shown, g_menu_shown, g_options_back, g_frozen_ok;
@@ -50,6 +51,9 @@ static bool jump_on(void) {
 static void step(Editor* ed, double dt) {
     World* w = &ed->world;
     g_t += dt;
+    // (the Options opened ~1 s after Play, while the upscalers are still asked on their thread: the Upscaler combo waited
+    // for NGX, a frame of 2.3 s in the UI sweep; the frames between the opening and the first click)
+    if ((g_step == 3 || (g_step == 4 && g_t < 0.2)) && dt * 1000.0 > g_opt_worst) g_opt_worst = dt * 1000.0;
     if (g_step >= 1 && g_step < 9) { // (the measure: the Play's game step running and paused)
         if (game_paused()) g_paused_ms += g_pie_tick_ms, g_paused_n++;
         else g_run_ms += g_pie_tick_ms, g_run_n++;
@@ -78,6 +82,17 @@ static void step(Editor* ed, double dt) {
         if (g_t < 0.2) break;
         g_options_shown = ui_test_shown("GraphicsTab") && ui_test_shown("GraphicsPage");
         CHECK(g_options_shown, "the Options didn't open from the menu's keyboard (Down, Enter)");
+        { // (2026-11-25, bug-fixer) Apply with nothing changed: the view's preset stays (the saved one isn't the view's until
+          // the options change it) and the click is quick; before, the view's Cinematic went to the saved preset in a
+          // frame of 403 ms (the UI sweep; the pause_apply_cinematic test runs this at Cinematic)
+            int scal0 = ed->scalability;
+            double ta = re_time_seconds();
+            ui_test_click(w, "ApplyButton");
+            double ms = (re_time_seconds() - ta) * 1000.0;
+            printf("[RealEngine] pause test: Apply with nothing changed took %.1f ms (preset %d -> %d)\n", ms, scal0, ed->scalability);
+            CHECK(ed->scalability == scal0, "Apply with nothing changed switched the view's preset (%d -> %d)", scal0, ed->scalability);
+            CHECK(ms < 150.0, "Apply with nothing changed took %.0f ms", ms); // (a hitch: under another program's load 71 ms)
+        }
         ui_test_click(w, "AudioTab");
         CHECK(ui_test_shown("AudioPage") && !ui_test_shown("GraphicsPage"), "the Audio tab didn't show its page");
         g_scal_before = ed->scalability;
@@ -101,7 +116,11 @@ static void step(Editor* ed, double dt) {
             CHECK(fabsf(mz - g_mover_z) < 0.01f, "the actor without Tick When Paused moved while paused (%.2f -> %.2f)", g_mover_z, mz);
             CHECK(tz > g_ticker_z + 5.0f, "the Tick When Paused actor didn't tick while paused (%.2f -> %.2f)", g_ticker_z, tz);
         }
-        ui_test_click(w, "ApplyButton");
+        { // (2026-11-25, bug-fixer) the click's own time (the UI sweep: a frame of 403 ms)
+            double ta = re_time_seconds();
+            ui_test_click(w, "ApplyButton");
+            printf("[RealEngine] pause test: Apply took %.1f ms\n", (re_time_seconds() - ta) * 1000.0);
+        }
         g_saved = re_file_stat(gus_path(), NULL, NULL, NULL);
         CHECK(g_saved, "Apply didn't save %s", gus_path());
         g_step = 6, g_t = 0.0;
@@ -193,6 +212,8 @@ bool pause_test_setup(Editor* ed, bool reload) {
     return g_mover && g_ticker && g_box;
 }
 
+bool pause_test_done(void) { return g_step >= 11; }
+
 bool pause_test_check(Editor* ed, bool reload) {
     if (reload) { // what the first run saved, read back when this Play began (and applied)
         const GameUserSettings* s = gus();
@@ -210,6 +231,8 @@ bool pause_test_check(Editor* ed, bool reload) {
     CHECK(g_jump_f, "F doesn't trigger IA_Jump after the remap");
     CHECK(!g_jump_space, "Space still triggers IA_Jump after the remap");
     CHECK(gus_remap_hits() > 0, "Enhanced Input never read a remapped key");
+    printf("[RealEngine] pause test: the Options opened, the longest frame %.0f ms\n", g_opt_worst);
+    CHECK(g_opt_worst < 150.0, "a frame of %.0f ms while the Options opened", g_opt_worst);
     printf("[RealEngine] Pause cost: game step %.3f ms running, %.3f ms paused (%u / %u frames); options menu drawn in %.3f ms; preset %d -> %d\n",
            g_run_n ? g_run_ms / g_run_n : 0.0, g_paused_n ? g_paused_ms / g_paused_n : 0.0, g_run_n, g_paused_n, g_ui_ms, g_scal_before, ed->scalability);
     if (!g_fail) printf("[RealEngine] Pause test: OK (menu, frozen world, Options by keyboard, preset, remap, saved)\n");

@@ -12,10 +12,10 @@
 
 extern "C" uint32_t mesh_clod_build(const float* pos, uint32_t stride, uint32_t nv, const float* attr, uint32_t nattr, const float* weights,
                                     uint32_t protect, const uint32_t* idx, uint32_t ni, MeshDagCluster** out, uint32_t** didx, uint32_t* dni,
-                                    uint32_t* levels) {
+                                    uint32_t* levels, uint32_t flags) {
     *out = nullptr, *didx = nullptr, *dni = 0, *levels = 0;
     clodConfig cfg = clodDefaultConfig(128);
-    clodMesh m = {};
+    if (flags & MESH_CLOD_STUCK_FALLBACK) cfg.simplify_fallback_permissive = true, cfg.simplify_fallback_sloppy = true;    clodMesh m = {};
     m.indices = idx, m.index_count = ni, m.vertex_count = nv;
     m.vertex_positions = pos, m.vertex_positions_stride = stride;
     m.vertex_attributes = attr, m.vertex_attributes_stride = sizeof(float) * nattr;

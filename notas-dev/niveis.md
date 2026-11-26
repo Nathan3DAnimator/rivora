@@ -229,3 +229,30 @@ como um corte de câmera".
 - **Medidas**: velocidade 0,05 pronto em 213 ms com a thread principal a no máximo 0,13 ms por quadro; velocidade 1 em
   9 ms (0,87 ms no quadro mais caro); a troca em **0,057 ms** com os 40 000 atores e a câmera do arquivo; pego antes de
   terminar: acabou em 5 ms na velocidade máxima, 3 quadros da tela de carregamento.
+
+## Loaded, Failed e Progress nos nós de carregamento (2026-11-24, item 10)
+Pedido: "os nós de loading com as saídas Loaded e Failed embaixo da constante e um float 0..1 de progresso; quem abre o
+nível é o Open Level, o stream prepara tudo para ele só iniciar sem travar; limites nos sliders de velocidade".
+- **Pinos** (acrescentados no fim da lista: os índices antigos não mudam, os grafos salvos abrem como antes):
+  Load Stream Level `Completed, Loaded, Failed, Progress` (Completed como antes, quando termina de qualquer jeito; depois
+  Loaded ou Failed); Preload Level `(saída na hora), Loaded, Failed, Progress` (virou latente); Get Level Preload
+  Progress ganhou `Failed`; nó novo **Get Stream Level State** (Progress, Loaded, Failed pelo nome).
+- **VM** (`bp_vm.c`): `OP_LATENT_INFO` antes do `OP_LATENT2` passa o registrador do Progress e o endereço do Failed;
+  o `BpStream` guarda isso (e o nome do nível do Preload, `BP_REQ_PRELOAD`); a cada quadro o tick escreve o Progress e,
+  terminado, retoma no Loaded (sucesso) ou no Failed (`level_stream_progress`: 0..0,95 lendo o arquivo, 1 com os atores
+  dentro; `level_preload_state`: PRE_READY / PRE_FAILED / sumiu = cancelado). Um nó salvo antes dos pinos novos (sem
+  Loaded) compila como antes. Sem pedido (sem vaga): Failed no quadro seguinte.
+- **Open Level**: já usava o mundo preparado pelo Preload Level (`level_preload_take` no jogo e no Play); sem nada
+  preparado, lê o arquivo como sempre.
+- **Velocidade**: `bp_pin_range` (blueprint.c) dá o mínimo/máximo do pino (Load Speed de Preload Level e Set Level Load
+  Speed: 0..1, 0 = a geral; Set Async Loading Speed: 0,01..1); o campo do nó faz clamp e o tooltip mostra "Mín. x, máx. y";
+  a VM continua limitando a 0,01..1 (`speed_of`, `level_async_set_speed`).
+- **Scripts**: a API é a dos nós: `load_stream_level` espera terminar, `get_stream_level_state` diz Progress/Loaded/Failed;
+  `preload_level` segue na hora, `get_level_preload_progress` dá progresso, Ready e Failed.
+- **Testes**: `preload` (sem GPU) confere o Progress do Preload Level de 0 a 1 sem voltar, Loaded, o Open Level do nível
+  preparado (troca e pior quadro), o Load Stream Level (Progress, Loaded, pelo nome) e um nível inexistente (Failed);
+  `blueprints` (`bp_test.c`): o Level Blueprint carrega StreamSub (Loaded imprime) e depois um nível que não existe (o
+  Failed imprime; um Loaded dele seria erro).
+- **Medidas** (`preload`, 40 000 atores, 6,9 MB): Progress 0,00 -> 1,00 em 29 quadros na velocidade 0,2, o pior quadro da
+  thread principal **0,406 ms**; Open Level do nível preparado **0,029 ms**; Load Stream Level do mesmo nível em 2
+  quadros; o nível inexistente falha na hora.

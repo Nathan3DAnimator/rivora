@@ -1363,6 +1363,7 @@ typedef struct CGroom {
     uint32_t collide;          // 1: out of the head, the actor's Skeletal Mesh (its bones) and the scene's boxes
     float collision_radius;    // cm the strands keep from what they touch
     uint32_t guides;           // (2026-11-16) a Groom asset's guides (.rgroom: the Tlender's hair, OBJ curves): grown from them; 0: on the head's ellipsoid
+    uint32_t visible;          // (2026-11-25, item 16) 0: not drawn nor simulated (Set Property "Visible"; a hidden actor's neither); a level from before reads 1
 } CGroom;
 
 // Fire (A14, fire.c): a box of gas (width x width x height cm, its base at the actor) simulated on the GPU: fuel at its

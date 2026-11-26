@@ -1,6 +1,6 @@
 id: loading-screen
 kind: howto
-title: Tela de carregamento e intro do jogo | The game's loading screen and intro
+title: Tela de carregamento e intro do jogo | The game's loading screen and intro | Pantalla de carga e intro del juego
 keys: tela de carregamento, loading, splash, intro, abertura, logo, video de abertura, imagem de abertura, icone do jogo, loading screen
 --- pt
 ```diagram steps
@@ -20,3 +20,12 @@ Project Settings | Packaging | Loading Screen: an image or a video | Package
 - **Show the Engine Intro** (same page) turns the Rivora Engine animation before your game on or off.
 - The intro skips with a click, Esc, Space or Enter.
 - See also: [Package the game](article:package-game).
+--- es
+```diagram steps
+Project Settings | Packaging | Loading Screen: una imagen o un video | Empaquetar
+```
+- **Project Settings > Packaging > Loading Screen**: elige una imagen (PNG, JPEG, BMP, TGA) o un **video** (MP4, WMV, MOV, AVI, MKV, WebM, en bucle). [Abrir](open:project)
+- Un archivo de fuera del proyecto se copia a `Content/Splash` y va con el juego empaquetado. Solo la barra de carga y el texto quedan encima.
+- **Show the Engine Intro** (en la misma página) activa o desactiva la animación de la Rivora Engine antes de tu juego.
+- La intro se salta con un clic, Esc, Espacio o Enter.
+- Mira también: [Empaquetar el juego](article:package-game).

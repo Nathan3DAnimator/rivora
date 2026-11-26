@@ -1,6 +1,6 @@
 id: metasounds
 kind: howto
-title: Sound Graphs: som feito por nós (motor, chuva, vento) | Sound Graphs: sound made of nodes (engine, rain, wind)
+title: Sound Graphs: som feito por nós (motor, chuva, vento) | Sound Graphs: sound made of nodes (engine, rain, wind) | Sound Graphs: sonido hecho de nodos (motor, lluvia, viento)
 keys: metasound, metasounds, meta sound, som procedural, procedural audio, procedural sound, sintetizador, synth, synthesizer, oscilador, oscillator, ruido, noise, filtro de audio, audio filter, envelope, adsr, som de motor, engine sound, barulho do motor, ronco do motor, rpm sound, som do carro, car sound, som de chuva, rain sound, barulho da chuva, som de vento, wind sound, set float parameter, parametro de som, sound parameter, MS_Engine, MS_Rain, MS_Wind, rmsnd, sound graph, grafo de som
 --- pt
 ```diagram steps
@@ -32,6 +32,23 @@ A **Sound Graph** is a sound made by a graph of audio nodes instead of a recordi
 - **In the game:** put the Sound Graph in an **Audio Component** (or in Spawn Sound) and change its inputs with **Set Float Parameter** (the input's name and the value). It goes through the same attenuation, spatialization, Sound Class and Submix as any sound.
 - **Ready-made** (in `Content/Audio/Sound Graphs`): **MS_Engine** (inputs RPM and Load), **MS_Rain** (Intensity in mm/h) and **MS_Wind** (Speed in m/s). The engine already uses them by itself: every **vehicle** with its engine on sounds through MS_Engine with its revs and throttle, and the **Rain** actor plays the rain and the wind by its intensity and wind. An Audio Component on the actor itself replaces the automatic sound with yours; `REALENGINE_NO_AUTO_SOUNDS` turns them all off.
 - **Cost:** the engine (21 nodes) spends ~0.04 ms of CPU for every 10 ms of sound, on the mixer's thread, without allocating memory.
+```blueprint
+Event Tick -> Set Float Parameter ( Target = EngineAudio, In Name = "RPM", In Float = CurrentRPM )
+Event BeginPlay -> Set Float Parameter ( Target = RainAudio, In Name = "Intensity", In Float = 50 )
+```
+--- es
+```diagram steps
+Explorador de contenidos > Añadir > Sonidos > Sound Graph
+Nodos: Oscillator, Noise, Impulses, Filter, Envelope, matemáticas, Input
+Conéctalo todo al Output; Jugar lo reproduce, los Inputs lo cambian en vivo
+En el juego: un Audio Component con el Sound Graph + Set Float Parameter
+```
+Un **Sound Graph** es un sonido hecho por un grafo de nodos de audio en lugar de una grabación, como el de Unreal: cambia mientras suena (las revoluciones de un motor, la fuerza de la lluvia) sin cambiar archivos.
+- **Crear uno:** Explorador de contenidos > **Añadir > Sonidos > Sound Graph**. El editor lista los **Inputs** (los parámetros, con controles que cambian la vista previa en vivo) y los **Nodos**; la entrada de cada nodo es un valor o la salida de otro nodo.
+- **Nodos:** **Oscillator** (seno, sierra, cuadrada, triángulo), **Noise** (blanco, rosa, marrón), **Impulses** (clics aleatorios: gotas, crepitar), **Filter** (paso bajo, paso alto, paso de banda, con resonancia), **ADSR Envelope**, **Multiply**, **Add**, **Map Range**, **Smooth** (desliza un valor), **Distortion** e **Input** (un parámetro con nombre y un valor predeterminado). Lo que llega al **Output** suena.
+- **En el juego:** pon el Sound Graph en un **Audio Component** (o en Spawn Sound) y cambia sus entradas con **Set Float Parameter** (el nombre de la entrada y el valor). Pasa por la misma atenuación, espacialización, Sound Class y Submix que cualquier sonido.
+- **Listos** (en `Content/Audio/Sound Graphs`): **MS_Engine** (entradas RPM y Load), **MS_Rain** (Intensity en mm/h) y **MS_Wind** (Speed en m/s). El motor ya los usa por sí solo: todo **vehículo** con el motor encendido suena por MS_Engine con sus revoluciones y su acelerador, y el actor **Rain** reproduce la lluvia y el viento según su intensidad y su viento. Un Audio Component en el propio actor reemplaza el sonido automático por el tuyo; `REALENGINE_NO_AUTO_SOUNDS` los apaga todos.
+- **Costo:** el motor (21 nodos) gasta ~0,04 ms de CPU por cada 10 ms de sonido, en el hilo del mezclador, sin asignar memoria.
 ```blueprint
 Event Tick -> Set Float Parameter ( Target = EngineAudio, In Name = "RPM", In Float = CurrentRPM )
 Event BeginPlay -> Set Float Parameter ( Target = RainAudio, In Name = "Intensity", In Float = 50 )

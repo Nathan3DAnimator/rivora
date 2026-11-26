@@ -1161,3 +1161,30 @@ para o jogo não ter 60 fps. Aqui:
 - **Teste `hair_crowd`**: 100 Grooms, segmentos dentro do orçamento, 1 a 16 simulados, ≥ 200 fps.
 - Próximo: cards gerados e malha com textura no couro para os bem distantes; vento barato no vertex shader dos não
   simulados.
+
+## Nanite, Fallback e colisão por malha; DAG em peles (item 4 parte 2, 2026-11-25)
+- **`.rlod` v2** ao lado da malha (`.<arquivo>.rlod`, JSON): `nanite` (-1 Auto: DAG a partir de 16 384 triângulos; 1 On:
+  de 512; 0 Off), `fallback` (% dos triângulos do LOD 0 que a BLAS usa: o LOD mais simples que ainda os tem) e `collision`
+  (0 do ator, 1 simples, 2 complexa: `physics.c` `geom_of` lê `render_mesh_collision`). O v1 (só LODs) abre como antes.
+- Visualizador de Static/Skeletal Mesh, seção **Nanite Settings**: Enable Nanite Support, Fallback Triangle Percent,
+  Collision Complexity, Apply Nanite and Collision (salva e recarrega as malhas), Generate Lightmap UVs (não skinned) e as
+  linhas só de leitura: clusters do DAG, LOD/triângulos/erro do fallback, pele rígida (`render_mesh_nanite`).
+- **Peles no DAG**: pele parada, rígida e viva (as vivas com as esferas folgadas, notas-dev/animacao.md "Nanite na pele
+  viva"); `cull.comp` só exclui a Masked viva e o soft body. `REALENGINE_NANITE_ALL=1`: toda malha sem `.rlod` em On.
+- Regressão: `cluster_lod` 146 fps, `heavy_mesh` 122 fps, `crowd_20000` 115, `crowd_panic` 221 (passam).
+## Pelo do Tlender na Skeletal Mesh (item 16, 2026-11-25)
+- Import (`tlend_import.c` `import_hairs`): um hair cuja superfície tem armadura (`sk_owner`: modificador Armature ou presa a
+  um osso) vai para o ator `SK_` da armadura; as guias passam pela `obj_world` da superfície, como os vértices da pele.
+- Raiz na pele (`groom.c` `bind_skin`): ao crescer, cada fio guarda os 4 ossos e pesos (os bits do uv2) do vértice de pele
+  mais perto da raiz (grade 32³ dos vértices); `bind_first` no buffer de dados, 2 palavras por fio. A cada quadro a paleta
+  do Skeletal Mesh (`anim_skin_palette`, 3 vec4 por osso) vai depois da tabela de Grooms (`HAIR_PAL_AT`, até 65 536 vec4);
+  `hair.vert` (`groom_skin`, hair.glsl) dobra o fio inteiro pela mistura dos ossos da raiz. O cabelo simulado segue o osso
+  de maior peso das raízes (as linhas do passo × a paleta desse osso).
+- `CGroom.visible` (padrão 1; níveis antigos leem 1): desligado, nem desenha nem simula; ator escondido no jogo idem;
+  Details "Visible" e Set Property by Name "Visible" (`props_table.inc`, `gen_props.py` EXTRA_BITS).
+- Contorno (item 17 parte 2): o cabelo do ator selecionado entra no mask (`mask_hair.frag` com o `hair.vert`,
+  `groom_draw_mask`, o id do ator no pad).
+- Teste `groom_skin` (fixture `hair_skinned.tlend`: armadura Rig, ação Spin no osso Arm, a peça Piece presa a ele, 8 guias):
+  Groom no ator SK_, fios dobrados pelos ossos, o osso girando (0,32), Visible desligado sem cabelo e de volta, o cabelo no
+  mask com o ator selecionado (39 quadros) e fora dele desligado (0). `hair`, `hair_dynamic`, `hair_crowd`,
+  `import_tlend_hair` passam.

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "platform.h"
 #include "upscale.h"
 #include "vkctx.h"
 
@@ -51,6 +52,7 @@ static VkPhysicalDevice g_gpu;
 static VkDevice g_dev;
 static uint32_t g_vendor_id;
 static bool g_off; // REALENGINE_NO_VENDOR_UPSCALERS=1: none (the measure without their extensions)
+static ReThread* g_warm; // (2026-11-25) the runtimes asked on a thread of their own (ups_vendor_warm_async)
 
 #ifdef UPS_VENDORS
 // The runtime's DLL beside the executable only (never one found elsewhere on the PATH)
@@ -493,6 +495,7 @@ void ups_vendor_device_ready(VkCtx* vk) {
 
 void ups_vendor_shutdown(VkCtx* vk) {
     (void)vk;
+    if (g_warm) re_thread_join(g_warm), g_warm = NULL; // (its asks done before the runtimes go)
     if (!g_dev) return;
     vkDeviceWaitIdle(g_dev);
 #if defined(UPS_VENDORS) && defined(RE_HAVE_DLSS)
@@ -511,7 +514,47 @@ void ups_vendor_shutdown(VkCtx* vk) {
     g_dev = VK_NULL_HANDLE;
 }
 
+static bool usable_locked(int k, const char** why);
+// (2026-11-25, bug-fixer) The first ask starts each runtime (DLSS: NGX, ~1.2 s): asked on a thread of its own when the
+// play starts (gus_warm), the Play's frame no longer waits for it (1224 ms in the UI sweep). One ask at a time: a caller
+// on the main thread meanwhile waits for the answer, as it did before
+static volatile int32_t g_ask_lock, g_warm_done;
+static int warm_main(void* arg) {
+    (void)arg;
+    re_thread_set_low_priority(true);
+    for (int k = UPS_TSR + 1; k < UPS_COUNT; k++) ups_vendor_usable(k, NULL);
+    re_atomic_store(&g_warm_done, 1);
+    return 0;
+}
+void ups_vendor_warm_async(void) {
+    if (g_warm || !g_dev || g_off) return;
+    re_atomic_store(&g_warm_done, 0);
+    g_warm = re_thread_start(warm_main, NULL);
+    if (!g_warm) warm_main(NULL); // (no thread: here, as before)
+}
+// (2026-11-25, bug-fixer) The menus' ask (the Options' Upscaler combo): never waits. While the runtimes are being asked
+// (the warm after the Play started) it says "not yet" (*pending), and starts that warm when nobody did; the combo lists
+// the vendors once they answered. Opening the Options right after Play waited for NGX: a frame of 2.3 s in the UI sweep
+bool ups_vendor_usable_nowait(int k, const char** why, bool* pending) {
+    if (pending) *pending = false;
+    if (k <= UPS_TSR || k >= UPS_COUNT || g_off) return ups_vendor_usable(k, why); // (no runtime to start: quick)
+    if (!g_warm) ups_vendor_warm_async();
+    if ((g_warm && !re_atomic_load(&g_warm_done)) || !re_atomic_cas(&g_ask_lock, 0, 1)) {
+        if (pending) *pending = true;
+        if (why) *why = "being checked";
+        return false;
+    }
+    bool ok = usable_locked(k, why);
+    re_atomic_store(&g_ask_lock, 0);
+    return ok;
+}
 bool ups_vendor_usable(int k, const char** why) {
+    while (!re_atomic_cas(&g_ask_lock, 0, 1)) re_yield();
+    bool ok = usable_locked(k, why);
+    re_atomic_store(&g_ask_lock, 0);
+    return ok;
+}
+static bool usable_locked(int k, const char** why) {
     const char* w = NULL;
     bool ok = false;
     if (k <= UPS_TSR || k >= UPS_COUNT) w = "unknown";

@@ -49,4 +49,6 @@ typedef struct ProcStats {
     double origin[3];
 } ProcStats;
 const ProcStats* procgen_stats(void);
+// (2026-11-25, item 19: the tests) the last facility's deepest room: its floor's middle (cm) and its side; false: none built
+bool procgen_facility_deepest(float center[3], float* side);
 int procgen_selftest(void); // the noise's determinism and range, the biomes, a facility's connectivity; 0 = ok

@@ -22,6 +22,10 @@
 #define HAIR_BUDGET_SEGMENTS 1500000u
 #define HAIR_SIM_MAX 16u
 #define GROOM_GRID 32 // (hair.glsl HAIR_GRID)
+// (2026-11-25, item 16) the skinned grooms' bone palettes, each frame after the grooms' table in its buffer (3 vec4 a bone,
+// the mesh's space: anim_skin_palette); hair.vert bends each strand by its root's 4 bones
+#define HAIR_PAL_VEC4 65536u
+#define HAIR_PAL_AT ((uint32_t)(sizeof(GpuGroom) * GROOM_MAX / 16u))
 
 // hair.glsl GroomInfo (scalar)
 typedef struct GpuGroom {
@@ -31,7 +35,7 @@ typedef struct GpuGroom {
     float color[4];
     float bmin[4], bmax[4];
     float prev[3][4]; // (2026-11-15) last frame's rows: the velocity pass (hair.vert HAIR_VELOCITY), TSR and DLSS see it move
-    uint32_t dyn, prev_first, pad0, pad1; // (2026-11-16) simulated: world points, last step's
+    uint32_t dyn, prev_first, bind, pal; // (2026-11-16) simulated: world points, last step's; (2026-11-25) hair.glsl's bind, pal
 } GpuGroom;
 _Static_assert(sizeof(GpuGroom) == 240, "hair.glsl GroomInfo");
 
@@ -67,6 +71,17 @@ typedef struct Grown {
     bool dyn, sim_reset;
     uint32_t sim_cur, sim_prev;
     float ell_c[3], ell_r[3];
+    // (2026-11-25, item 16) on a skin (a Skeletal Mesh's actor, the Tlender's fur): per strand its root's nearest skin
+    // vertex's 4 bones and weights (2 words: uv2's bits), in the device buffer from bind_first (words; 0: none); the
+    // bone with the most weight over all the roots (a simulated groom follows it whole)
+    uint32_t* bind;
+    uint32_t bind_first;
+    int head_bone;
+    // (2026-11-25, item 16) simulated: only its first sim_n strands (the leaders, a random share: the strands are grown in
+    // a random order) run hair_sim.comp; each other one follows its nearest leader's motion (lead: per strand its leader,
+    // from lead_first in words; sim_n 0: every strand simulated)
+    uint32_t* lead;
+    uint32_t lead_first, sim_n;
 } Grown;
 
 static struct {
@@ -79,6 +94,7 @@ static struct {
     uint32_t ndraw, slot;
     bool moving; // (2026-11-15) a groom moved this frame: the velocity pass draws the hair
     uint32_t verts[GROOM_MAX];
+    Entity draw_e[GROOM_MAX]; // (2026-11-25, item 17) each draw's entity (the selection's mask: groom_draw_mask)
     GroomStats stats;
     // (2026-11-16) the simulation: its pipeline, each frame's parameters (one HairSimGpu a dynamic groom), what to run
     VkPipeline sim_pipe;
@@ -107,13 +123,15 @@ bool groom_init(struct VkCtx* vk, VkPipelineLayout layout) {
     memset(&G, 0, sizeof G);
     G.vk = vk;
     for (int i = 0; i < RE_FRAMES_IN_FLIGHT; i++)
-        if (!gpu_buf_create(vk, &G.info[i], sizeof(GpuGroom) * GROOM_MAX, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true) ||
+        if (!gpu_buf_create(vk, &G.info[i], sizeof(GpuGroom) * GROOM_MAX + 16u * (VkDeviceSize)HAIR_PAL_VEC4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true) ||
             !gpu_buf_create(vk, &G.simp[i], sizeof(HairSimGpu) * GROOM_MAX, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true)) return false;
     G.sim_pipe = gpu_compute_pipeline(vk, layout, s_hair_sim, sizeof s_hair_sim);
     return G.sim_pipe != VK_NULL_HANDLE;
 }
 
 static void grown_free(Grown* g) {
+    free(g->bind), g->bind = NULL;
+    free(g->lead), g->lead = NULL;
     free(g->pts), free(g->dens);
     memset(g, 0, sizeof *g);
 }
@@ -529,7 +547,9 @@ static bool grow_guides(Grown* o, const CGroom* g, const Guides* gd, float* pts,
 static bool repack(void) {
     VkDeviceSize need = 0;
     for (uint32_t i = 0; i < G.ng; i++)
-        need += (VkDeviceSize)G.g[i].strands * G.g[i].pts_per * 16u * (G.g[i].dyn ? 3u : 1u) + GROOM_GRID * GROOM_GRID * GROOM_GRID * 4u;
+        need += (VkDeviceSize)G.g[i].strands * G.g[i].pts_per * 16u * (G.g[i].dyn ? 3u : 1u) + GROOM_GRID * GROOM_GRID * GROOM_GRID * 4u +
+                (G.g[i].bind ? ((VkDeviceSize)G.g[i].strands * 8u + 15u) & ~(VkDeviceSize)15u : 0u) + // (2026-11-25: its strands' bones)
+                (G.g[i].lead ? ((VkDeviceSize)G.g[i].strands * 4u + 15u) & ~(VkDeviceSize)15u : 0u);  // (... their leaders)
     vkDeviceWaitIdle(G.vk->device); // (the frames in flight read the device buffer; an older copy reads the staging one)
     if (need > G.cap) {
         gpu_buf_destroy(G.vk, &G.data), gpu_buf_destroy(G.vk, &G.staging);
@@ -554,6 +574,18 @@ static bool repack(void) {
         memcpy(dst + at, g->dens, db);
         g->dens_first = (uint32_t)(at / 4u);
         at += db;
+        g->bind_first = 0;
+        if (g->bind) { // (2026-11-25, item 16) its strands' bones: 2 words each, from bind_first (a word index; 0: none)
+            memcpy(dst + at, g->bind, (size_t)g->strands * 8u);
+            g->bind_first = (uint32_t)(at / 4u);
+            at += ((VkDeviceSize)g->strands * 8u + 15u) & ~(VkDeviceSize)15u;
+        }
+        g->lead_first = 0;
+        if (g->lead) { // (2026-11-25, item 16) its strands' leaders: a word each, from lead_first
+            memcpy(dst + at, g->lead, (size_t)g->strands * 4u);
+            g->lead_first = (uint32_t)(at / 4u);
+            at += ((VkDeviceSize)g->strands * 4u + 15u) & ~(VkDeviceSize)15u;
+        }
     }
     G.used = at;
     G.upload = at > 0;
@@ -589,7 +621,7 @@ static void sim_setup(World* w, Grown* g, const CGroom* c, const float rows[3][4
     memset(s, 0, sizeof *s);
     memcpy(s->rows, rows, sizeof s->rows);
     inverse_rows(rows, s->inv);
-    s->rest = g->first, s->cur = g->sim_cur, s->prev = g->sim_prev, s->strands = g->strands, s->pts = g->pts_per;
+    s->rest = g->first, s->cur = g->sim_cur, s->prev = g->sim_prev, s->strands = g->sim_n ? g->sim_n : g->strands, s->pts = g->pts_per; // (2026-11-25: the leaders only)
     s->reset = g->sim_reset ? 1u : 0u, g->sim_reset = false;
     s->dt = G.dt;
     s->stiff = c->stiffness < 0.0f ? 0.0f : c->stiffness > 1.0f ? 1.0f : c->stiffness;
@@ -645,6 +677,8 @@ static void sim_setup(World* w, Grown* g, const CGroom* c, const float rows[3][4
                 cp[4] = pts[1][0], cp[5] = pts[1][1], cp[6] = pts[1][2], cp[7] = 0.0f;
             }
         }
+        // (2026-11-25, item 16) a Physics Asset's bodies stand for the body: the head's ellipsoid (the grown hair's guess) out
+        if (pa && s->ncap) s->ell_r[0] = s->ell_r[1] = s->ell_r[2] = 1e-3f;
         // the scene's boxes (the play's collision grid)
         float mn[3], mx[3], bx[16][6];
         for (int i = 0; i < 3; i++) mn[i] = cw[i] - reach, mx[i] = cw[i] + reach;
@@ -657,10 +691,194 @@ static void sim_setup(World* w, Grown* g, const CGroom* c, const float rows[3][4
     G.sim_grown[G.nsim++] = (uint32_t)(g - G.g);
 }
 
+// (2026-11-25, item 16) A simulated groom's leaders: one strand in 8 (at least 2000; fewer strands: all of them) run the
+// simulation, each other one follows its nearest leader by root (a grid of the leaders' roots): the cost a tenth (Unreal's
+// guides). The strands come in a random order: the first ones a random share over the scalp
+#define LEAD_MIN 2000u
+static void lead_strands(Grown* g) {
+    free(g->lead), g->lead = NULL, g->sim_n = 0;
+    if (!g->dyn || !g->pts || g->strands <= LEAD_MIN) return;
+    uint32_t L = g->strands / 8u < LEAD_MIN ? LEAD_MIN : g->strands / 8u, P = g->pts_per;
+    enum { LG = 32 };
+    float mn[3], mx[3];
+    for (int k = 0; k < 3; k++) mn[k] = mx[k] = g->pts[k];
+    for (uint32_t s = 1; s < L; s++)
+        for (int k = 0; k < 3; k++) mn[k] = fminf(mn[k], g->pts[4u * P * s + k]), mx[k] = fmaxf(mx[k], g->pts[4u * P * s + k]);
+    float cs[3];
+    for (int k = 0; k < 3; k++) cs[k] = fmaxf((mx[k] - mn[k]) / (float)LG, 0.01f);
+    uint32_t* start = calloc(LG * LG * LG + 1, sizeof(uint32_t));
+    uint32_t* list = malloc(sizeof(uint32_t) * L);
+    uint32_t* cell = malloc(sizeof(uint32_t) * L);
+    uint32_t* fill = malloc(sizeof(uint32_t) * LG * LG * LG);
+    g->lead = malloc(sizeof(uint32_t) * g->strands);
+    if (!start || !list || !cell || !fill || !g->lead) {
+        free(start), free(list), free(cell), free(fill), free(g->lead), g->lead = NULL;
+        return;
+    }
+#define LCELL(p, k) ((int)fminf(fmaxf(((p) - mn[k]) / cs[k], 0.0f), (float)(LG - 1)))
+    for (uint32_t s = 0; s < L; s++) {
+        const float* p = g->pts + 4u * P * s;
+        cell[s] = (uint32_t)((LCELL(p[2], 2) * LG + LCELL(p[1], 1)) * LG + LCELL(p[0], 0)), start[cell[s] + 1]++;
+    }
+    for (uint32_t c = 0; c < LG * LG * LG; c++) start[c + 1] += start[c];
+    memcpy(fill, start, sizeof(uint32_t) * LG * LG * LG);
+    for (uint32_t s = 0; s < L; s++) list[fill[cell[s]]++] = s;
+    for (uint32_t s = 0; s < g->strands; s++) {
+        if (s < L) { g->lead[s] = s; continue; }
+        const float* p = g->pts + 4u * P * s;
+        int c0[3] = { LCELL(p[0], 0), LCELL(p[1], 1), LCELL(p[2], 2) };
+        uint32_t best = 0;
+        float bd = 1e30f;
+        for (int ring = 0; ring < LG && bd > 1e29f; ring++)
+            for (int z = c0[2] - ring; z <= c0[2] + ring; z++)
+                for (int y = c0[1] - ring; y <= c0[1] + ring; y++)
+                    for (int x = c0[0] - ring; x <= c0[0] + ring; x++) {
+                        if (x < 0 || y < 0 || z < 0 || x >= LG || y >= LG || z >= LG) continue;
+                        if (ring && abs(x - c0[0]) < ring && abs(y - c0[1]) < ring && abs(z - c0[2]) < ring) continue;
+                        uint32_t c = (uint32_t)((z * LG + y) * LG + x);
+                        for (uint32_t k = start[c]; k < start[c + 1]; k++) {
+                            const float* q = g->pts + 4u * P * list[k];
+                            float d = (q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]) + (q[2] - p[2]) * (q[2] - p[2]);
+                            if (d < bd) bd = d, best = list[k];
+                        }
+                    }
+        g->lead[s] = best;
+    }
+#undef LCELL
+    g->sim_n = L;
+    free(start), free(list), free(cell), free(fill);
+}
+
+// (2026-11-25, item 16) A groom on a skin (its actor's Skeletal Mesh, or its owner's): each strand bound to its root's
+// nearest skin vertex at the bind (its 4 bones and weights, uv2's bits), found through a grid of the skin's vertices; the
+// bone with the most weight over the roots. No skin (a static head, a prop): none, the strands follow the actor's rows
+static void bind_skin(World* w, Grown* g, Entity e) {
+    free(g->bind), g->bind = NULL, g->head_bone = -1;
+    Entity owner = e;
+    const CAttach* oa = ecs_get(w, e, COMP_ATTACH);
+    if (oa && oa->owner && ecs_alive(w, oa->owner)) owner = oa->owner;
+    Entity sk = anim_mesh_entity(w, owner);
+    if (!sk || !g->pts || !g->strands) return;
+    // the skins' vertices (mesh space): the entities hanging from the Skeletal Mesh (its skin parts) with a skinned mesh
+    uint32_t cap = 0, n = 0;
+    float* vp = NULL;
+    uint32_t* vb = NULL;
+    for (uint32_t ai = 0; ai < w->archetype_count; ai++) {
+        const EcsArchetype* a = &w->archetypes[ai];
+        const uint64_t need = COMP_BIT(COMP_ATTACH) | COMP_BIT(COMP_STATIC_MESH);
+        if (!a->count || (a->mask & need) != need) continue;
+        const CAttach* at = ecs_arch_column((EcsArchetype*)a, COMP_ATTACH);
+        const CStaticMesh* sm = ecs_arch_column((EcsArchetype*)a, COMP_STATIC_MESH);
+        for (uint32_t r = 0; r < a->count; r++) {
+            if (at[r].owner != sk && at[r].parent != sk && at[r].owner != owner) continue;
+            if (!render_mesh_is_skinned(sm[r].mesh)) continue;
+            const GpuVertex* v;
+            const uint32_t* idx;
+            uint32_t fi, ic;
+            int32_t vo;
+            render_mesh_cpu(sm[r].mesh, &v, &idx, &fi, &ic, &vo);
+            if (!v || !idx || !ic) continue;
+            if (n + ic > cap) {
+                cap = (n + ic) * 2u;
+                float* np2 = realloc(vp, sizeof(float) * 3u * cap);
+                uint32_t* nb2 = np2 ? realloc(vb, sizeof(uint32_t) * 2u * cap) : NULL;
+                if (np2) vp = np2;
+                if (!np2 || !nb2) { free(vp), free(vb); return; }
+                vb = nb2;
+            }
+            for (uint32_t k = 0; k < ic; k++) { // (a vertex for each corner: the duplicates cost only time, at a grow)
+                const GpuVertex* q = &v[vo + (int32_t)idx[fi + k]];
+                memcpy(vp + 3u * n, q->pos, 12), memcpy(vb + 2u * n, q->uv2, 8), n++;
+            }
+        }
+    }
+    if (!n) { free(vp), free(vb); return; }
+    // the grid: 32 cells a side over the vertices' box, each cell's vertices listed (a counting sort)
+    enum { GS = 32 };
+    float mn[3] = { vp[0], vp[1], vp[2] }, mx[3] = { vp[0], vp[1], vp[2] };
+    for (uint32_t i = 1; i < n; i++)
+        for (int k = 0; k < 3; k++) mn[k] = fminf(mn[k], vp[3 * i + k]), mx[k] = fmaxf(mx[k], vp[3 * i + k]);
+    float cs[3];
+    for (int k = 0; k < 3; k++) cs[k] = fmaxf((mx[k] - mn[k]) / (float)GS, 0.01f);
+    uint32_t* start = calloc(GS * GS * GS + 1, sizeof(uint32_t));
+    uint32_t* list = malloc(sizeof(uint32_t) * n);
+    uint32_t* cell = malloc(sizeof(uint32_t) * n);
+    g->bind = malloc(sizeof(uint32_t) * 2u * g->strands);
+    if (!start || !list || !cell || !g->bind) {
+        free(start), free(list), free(cell), free(vp), free(vb), free(g->bind), g->bind = NULL;
+        return;
+    }
+#define CELL_OF(p, k) ((int)fminf(fmaxf(((p) - mn[k]) / cs[k], 0.0f), (float)(GS - 1)))
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t c = (uint32_t)((CELL_OF(vp[3 * i + 2], 2) * GS + CELL_OF(vp[3 * i + 1], 1)) * GS + CELL_OF(vp[3 * i], 0));
+        cell[i] = c, start[c + 1]++;
+    }
+    for (uint32_t c = 0; c < GS * GS * GS; c++) start[c + 1] += start[c];
+    uint32_t* fill = malloc(sizeof(uint32_t) * GS * GS * GS);
+    if (fill) memcpy(fill, start, sizeof(uint32_t) * GS * GS * GS);
+    for (uint32_t i = 0; fill && i < n; i++) list[fill[cell[i]]++] = i;
+    free(fill);
+    float wsum[256];
+    memset(wsum, 0, sizeof wsum);
+    for (uint32_t s = 0; s < g->strands; s++) {
+        const float* p = g->pts + 4u * g->pts_per * s; // (its root: the strand's first point, actor space)
+        int c0[3] = { CELL_OF(p[0], 0), CELL_OF(p[1], 1), CELL_OF(p[2], 2) };
+        uint32_t best = 0;
+        float bd = 1e30f;
+        for (int ring = 0; ring < GS && bd > 1e29f; ring++) // (the rings outward until one holds a vertex: a cell's width off at most)
+            for (int z = c0[2] - ring; z <= c0[2] + ring; z++)
+                for (int y = c0[1] - ring; y <= c0[1] + ring; y++)
+                    for (int x = c0[0] - ring; x <= c0[0] + ring; x++) {
+                        if (x < 0 || y < 0 || z < 0 || x >= GS || y >= GS || z >= GS) continue;
+                        if (ring && abs(x - c0[0]) < ring && abs(y - c0[1]) < ring && abs(z - c0[2]) < ring) continue; // (the shell only)
+                        uint32_t c = (uint32_t)((z * GS + y) * GS + x);
+                        for (uint32_t k = start[c]; k < start[c + 1]; k++) {
+                            const float* q = vp + 3u * list[k];
+                            float d = (q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]) + (q[2] - p[2]) * (q[2] - p[2]);
+                            if (d < bd) bd = d, best = list[k];
+                        }
+                    }
+        g->bind[2 * s] = vb[2 * best], g->bind[2 * s + 1] = vb[2 * best + 1];
+        for (int k = 0; k < 4; k++) wsum[(vb[2 * best] >> (8 * k)) & 255u] += (float)((vb[2 * best + 1] >> (8 * k)) & 255u);
+    }
+#undef CELL_OF
+    float hb = -1.0f;
+    for (int b = 0; b < 256; b++)
+        if (wsum[b] > hb) hb = wsum[b], g->head_bone = b;
+    free(start), free(list), free(cell), free(vp), free(vb);
+}
+
+// (2026-11-25, item 16) the bones' palette a groom on a skin follows (its actor's Skeletal Mesh, or its owner's)
+static const float (*groom_palette(World* w, Entity e, uint32_t* nb))[3][4] {
+    *nb = 0;
+    Entity owner = e;
+    const CAttach* oa = ecs_get(w, e, COMP_ATTACH);
+    if (oa && oa->owner && ecs_alive(w, oa->owner)) owner = oa->owner;
+    Entity sk = anim_mesh_entity(w, owner);
+    return sk ? anim_skin_palette(sk, nb, NULL) : NULL;
+}
+
+// (2026-11-25, item 16) the Groom of an actor (the Blueprints' Set / Get Groom Visible, Simulate): on it, or on a component
+// hanging from it (a character's hair)
+CGroom* groom_of(World* w, Entity e) {
+    if (!w || !e || !ecs_alive(w, e)) return NULL;
+    CGroom* g = ecs_get(w, e, COMP_GROOM);
+    if (g) return g;
+    for (uint32_t ai = 0; ai < w->archetype_count; ai++) {
+        EcsArchetype* a = &w->archetypes[ai];
+        const uint64_t need = COMP_BIT(COMP_ATTACH) | COMP_BIT(COMP_GROOM);
+        if (!a->count || (a->mask & need) != need) continue;
+        const CAttach* at = ecs_arch_column(a, COMP_ATTACH);
+        CGroom* gc = ecs_arch_column(a, COMP_GROOM);
+        for (uint32_t r = 0; r < a->count; r++)
+            if (at[r].owner == e || at[r].parent == e) return &gc[r];
+    }
+    return NULL;
+}
 void groom_fill(World* w, const float cam[3], float fov_deg, uint32_t width_px, uint32_t slot) {
     G.slot = slot % RE_FRAMES_IN_FLIGHT;
     G.ndraw = 0, G.moving = false;
-    G.stats.grooms = G.stats.strands = G.stats.drawn = G.stats.points = 0;
+    G.stats.grooms = G.stats.strands = G.stats.drawn = G.stats.points = 0; G.stats.mask_draws = 0; // (2026-11-25: set again by this frame's mask pass, if it draws hair)
     if (!G.vk || getenv("REALENGINE_NO_HAIR")) return; // (measuring without)
     for (uint32_t i = 0; i < G.ng; i++) G.g[i].used = false;
     { // (2026-11-16) the simulation's step: this frame's time (a long pause: one 30th)
@@ -679,6 +897,9 @@ void groom_fill(World* w, const float cam[3], float fov_deg, uint32_t width_px, 
         const CStaticMesh* sm = (a->mask & COMP_BIT(COMP_STATIC_MESH)) ? ecs_arch_column(a, COMP_STATIC_MESH) : NULL;
         const Entity* ents = ecs_arch_entities(a);
         for (uint32_t r = 0; r < a->count && nt < GROOM_MAX; r++) {
+            // (2026-11-25, item 16) off, or its actor hidden in the game: neither drawn nor simulated (its strands kept grown:
+            // used, so turning it on again draws at once)
+            bool off = !gc[r].visible || (tr[r].flags & (TRANSFORM_HIDDEN_GAME | TRANSFORM_NO_RENDER)) != 0;
             float mn[3] = { -50.0f, -50.0f, -50.0f }, mx[3] = { 50.0f, 50.0f, 50.0f }; // (no mesh: the engine's 1 m sphere)
             uint32_t mesh = sm ? sm[r].mesh : 0;
             if (sm) render_mesh_bounds(mesh, mn, mx);
@@ -692,9 +913,12 @@ void groom_fill(World* w, const float cam[3], float fov_deg, uint32_t width_px, 
             if (g->key != key) {
                 g->key = key;
                 if (!grow(g, &gc[r], mn, mx)) continue;
+                bind_skin(w, g, ents[r]); // (2026-11-25, item 16: on a skin, each strand on its root's bones)
+                lead_strands(g); // (simulated: its leaders, the rest following them)
                 changed = true;
             }
-            if (!g->pts) continue;
+            if (off && g->dyn) g->sim_reset = true; // (on again: its simulation starts over, not from where it stopped)
+            if (!g->pts || off) continue;
             todo[nt].grown = (uint32_t)(g - G.g), todo[nt].c = &gc[r], todo[nt].e = ents[r];
             render_transform_rows(&tr[r], todo[nt].rows);
             nt++;
@@ -750,7 +974,8 @@ void groom_fill(World* w, const float cam[3], float fov_deg, uint32_t width_px, 
         if (best < 0) break;
         may_sim[best] = 1;
     }
-    G.stats.budget_k = budget_k, G.stats.simulated = 0, G.stats.segments = 0;
+    G.stats.budget_k = budget_k, G.stats.simulated = 0, G.stats.segments = 0, G.stats.skinned = 0;
+    uint32_t pal_used = 0; // (2026-11-25, item 16: the palettes' vec4s this frame)
     for (uint32_t k = 0; k < nt; k++) {
         const Grown* g = &G.g[todo[k].grown];
         const CGroom* c = todo[k].c;
@@ -787,13 +1012,38 @@ void groom_fill(World* w, const float cam[3], float fov_deg, uint32_t width_px, 
         o->bmin[3] = (float)g->dens_first; // (exact: a float's 24 bits hold up to 16 M floats, 64 MB of hair)
         if (g->dyn && !may_sim[k]) G.g[todo[k].grown].sim_reset = true; // (Q27.3: past the nearest: as grown; back near, it starts over)
         if (g->dyn && g->sim_cur && G.sim_pipe && may_sim[k]) { // (2026-11-16) simulated: its world points drawn, its step set up
-            sim_setup(w, &G.g[todo[k].grown], c, todo[k].rows, todo[k].e);
+            // (2026-11-25, item 16) on a skin: anchored to its roots' main bone (the head's), not the actor alone
+            float sr[3][4];
+            memcpy(sr, todo[k].rows, sizeof sr);
+            uint32_t nbp = 0;
+            const float(*pal)[3][4] = g->head_bone >= 0 ? groom_palette(w, todo[k].e, &nbp) : NULL;
+            if (pal && (uint32_t)g->head_bone < nbp) {
+                const float(*p)[4] = pal[g->head_bone];
+                for (int i = 0; i < 3; i++) {
+                    for (int c2 = 0; c2 < 4; c2++)
+                        sr[i][c2] = todo[k].rows[i][0] * p[0][c2] + todo[k].rows[i][1] * p[1][c2] + todo[k].rows[i][2] * p[2][c2];
+                    sr[i][3] += todo[k].rows[i][3];
+                }
+            }
+            sim_setup(w, &G.g[todo[k].grown], c, sr, todo[k].e);
             static const float id[3][4] = { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 } };
             memcpy(o->rows, id, sizeof o->rows), memcpy(o->prev, id, sizeof o->prev); // (inv stays the actor's: the shadow grid)
             o->first = g->sim_cur, o->dyn = 1, o->prev_first = g->sim_prev;
+            if (g->lead_first) o->bind = g->first, o->pal = g->lead_first, o->bmax[3] = (float)g->sim_n; // (2026-11-25: its rest, its leaders; hair.vert)
             G.moving = true;
         }
+        if (!o->dyn && g->bind_first) { // (2026-11-25, item 16) on a skin: its bones' palette after the table, its strands bent by it (hair.vert)
+            uint32_t nbp = 0;
+            const float(*pal)[3][4] = groom_palette(w, todo[k].e, &nbp);
+            if (pal && nbp && pal_used + nbp * 3u <= HAIR_PAL_VEC4) {
+                memcpy((uint8_t*)G.info[G.slot].mapped + 16u * ((size_t)HAIR_PAL_AT + pal_used), pal, sizeof(float) * 12u * nbp);
+                o->bind = g->bind_first, o->pal = HAIR_PAL_AT + pal_used, o->bmax[3] = (float)nbp;
+                pal_used += nbp * 3u;
+                G.stats.skinned++;
+            }
+        }
         G.verts[G.ndraw] = drawn * (g->pts_per - 1u) * 6u;
+        G.draw_e[G.ndraw] = todo[k].e;
         G.stats.grooms++, G.stats.strands += g->strands, G.stats.drawn += drawn, G.stats.points += g->strands * g->pts_per;
         G.stats.segments += drawn * (g->pts_per > 1 ? g->pts_per - 1u : 1u), G.stats.simulated += o->dyn != 0;
         G.ndraw++;
@@ -845,6 +1095,47 @@ static void groom_upload(VkCommandBuffer cmd) {
 }
 
 bool groom_moving(void) { return G.moving && G.ndraw; }
+// (2026-11-25, item 17) the hair of the selected actors into the selection's mask (render.c's pass, its targets bound): a
+// groom whose entity, its parent or its owner is selected (sel: a bit per entity slot), drawn with that actor's id (the
+// push's pad: 2 + its slot, mask.frag's), its hair inside the actor's one outline. Returns the draws
+uint32_t groom_draw_mask(VkCommandBuffer cmd, const Push* push, VkPipelineLayout layout, VkPipeline pipe, World* w, const uint8_t* sel, uint32_t nbits) {
+    G.stats.mask_draws = 0;
+    if (!pipe || !sel || !G.ndraw || !G.data.buffer || !w) return 0;
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < G.ndraw; i++) {
+        uint32_t id = 0;
+        Entity cur = G.draw_e[i];
+        for (int depth = 0; depth < 64 && cur && !id; depth++) {
+            uint32_t s = entity_index(cur);
+            if (s < nbits && (sel[s >> 3] & (1u << (s & 7u)))) id = 2u + s;
+            const CAttach* at = ecs_get(w, cur, COMP_ATTACH);
+            cur = at ? (at->parent ? (Entity)at->parent : (Entity)at->owner) : ENTITY_NONE;
+        }
+        if (!id) continue;
+        if (!n) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        Push p = *push;
+        p.instances = G.info[G.slot].addr, p.vertices = G.data.addr, p.pass = i, p.pad = id;
+        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof p, &p);
+        vkCmdDraw(cmd, G.verts[i], 1, 0, 0);
+        n++;
+    }
+    G.stats.mask_draws = n;
+    return n;
+}
+// (the selection's mask: whether any drawn groom is a selected actor's, before its pass decides to run)
+bool groom_any_selected(World* w, const uint8_t* sel, uint32_t nbits) {
+    for (uint32_t i = 0; sel && w && i < G.ndraw; i++) {
+        Entity cur = G.draw_e[i];
+        for (int depth = 0; depth < 64 && cur; depth++) {
+            uint32_t s = entity_index(cur);
+            if (s < nbits && (sel[s >> 3] & (1u << (s & 7u)))) return true;
+            const CAttach* at = ecs_get(w, cur, COMP_ATTACH);
+            cur = at ? (at->parent ? (Entity)at->parent : (Entity)at->owner) : ENTITY_NONE;
+        }
+    }
+    return false;
+}
+
 uint32_t groom_draw_velocity(VkCommandBuffer cmd, const Push* push, VkPipelineLayout layout, VkPipeline pipe) {
     if (!G.ndraw || !pipe || !G.data.buffer || !G.moving) return 0;
     Push p = *push;

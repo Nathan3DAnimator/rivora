@@ -2,6 +2,7 @@
 // (fixed pools), the rules that move the objectives (the world's notifications, Go To and Collect checked by quest_tick),
 // the rewards, the events (queued, sent once a change is whole), the saves' record, WBP_QuestTracker and the markers'
 // list, the Debug Viewer and the self-test.
+#include "loc.h" // (2026-11-24) the game's localization
 #include "quest.h"
 
 #include <ctype.h>
@@ -495,18 +496,35 @@ Quest* quest_create(const char* folder_vpath, const char* name, bool example) {
 int quest_language(void) { return dlg_language(); }
 static const char* pick(const char* t, size_t stride, int lang) {
     if (lang > 0 && lang < QST_LANGS && t[(size_t)lang * stride]) return t + (size_t)lang * stride;
-    if (lang == 1 && t[0]) return tr_lang(t, LANG_PT_BR); // (i18n's table)
+    if ((lang == 1 || lang == 2) && t[0]) return tr_lang(t, lang == 1 ? LANG_PT_BR : LANG_ES); // (i18n's table)
     return t;
+}
+// (2026-11-24) the project's localization first (loc.h: Q:<quest>, title / desc / obj<i>); NULL: not there
+static const char* qloc(const Quest* q, const char* key) {
+    if (!q || !loc_active()) return NULL;
+    char ns[LOC_NS];
+    snprintf(ns, sizeof ns, "Q:%s", q->name);
+    return loc_text(ns, key, NULL);
 }
 const char* quest_title(const Quest* q, int lang) {
     if (!q) return "";
+    const char* lt = qloc(q, "title");
+    if (lt) return lt;
     const char* t = pick(q->title[0], QST_TITLE, lang);
     return t[0] ? t : q->name;
 }
-const char* quest_desc(const Quest* q, int lang) { return q ? pick(q->desc[0], QST_DESC, lang) : ""; }
+const char* quest_desc(const Quest* q, int lang) {
+    const char* lt = qloc(q, "desc");
+    return lt ? lt : q ? pick(q->desc[0], QST_DESC, lang) : "";
+}
 const char* quest_obj_text(const Quest* q, const QuestObjective* o, int lang) {
-    (void)q;
     if (!o) return "";
+    if (q && o >= q->obj && o < q->obj + 16) {
+        char key[16];
+        snprintf(key, sizeof key, "obj%d", (int)(o - q->obj));
+        const char* lt = qloc(q, key);
+        if (lt) return lt;
+    }
     const char* t = pick(o->text[0], QST_TITLE, lang);
     if (t[0]) return t;
     static char made[QST_TITLE]; // (no text: made from the kind and the target)

@@ -1,6 +1,6 @@
 id: async-api
 kind: concept
-title: Tarefas em segundo plano: a API (estender a engine) | Background tasks: the API (extending the engine)
+title: Tarefas em segundo plano: a API (estender a engine) | Background tasks: the API (extending the engine) | API de tareas en segundo plano
 keys: async, async_run, async_steps, async_track, worker, thread, segundo plano, nao travar o editor, api async, cartoes de progresso
 --- pt
 Para quem escreve sistemas na engine (C):
@@ -16,3 +16,10 @@ For those writing engine systems (C):
 - `async_track(...)`: shows the progress of something that runs by itself.
 - Inside: `async_status`, `async_progress`, `async_progress_n`, `async_cancelled`, `async_fail`.
 - The rule: the worker doesn't touch the world, the GPU or registries; it writes files or its own memory. The card shows by itself (0.15 s).
+--- es
+Para quienes escriben sistemas del motor (C):
+- `async_run(label, work, done, arg, flags)`: `work` en un worker de baja prioridad, `done` en el hilo principal al inicio de un cuadro.
+- `async_steps(...)`: porciones en el hilo principal dentro de un presupuesto (6 ms en el editor).
+- `async_track(...)`: muestra el progreso de algo que corre por sí solo.
+- Por dentro: `async_status`, `async_progress`, `async_progress_n`, `async_cancelled`, `async_fail`.
+- La regla: el worker no toca el mundo, la GPU ni los registros; escribe archivos o su propia memoria. La tarjeta aparece sola (0,15 s).

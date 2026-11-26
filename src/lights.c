@@ -120,8 +120,10 @@ bool lights_emissive_light(World* w, Entity e, bool editor, GpuLight* g) {
     if ((editor && (t->flags & TRANSFORM_HIDDEN)) || (t->flags & (TRANSFORM_HIDDEN_GAME | TRANSFORM_NO_RENDER))) return false;
     const Material* m = mat_find_hash(sm->material);
     if (!m || !m->slot || m->emissive_light <= 0.0f || m->blend_mode == MAT_BLEND_TRANSLUCENT) return false;
-    float nits[3], lum = 0.0f;
-    for (int k = 0; k < 3; k++) nits[k] = m->avg_emis[k] * 100.0f * m->emissive_light;
+    float nits[3], lum = 0.0f, ae[3];
+    // (2026-11-24) the actor's own slot's emission (its dynamic instance's Emission Intensity a Blueprint set dims the light too)
+    if (!mat_slot_emission(mat_slot_of(e, (Material*)m), ae)) memcpy(ae, m->avg_emis, sizeof ae);
+    for (int k = 0; k < 3; k++) nits[k] = ae[k] * 100.0f * m->emissive_light;
     lum = 0.2126f * nits[0] + 0.7152f * nits[1] + 0.0722f * nits[2];
     if (!(lum > 0.0f)) return false;
     float mn[3], mx[3];

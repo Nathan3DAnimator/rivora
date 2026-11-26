@@ -1,6 +1,6 @@
 id: materials
 kind: howto
-title: Materiais: criar e aplicar | Materials: make and apply
+title: Materiais: criar e aplicar | Materials: make and apply | Crear y aplicar un material
 keys: material, textura, cor, aplicar material, trocar cor, nodes, shader, pbr, metal, rugosidade, material instance, principled pinos, todas as entradas, every input, pinos do principled
 --- pt
 1. No Navegador de Conteúdo: **Adicionar > Material**. Duplo clique abre o editor de nós (os nós do Blender: Principled BSDF, Image Texture...).
@@ -9,7 +9,6 @@ keys: material, textura, cor, aplicar material, trocar cor, nodes, shader, pbr, 
 
 As mudanças são compiladas em segundo plano (o cartão "Compilando materiais"); as imagens grandes são lidas fora da thread do editor.
 - O **Principled BSDF** mostra **todas** as entradas como pinos (coat, subsuperfície, anisotropia, transmissão...): ligue qualquer uma a outro nó. O texto dos nós acompanha o zoom.
-
 --- en
 1. In the Content Browser: **Add > Material**. Double-click opens the node editor (Blender's nodes: Principled BSDF, Image Texture...).
 2. **Drag the material** from the Browser onto a mesh in the viewport: it uses it from then on.
@@ -17,3 +16,10 @@ As mudanças são compiladas em segundo plano (o cartão "Compilando materiais")
 
 The changes compile in the background (the "Compiling materials" card); big images are read off the editor's thread.
 - The **Principled BSDF** shows **every** input as a pin (coat, subsurface, anisotropy, transmission...): wire any of them to another node. The nodes' text follows the zoom.
+--- es
+1. En el Explorador de contenidos: **Añadir > Material**. Doble clic abre el editor de nodos (los nodos de Blender: Principled BSDF, Image Texture...).
+2. **Arrastra el material** del Explorador a una malla en la ventana gráfica: la usa desde entonces.
+3. Para variaciones sin rehacer el grafo, crea una **Material Instance** y cambia solo sus parámetros.
+
+Los cambios se compilan en segundo plano (la tarjeta "Compiling materials"); las imágenes grandes se leen fuera del hilo del editor.
+- El **Principled BSDF** muestra **todas** las entradas como pines (coat, subsurface, anisotropy, transmission...): conecta cualquiera de ellas a otro nodo. El texto de los nodos sigue el zoom.

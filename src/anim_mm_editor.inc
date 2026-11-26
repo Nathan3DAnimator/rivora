@@ -194,11 +194,11 @@ static bool mm_gen_settings(AnimState* edit, AnimNode* node, const AnimMmInfo* i
     igPushItemWidth(-igGetFontSize() * 7.5f);
     char fmt[64];
     snprintf(fmt, sizeof fmt, M.gen[ANIM_MMGEN_ACCEL] > 0.0f ? "%%.0f cm/s2" : TR("Auto"));
-    igDragFloat(PL(TR("Acceleration")), &M.gen[ANIM_MMGEN_ACCEL], 5.0f, 0.0f, 1200.0f, fmt, ImGuiSliderFlags_AlwaysClamp);
+    ui_num_float(PL(TR("Acceleration")), &M.gen[ANIM_MMGEN_ACCEL], 5.0f, 0.0f, 1200.0f, 0.0f, 3.4e38f, fmt, 0);
     commit |= igIsItemDeactivatedAfterEdit();
     igSetItemTooltip("%s", TR("The body's mean acceleration when it starts (0: from the clips' own timing: the steps to reach the speed, each as long as the clip's step)."));
     snprintf(fmt, sizeof fmt, M.gen[ANIM_MMGEN_DECEL] > 0.0f ? "%%.0f cm/s2" : TR("Auto"));
-    igDragFloat(PL(TR("Deceleration")), &M.gen[ANIM_MMGEN_DECEL], 5.0f, 0.0f, 1500.0f, fmt, ImGuiSliderFlags_AlwaysClamp);
+    ui_num_float(PL(TR("Deceleration")), &M.gen[ANIM_MMGEN_DECEL], 5.0f, 0.0f, 1500.0f, 0.0f, 3.4e38f, fmt, 0);
     commit |= igIsItemDeactivatedAfterEdit();
     igSetItemTooltip("%s", TR("The body's mean deceleration when it stops (0: from the clips' timing; stopping takes fewer steps than starting)."));
     igSliderFloat(PL(TR("Weight")), &M.gen[ANIM_MMGEN_WEIGHT], 0.25f, 4.0f, "%.2fx", ImGuiSliderFlags_Logarithmic);

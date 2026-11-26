@@ -224,6 +224,95 @@ static void makes(void) {
     }
 }
 
+// 6. (2026-11-24) The Content Browser's Filters: a type filter, two types (OR), a chip off, the search (AND), the
+// favorites, no folders while a filter is on, the chips and favorites read back from editor.ini
+static int count_ext(int n, const char* ext) {
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        const char* d = strrchr(content_test_item(i), '.');
+        k += d && !_stricmp(d, ext);
+    }
+    return k;
+}
+static void filters(void) {
+    const char* dir = "/Content/PickerTest";
+    content_filters_clear();
+    int all = content_test_list(dir, NULL);
+    int mats = count_ext(all, ".rmat");
+    double ms0 = content_filter_scan_ms();
+    content_filter_set(CBF_TEXTURE, true, true);
+    int tex = content_test_list(dir, NULL);
+    double ms = content_filter_scan_ms();
+    if (tex != count_ext(tex, ".bmp") || tex < N_TEX || tex >= all) FAIL("the Texture filter lists %d (%d of them .bmp; %d in all)", tex, count_ext(tex, ".bmp"), all);
+    content_filter_set(CBF_MATERIAL, true, true);
+    int both = content_test_list(dir, NULL);
+    if (mats < 1 || both != tex + mats) FAIL("Texture + Material lists %d, not %d + %d (OR)", both, tex, mats);
+    content_filter_set(CBF_MATERIAL, true, false); // (its chip kept, off)
+    bool added = false, on = false;
+    content_filter_get(CBF_MATERIAL, &added, &on);
+    if (!added || on || content_test_list(dir, NULL) != tex) FAIL("a chip turned off still filters (or went away)");
+    int found = content_test_list(dir, "Pick_04");
+    if (found != 100) FAIL("Texture + the search 'Pick_04' lists %d, not 100 (AND)", found);
+    // the favorites: a texture and a material; Favorites alone, then with Texture
+    content_set_favorite("/Content/PickerTest/Pick_0007.bmp", true);
+    char mat[512] = "";
+    content_filters_clear();
+    content_filter_set(CBF_MATERIAL, true, true);
+    if (content_test_list(dir, NULL) > 0) snprintf(mat, sizeof mat, "%s", content_test_item(0));
+    if (mat[0]) content_set_favorite(mat, true);
+    content_filters_clear();
+    content_filter_set(CBF_FAVORITES, true, true);
+    int fav = content_test_list(dir, NULL);
+    if (fav != 2) FAIL("the Favorites filter lists %d, not 2 (Pick_0007.bmp, %s)", fav, mat);
+    content_filter_set(CBF_TEXTURE, true, true);
+    int favtex = content_test_list(dir, NULL);
+    if (favtex != 1 || !strstr(content_test_item(0), "Pick_0007")) FAIL("Favorites + Texture lists %d (%s), not Pick_0007 alone", favtex, content_test_item(0));
+    // a filter on: no folders listed (from /Content: PickerTest and the others are folders)
+    content_filters_clear();
+    content_filter_set(CBF_MATERIAL, true, true);
+    for (int i = 0, n = content_test_list("/Content", NULL); i < n; i++) {
+        const char* it = content_test_item(i);
+        const char* sl = strrchr(it, '/');
+        if (!sl || !strchr(sl, '.')) FAIL("a folder (%s) listed with a filter on", it);
+    }
+    content_filters_clear();
+    content_filter_set(CBF_FAVORITES, true, true);
+    content_filter_set(CBF_TEXTURE, true, true);
+    // editor.ini: written, cleared, read back
+    char tmp[700];
+    snprintf(tmp, sizeof tmp, "%s/PickerTest/cb_prefs.txt", content_root());
+    FILE* f = re_fopen(tmp, "w");
+    if (f) content_write_prefs(f), fclose(f);
+    content_filters_clear();
+    content_set_favorite("/Content/PickerTest/Pick_0007.bmp", false);
+    if (mat[0]) content_set_favorite(mat, false);
+    f = re_fopen(tmp, "r");
+    char line[700];
+    while (f && fgets(line, sizeof line, f)) {
+        char* nl = strpbrk(line, "\r\n");
+        if (nl) *nl = 0;
+        char* eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = 0;
+        content_read_pref(line, eq + 1);
+    }
+    if (f) fclose(f);
+    remove(tmp);
+    bool tex_on = false;
+    content_filter_get(CBF_FAVORITES, &added, &on);
+    content_filter_get(CBF_TEXTURE, NULL, &tex_on);
+    if (!on || !tex_on || !content_is_favorite("/Content/PickerTest/Pick_0007.bmp") || (mat[0] && !content_is_favorite(mat)))
+        FAIL("the filters / favorites read back from editor.ini are not the ones written");
+    else
+        printf("[RealEngine] picker-test: filters: %d items (%.2f ms), Texture %d (%.2f ms), Texture + Material %d, + search %d, "
+               "Favorites %d, Favorites + Texture %d, read back from editor.ini\n", all, ms0, tex, ms, both, found, fav, favtex);
+    // (left as found: no filter, no favorite)
+    content_filters_clear();
+    content_set_favorite("/Content/PickerTest/Pick_0007.bmp", false);
+    if (mat[0]) content_set_favorite(mat, false);
+    content_test_list("/Content", NULL);
+}
+
 void picker_test_frame(Editor* ed) {
     (void)ed;
     if (!T.on || T.done) return;
@@ -295,6 +384,10 @@ void picker_test_frame(Editor* ed) {
     case 6:
         if (!file_exists("/Content/PickerTest/IK_SK_Mannequin2.rikrig")) FAIL("Add > IK Rig... (picked SK_Mannequin) made no IK_SK_Mannequin2");
         else printf("[RealEngine] picker-test: Add > IK Rig... through the picker: IK_SK_Mannequin2\n");
+        T.stage++;
+        break;
+    case 7: // 6. the Content Browser's Filters (2026-11-24)
+        filters();
         T.stage++;
         break;
     default:

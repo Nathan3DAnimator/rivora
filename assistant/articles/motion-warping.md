@@ -1,6 +1,6 @@
 id: motion-warping
 kind: recipe
-title: Root Motion e Motion Warping: alinhar o personagem a um alvo | Root Motion and Motion Warping: align the character to a target
+title: Root Motion e Motion Warping: alinhar o personagem a um alvo | Root Motion and Motion Warping: align the character to a target | Root Motion y Motion Warping: alinear al personaje con un objetivo
 keys: motion warping, warp target, alvo do warp, alinhar personagem, align character, alinhar ao alvo, align to target, root motion, movimento da raiz, montage com root motion, root motion montage, ataque que alcanca, attack that reaches, pular muro, vault, subir parede, climb, mantle, abrir porta, open door, maçaneta, door handle, janela de warp, warp window, add or update warp target, remove warp target, sincronizar posicao, match position
 --- pt
 ```diagram steps
@@ -42,3 +42,23 @@ Event Key F -> Add or Update Warp Target ( Target = self, Warp Target Name = "Ta
             -> Play Montage ( Target = self, Play Rate = 1 )
 ```
 The montage (with Root Motion and a window on the target `Target`) goes in the Play Montage's Details. Cost: the whole animation of two characters with root motion and a warp stays at 0.012 ms a frame (the `warp` test).
+--- es
+```diagram steps
+Add or Update Warp Target (lugar + orientación) | Play Montage (con Root Motion) | La ventana Warp curva el recorrido | Llega exactamente al objetivo
+```
+## Root Motion
+- En el **Montage Editor**, marca **Root Motion**: el recorrido de la raíz del clip mueve al **actor** (un Character camina con colisión y su input espera) y la malla se queda sobre él, sin deslizarse.
+- Funciona con clips que viajan por la raíz (`root`) o solo por la pelvis: el motor saca ese recorrido de la pose por sí mismo.
+- Al final natural del clip el personaje **se detiene donde se detiene el clip** (sin deslizarse con su última velocidad). Un **Stop Montage** antes del final desvanece el movimiento junto con su peso.
+
+## Motion Warping (como el de Unreal)
+- En **Motion Warping**, **Add Warp Window**: el nombre del objetivo (`Target`), el inicio y el fin de la ventana (segundos del clip) y qué corregir: **Place**, **Facing**, **Ignore Height**.
+- Al reproducir, **Add or Update Warp Target** (Target, Warp Target Name, Location, Rotation) dice dónde debe terminar la ventana. Dentro de la ventana el recorrido del clip se curva poco a poco, según el propio avance del clip, y el actor termina **exactamente** en el lugar y la orientación del objetivo.
+- Usos: un ataque que alcanza al enemigo esté donde esté, saltar un muro de cualquier altura (desmarca Ignore Height), la mano en la manija de una puerta, sentarse en una silla.
+- **Remove Warp Target** olvida el objetivo: la ventana reproduce el clip tal como está.
+
+```blueprint
+Event Key F -> Add or Update Warp Target ( Target = self, Warp Target Name = "Target", Location = Get Actor Location( Get Player Character ), Rotation = Get Actor Rotation( Get Player Character ) )
+            -> Play Montage ( Target = self, Play Rate = 1 )
+```
+El montage (con Root Motion y una ventana sobre el objetivo `Target`) va en los Detalles del Play Montage. Costo: toda la animación de dos personajes con root motion y un warp se queda en 0,012 ms por cuadro (la prueba `warp`).

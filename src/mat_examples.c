@@ -692,6 +692,8 @@ uint32_t mat_make_stress(const char* content_root, uint32_t n, uint32_t* out) {
     snprintf(t->param, sizeof t->param, "Tint");
     MatNode* mx = &g->nodes[mix];
     mx->prop[1] = BLEND_MUL;
+    mx->prop[3] = 1; // (2026-11-24: Clamp Result: not affine, the Tint stays baked; else the fold made the instances share
+                     // their parent's textures and nothing was left to stream)
     set_in(g, mix, "Factor", 1.0f, 0, 0, 0);
     link(g, noise, "Color", mix, "A_Color");
     link(g, tint, "Color", mix, "B_Color");

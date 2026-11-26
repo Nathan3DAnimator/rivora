@@ -1,13 +1,13 @@
 id: asset-viewport
 kind: howto
-title: O viewport dos editores de asset | The asset editors' viewport
+title: O viewport dos editores de asset | The asset editors' viewport | La ventana gráfica de los editores de assets
 keys: viewport do asset, asset viewport, prévia 3d, preview 3d, visualizador 3d, 3d viewer, modo de visualização, view mode, iluminado, lit, unlit, sem iluminação, wireframe, albedo, textura, texture, normais, normals, rugosidade, roughness, metálico, metallic, oclusão ambiente, ambient occlusion, ao, uv, layout de uv, uv layout, lod, cores por lod, lod coloration, overdraw, sobreposição, ossos, bones, mostrar ossos, show bones, nomes dos ossos, bone names, eixos, axes, socket, sockets, adicionar socket, add socket, malha de prévia, preview mesh, corpos de física, physics bodies, juntas, constraints, céu, sky, hdri, estúdio, studio, luz, light, girar a luz, rotate light, câmera, camera, voar, fly, órbita, orbit, enquadrar, frame, campo de visão, field of view, fov, abas, tabs, modelo, model, esqueleto, skeleton, animação, animation, física, physics, ik rig, ragdoll, physics asset, skeletal mesh, static mesh, material, partículas, particles, veículo, vehicle, tecido, cloth, modo de vista, ver el modelo, huesos, cielo, luz, pestañas
 --- pt
 ```diagram steps
 Abra o asset (clique duplo no Navegador de Conteúdo) | O modelo aparece no viewport, com materiais e sombra | Escolha o modo (Iluminado, Albedo, AO, UV, LOD...) | Mostrar: ossos, sockets, corpos | Abas no canto: Modelo, Esqueleto, Animação, Física
 ```
 ## Um viewport em todo editor
-Todo editor com 3D usa o mesmo viewport: Static Mesh, Skeletal Mesh, Esqueleto, Animação, Montage, Blend Space, Anim Blueprint, Physics Asset, IK Rig, Material, Partículas, Veículo e Tecido. **O modelo sempre aparece**, desenhado pela GPU com os materiais e as texturas, a sombra e o chão.
+Todo editor com 3D usa o mesmo viewport: Static Mesh, Skeletal Mesh, Esqueleto, Animação, Montage, Blend Space, Anim Graph, Physics Asset, IK Rig, Material, Partículas, Veículo e Tecido. **O modelo sempre aparece**, desenhado pela GPU com os materiais e as texturas, a sombra e o chão.
 
 ## A barra de cima
 - **Modo de visualização**: Iluminado, Sem Iluminação, Wireframe, Iluminado com Wireframe, Só Iluminação, **Albedo** (só a cor base), Normal do Mundo, Rugosidade, Metálico, **Oclusão Ambiente**, **UV** (xadrez pelas coordenadas e o layout de UV no canto), **Cores por LOD** (branco 0, vermelho 1, verde 2, azul 3) e **Overdraw** (quanto mais camadas, mais amarelo).
@@ -31,7 +31,7 @@ Na aba **Esqueleto**: selecione um osso e clique em **Adicionar Socket** (ou cli
 Open the asset (double-click in the Content Browser) | The model shows in the viewport, with its materials and shadow | Pick the mode (Lit, Albedo, AO, UV, LOD...) | Show: bones, sockets, bodies | Tabs in the corner: Model, Skeleton, Animation, Physics
 ```
 ## One viewport in every editor
-Every editor with a 3D view uses the same viewport: Static Mesh, Skeletal Mesh, Skeleton, Animation, Montage, Blend Space, Anim Blueprint, Physics Asset, IK Rig, Material, Particles, Vehicle and Cloth. **The model always shows**, drawn by the GPU with its materials and textures, its shadow and the floor.
+Every editor with a 3D view uses the same viewport: Static Mesh, Skeletal Mesh, Skeleton, Animation, Montage, Blend Space, Anim Graph, Physics Asset, IK Rig, Material, Particles, Vehicle and Cloth. **The model always shows**, drawn by the GPU with its materials and textures, its shadow and the floor.
 
 ## The top bar
 - **View mode**: Lit, Unlit, Wireframe, Lit Wireframe, Lighting Only, **Albedo** (the base color alone), World Normal, Roughness, Metallic, **Ambient Occlusion**, **UV** (a checker by the coordinates and the UV layout in the corner), **LOD Coloration** (white 0, red 1, green 2, blue 3) and **Overdraw** (the more layers, the yellower).
@@ -52,7 +52,25 @@ At the top right of the Skeletal Mesh, Animation, Physics Asset and IK Rig edito
 In the **Skeleton** tab: select a bone and click **Add Socket** (or right-click the bone in the tree). Name it, set its location and rotation, or **drag the gizmo's arrows** in the viewport. **Preview Mesh** shows a mesh on the socket (a weapon, a hat) in the editors only, to check the place. Save with Ctrl+S.
 --- es
 ```diagram steps
-Abre el asset (doble clic en el Explorador de Contenido) | El modelo aparece en el viewport, con materiales y sombra | Elige el modo (Iluminado, Albedo, AO, UV, LOD...) | Mostrar: huesos, sockets, cuerpos | Pestañas en la esquina: Modelo, Esqueleto, Animación, Física
+Abre el asset (doble clic en el Explorador de contenidos) | El modelo aparece en la ventana gráfica, con sus materiales y su sombra | Elige el modo (Lit, Albedo, AO, UV, LOD...) | Show: huesos, sockets, cuerpos | Pestañas en la esquina: Model, Skeleton, Animation, Physics
 ```
-## Un viewport en todos los editores
-Todo editor con 3D usa el mismo viewport (Static Mesh, Skeletal Mesh, Esqueleto, Animación, Montage, Blend Space, Anim Blueprint, Physics Asset, IK Rig, Material, Partículas, Vehículo y Tela): **el modelo siempre aparece**, dibujado por la GPU con sus materiales, la sombra y el suelo. Arriba: el **modo de vista** (Iluminado, Albedo, AO, UV, LOD, Overdraw...), **Mostrar** (huesos ninguno/seleccionados/todos, nombres, ejes, sockets, cuerpos de física), **Iluminación** (estudio o cielo; **L + arrastrar** gira la luz), **Cámara** y **LOD**. Izquierdo: orbitar; medio: mover; rueda: zoom; **derecho + WASD**: volar; **F**: encuadrar. Las **pestañas** de la esquina (Modelo, Esqueleto, Animación, Física, IK Rig) cambian lo que se edita sin cerrar la ventana. En **Esqueleto**, **Agregar Socket** pone uno en el hueso seleccionado; se mueve con las flechas del gizmo y puede mostrar una malla de vista previa.
+## Una ventana gráfica en cada editor
+Todos los editores con vista 3D usan la misma ventana gráfica: Static Mesh, Skeletal Mesh, Skeleton, Animation, Montage, Blend Space, Anim Graph, Physics Asset, IK Rig, Material, Particles, Vehicle y Cloth. **El modelo siempre se muestra**, dibujado por la GPU con sus materiales y texturas, su sombra y el suelo.
+
+## La barra superior
+- **Modo de vista**: Lit, Unlit, Wireframe, Lit Wireframe, Lighting Only, **Albedo** (solo el color base), World Normal, Roughness, Metallic, **Ambient Occlusion**, **UV** (un damero según las coordenadas y el diseño UV en la esquina), **LOD Coloration** (blanco 0, rojo 1, verde 2, azul 3) y **Overdraw** (cuantas más capas, más amarillo).
+- **Show**: huesos (ninguno, el seleccionado o todos), sus nombres y ejes, los sockets, los cuerpos y restricciones de física, el suelo, la cuadrícula, el diseño UV y las estadísticas (triángulos, LOD, ms).
+- **Lighting**: Studio o Outdoor Sky; la dirección, la altura y la intensidad de la luz principal. **L + arrastrar** en la vista gira la luz.
+- **Cámara**: campo de visión, velocidad de vuelo, Frame (F).
+- **LOD**: Auto (lo que el juego dibujaría a esta distancia) o uno fijo, con los triángulos de cada uno.
+
+## Mover la cámara
+- Arrastrar con el botón **izquierdo**: orbitar. **Central**: desplazar. **Rueda**: zoom.
+- **Derecho + W A S D** (Q y E bajan y suben): volar; la rueda mientras vuelas cambia la velocidad.
+- **Alt + derecho**: dolly. **F**: encuadrar el modelo.
+
+## Cambiar sin cerrar la ventana
+En la parte superior derecha de los editores de Skeletal Mesh, Animation, Physics Asset e IK Rig están las pestañas **Model, Skeleton, Animation, Physics** (e **IK Rig** cuando la malla tiene uno). La misma ventana cambia lo que edita: en una animación, haz clic en Model o Skeleton y vuelve más tarde. **Physics** abre el Physics Asset de la malla; si no tiene ninguno, se crea uno a partir de sus huesos.
+
+## Sockets
+En la pestaña **Skeleton**: selecciona un hueso y haz clic en **Add Socket** (o clic derecho en el hueso del árbol). Ponle un nombre, define su ubicación y rotación, o **arrastra las flechas del gizmo** en la ventana gráfica. **Preview Mesh** muestra una malla en el socket (un arma, un sombrero) solo en los editores, para comprobar el lugar. Guarda con Ctrl+S.

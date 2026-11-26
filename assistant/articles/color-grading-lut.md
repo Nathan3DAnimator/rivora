@@ -1,6 +1,6 @@
 id: color-grading-lut
 kind: howto
-title: LUT de correção de cor (Color Grading LUT) | Color Grading LUT
+title: LUT de correção de cor (Color Grading LUT) | Color Grading LUT | LUT de corrección de color (Color Grading LUT)
 keys: lut, lut 3d, 3d lut, color grading lut, lut de cor, look, tabela de cor, color lookup table, .cube, arquivo cube, cube file, davinci resolve lut, photoshop lut, filtro de cor, color filter, grading de cinema, film look, aparencia de filme, color grading intensity
 --- pt
 ```diagram steps
@@ -24,3 +24,14 @@ A **3D LUT** stores a whole color look (a film's look, a cold scene, a sepia fla
 - **Where it applies:** after tone mapping and the volume's other adjustments (white balance, saturation, contrast), with the colors in sRGB, as in grading programs. The vignette and grain come after.
 - **Color Grading LUT Intensity** blends the original with the LUT (0 to 1). With several volumes, the LUT of the highest priority volume the camera is in wins, multiplied by its weight.
 - **Cost:** two texture reads per pixel in the composite. The file is read once, when it changes.
+--- es
+```diagram steps
+Corrige la imagen en otro programa (DaVinci Resolve, Photoshop, Premiere) y exporta un .cube
+Pon el archivo dentro del Content del proyecto (p. ej. Content/LUTs/Film.cube)
+Post Process Volume > Color Grading LUT: elige el archivo (...) y ajusta la Intensity
+```
+Una **LUT 3D** guarda un look de color completo (el look de una película, una escena fría, un flashback sepia) y lo aplica a la imagen final, como el **Color Grading LUT** de Unreal.
+- **Formatos aceptados:** **.cube** (DaVinci Resolve, Adobe, la mayoría de los sitios de LUT; tamaños de 2 a 64) o una **tira PNG** de N·N × N píxeles, el formato de Unreal (256 × 16 para 16³).
+- **Dónde se aplica:** después del tone mapping y de los demás ajustes del volumen (balance de blancos, saturación, contraste), con los colores en sRGB, como en los programas de corrección de color. La viñeta y el grano vienen después.
+- **Color Grading LUT Intensity** mezcla el original con la LUT (de 0 a 1). Con varios volúmenes, gana la LUT del volumen de mayor prioridad en el que está la cámara, multiplicada por su peso.
+- **Costo:** dos lecturas de textura por píxel en la composición. El archivo se lee una vez, cuando cambia.

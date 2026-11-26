@@ -1,10 +1,10 @@
 id: import-report
 kind: howto
-title: Tlender completo: modificadores, nós, drivers e o Relatório de Importação | The whole Tlender: modifiers, nodes, drivers and the Import Report
+title: Tlender completo: modificadores, nós, drivers e o Relatório de Importação | The whole Tlender: modifiers, nodes, drivers and the Import Report | Informe de importación del Tlender
 keys: relatorio de importacao, import report, informe de importacion, o que se perdeu, what was lost, que se perdio, perdido, lost, perdido na importacao, convertido, converted, assado, baked, horneado, modificador, modifier, modificadores, modifiers, mirror, array, subdivision, subsurf, solidify, weld, displace, decimate, edge split, mask, nonlinear, bevel, boolean, cloth, soft body, malha avaliada, evaluated mesh, nos de shader, shader nodes, nodos, no sem equivalente, node without equivalent, metallic bsdf, glass bsdf, rgb curves, curvas rgb, float curve, light path, object info, blackbody, vector rotate, brick texture, magic texture, stones, pedras, cracks, rachaduras, driver, drivers, expressao, expression, expresion, shape key, corretiva, corrective, curva de morph, morph curve, imagem gerada, generated image, uv grid, udim, textura faltando, missing texture, track to, locked track, limit distance, maintain volume, luz do tlender, tlender light, camera do tlender, tlender camera, importar tlender, import tlender, tlend, vinco, vincos, crease, creases, pliegue, aresta sharp, sharp edge, arista marcada, exportar para a real engine, export to real engine, material assado, baked material, rivora, rivora engine
 --- pt
 ```diagram steps
-Importar o .tlend (Arquivo > Importar) | A Engine aplica, converte ou assa cada coisa | Janela > Relatório de Importação (abre sozinha se algo se perdeu) | ImportReport.txt ao lado dos assets
+Importar o .tlend (Arquivo > Importar) | A Engine aplica, converte ou assa cada coisa | Janela > Relatório de Importação (abre sozinha se algo se perdeu) | Saved/ImportReports/<nome>.txt no projeto
 ```
 ## O que entra de um .tlend
 - **Modificadores** (na ordem da pilha, numa cópia da malha do objeto; grupos de vértices e shape keys acompanham): **Mirror**, **Array**, **Subdivision Surface**, **Solidify**, **Weld**, **Displace**, **Mask**, **Decimate** e o **Nonlinear** do Tlender são aplicados. **Armature** vira o Skeletal Mesh, **Cloth** e **Soft Body** viram o componente **Tecido**, **Edge Split** vira o ângulo das arestas duras, **Triangulate** é o que a Engine já faz. Bevel, Boolean, Remesh, Geometry Nodes e as deformações por outro objeto entram exatos quando o Tlender grava a **malha avaliada** (Exportar para a Rivora Engine); sem ela, ficam como **Perdido** com o motivo.
@@ -17,11 +17,10 @@ Importar o .tlend (Arquivo > Importar) | A Engine aplica, converte ou assa cada 
 ## O relatório
 1. Importe o arquivo. Se algo se perdeu, a janela **Relatório de Importação** abre sozinha (também em **Janela > Relatório de Importação**). [Mostrar onde](show:Window>Import Report)
 2. Cada linha diz o **Resultado** (Igual, Convertido, Assado, Perdido), a categoria, o item, o dono (objeto, material, osso) e o **motivo**.
-3. Filtre pelas caixas de cada resultado ou pela busca. **Mostrar o Arquivo do Relatório** abre o `ImportReport.txt` gravado ao lado dos assets.
-
+3. Filtre pelas caixas de cada resultado ou pela busca. **Mostrar o Arquivo do Relatório** abre o arquivo gravado em `Saved/ImportReports/<nome>.txt` do projeto (fora do Content: não aparece no Content Browser).
 --- en
 ```diagram steps
-Import the .tlend (File > Import) | The Engine applies, converts or bakes each thing | Window > Import Report (opens by itself when something was lost) | ImportReport.txt next to the assets
+Import the .tlend (File > Import) | The Engine applies, converts or bakes each thing | Window > Import Report (opens by itself when something was lost) | the project's Saved/ImportReports/<name>.txt
 ```
 ## What comes in from a .tlend
 - **Modifiers** (in the stack's order, on a copy of the object's mesh; vertex groups and shape keys follow): **Mirror**, **Array**, **Subdivision Surface**, **Solidify**, **Weld**, **Displace**, **Mask**, **Decimate** and the Tlender's **Nonlinear** are applied. **Armature** becomes the Skeletal Mesh, **Cloth** and **Soft Body** the **Cloth** component, **Edge Split** the hard edges' angle, **Triangulate** is what the Engine does anyway. Bevel, Boolean, Remesh, Geometry Nodes and the deforms by another object come in exactly when the Tlender writes the **evaluated mesh** (Export to Rivora Engine); without it they are **Lost**, with the reason.
@@ -34,20 +33,20 @@ Import the .tlend (File > Import) | The Engine applies, converts or bakes each t
 ## The report
 1. Import the file. If something was lost, the **Import Report** window opens by itself (also in **Window > Import Report**). [Show me where](show:Window>Import Report)
 2. Each row says the **Result** (Same, Converted, Baked, Lost), the category, the item, its owner (object, material, bone) and the **reason**.
-3. Filter by each result's box or by the search. **Show Report File** opens the `ImportReport.txt` written next to the assets.
-
+3. Filter by each result's box or by the search. **Show Report File** opens the file written to the project's `Saved/ImportReports/<name>.txt` (outside Content: it doesn't show in the Content Browser).
 --- es
 ```diagram steps
-Importar el .tlend (Archivo > Importar) | La Engine aplica, convierte u hornea cada cosa | Ventana > Informe de Importación (se abre sola si algo se perdió) | ImportReport.txt junto a los assets
+Importa el .tlend (Archivo > Importar) | El motor aplica, convierte o hornea cada cosa | Ventana > Import Report (se abre solo cuando se perdió algo) | Saved/ImportReports/<nombre>.txt del proyecto
 ```
-## Qué entra de un .tlend
-- **Modificadores** (en el orden de la pila, sobre una copia de la malla del objeto; los grupos de vértices y las shape keys siguen): **Mirror**, **Array**, **Subdivision Surface**, **Solidify**, **Weld**, **Displace**, **Mask**, **Decimate** y el **Nonlinear** del Tlender se aplican. **Armature** se vuelve el Skeletal Mesh, **Cloth** y **Soft Body** el componente **Tela**, **Edge Split** el ángulo de las aristas duras, **Triangulate** es lo que la Engine ya hace. Bevel, Boolean, Remesh, Geometry Nodes y las deformaciones por otro objeto entran exactos cuando el Tlender graba la **malla evaluada** (Exportar a Rivora Engine); sin ella quedan como **Perdido**, con el motivo.
-- **Nodos de shader**: los que la Engine tiene entran iguales. **Brick**, **Magic**, **Vector Rotate**, **Blackbody** y las texturas del Tlender (**Stones**, **Cracks**, **Grains**, **Weave**, **Fibers**, **Ocean**) se **hornean en la GPU** en las texturas del material (la misma matemática del Tlender). Los sin equivalente se vuelven nodos de la Engine: los BSDF Metallic, Glass, Sheen, SSS, Hair y Toon un **Principled** (o el Shading Model Toon), las **RGB/Vector/Float Curves** **Color Ramps** que siguen la curva, **Light Path** y **Object Info** constantes. Los shaders de volumen y el cielo del mundo se pierden (con el motivo).
-- **Imágenes**: copiadas a `Textures/`; una imagen **generada** (Blank, UV Grid, Color Grid) se vuelve PNG; una que no está donde el archivo dice se busca por su nombre cerca del .tlend; un UDIM se vuelve un `.rudim` con todos sus tiles.
-- **Drivers**: evaluados como en el Tlender en cada cuadro de las animaciones. Un driver constante se vuelve el valor en el asset; uno que cambia se **hornea** en las poses de los huesos y en las **curvas de morph** (la shape key correctiva sigue a su hueso).
-- **Rig**: Track To, Locked Track, Limit Distance y Maintain Volume ahora también se evalúan. Las **luces** y **cámaras** del .tlend se vuelven actores.
+## Lo que entra de un .tlend
+- **Modificadores** (en el orden de la pila, sobre una copia de la malla del objeto; los grupos de vértices y las shape keys los acompañan): **Mirror**, **Array**, **Subdivision Surface**, **Solidify**, **Weld**, **Displace**, **Mask**, **Decimate** y el **Nonlinear** del Tlender se aplican. **Armature** se convierte en el Skeletal Mesh, **Cloth** y **Soft Body** en el componente **Cloth**, **Edge Split** en el ángulo de las aristas duras, y **Triangulate** es lo que el motor hace de todos modos. Bevel, Boolean, Remesh, Geometry Nodes y las deformaciones por otro objeto entran exactamente cuando el Tlender escribe la **malla evaluada** (Export to Rivora Engine); sin ella quedan **Lost**, con el motivo.
+- **Exportar del Tlender al motor**: en el Tlender, usa **File > Export > Rivora Engine (.tlend)**. Ese archivo lleva las mallas evaluadas y los nodos horneados; Ctrl+S no. Un material propio del Tlender (Soil, Water, Rock...) llega como un **Principled** hecho de sus mapas horneados (color, rugosidad, la normal mediante un **Normal Map**, emisión o metálico). Los **pliegues** de las aristas pasan al Subdivision Surface como en el Tlender, y las **aristas marcadas como afiladas** dividen las normales.
+- **Nodos de shader**: los que el motor tiene entran igual. **Brick**, **Magic**, **Vector Rotate**, **Blackbody** y las texturas del Tlender (**Stones**, **Cracks**, **Grains**, **Weave**, **Fibers**, **Ocean**) se **hornean en la GPU** en las texturas del material (las matemáticas del Tlender). Los que no tienen equivalente se convierten en nodos del motor: los BSDF Metallic, Glass, Sheen, SSS, Hair y Toon en un **Principled** (o en el shading model Toon), las **RGB/Vector/Float Curves** en **Color Ramps** que siguen la curva, y **Light Path** y **Object Info** en constantes. Los shaders de volumen y el cielo del mundo se pierden (con el motivo).
+- **Imágenes**: copiadas a `Textures/`; una imagen **generada** (Blank, UV Grid, Color Grid) se convierte en un PNG; una que no está donde dice el archivo se busca por su nombre cerca del .tlend; un UDIM se convierte en un solo `.rudim` con todos sus tiles.
+- **Drivers**: evaluados como en el Tlender en cada fotograma de las animaciones. Un driver constante se convierte en el valor del asset; uno que cambia se **hornea** en las poses de los huesos y en las **curvas de morph** (una shape key correctiva sigue a su hueso).
+- **Rig**: Track To, Locked Track, Limit Distance y Maintain Volume también se evalúan. Las **luces** y **cámaras** del .tlend se convierten en actores.
 
 ## El informe
-1. Importa el archivo. Si algo se perdió, la ventana **Informe de Importación** se abre sola (también en **Ventana > Informe de Importación**). [Mostrar dónde](show:Window>Import Report)
-2. Cada fila dice el **Resultado** (Igual, Convertido, Horneado, Perdido), la categoría, el ítem, su dueño (objeto, material, hueso) y el **motivo**.
-3. Filtra por la casilla de cada resultado o por la búsqueda. **Mostrar el archivo del informe** abre el `ImportReport.txt` grabado junto a los assets.
+1. Importa el archivo. Si se perdió algo, la ventana **Import Report** se abre sola (también en **Ventana > Import Report**). [Muéstrame dónde](show:Window>Import Report)
+2. Cada fila dice el **Result** (Same, Converted, Baked, Lost), la categoría, el elemento, su dueño (objeto, material, hueso) y el **motivo**.
+3. Filtra con la casilla de cada resultado o con la búsqueda. **Show Report File** abre el archivo escrito en `Saved/ImportReports/<nombre>.txt` del proyecto (fuera de Content: no aparece en el Explorador de contenidos).

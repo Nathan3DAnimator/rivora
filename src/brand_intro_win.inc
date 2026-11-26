@@ -204,7 +204,7 @@ static DWORD WINAPI li_thread(LPVOID arg) {
         WNDCLASSEXW wc;
         memset(&wc, 0, sizeof wc);
         wc.cbSize = sizeof wc, wc.lpfnWndProc = li_proc, wc.hInstance = GetModuleHandleW(NULL), wc.lpszClassName = L"RealEngineIntro";
-        wc.hIcon = LoadIconW(wc.hInstance, MAKEINTRESOURCEW(1));
+        wc.hIcon = LoadIconW(wc.hInstance, L"GLFW_ICON"); // (the .rc's name: an id 1 found nothing)
         RegisterClassExW(&wc);
         int x, y;
         if (g_li.mon_w > 0) x = g_li.mon_x + (g_li.mon_w - W) / 2, y = g_li.mon_y + (g_li.mon_h - H) / 2;

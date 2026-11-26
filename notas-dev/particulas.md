@@ -139,3 +139,11 @@ Ator **Heterogeneous Volume** (`COMP_VOLUME`, `CVolume`, `src/volume.c`), como o
 - **Medida** (3060, Épico): 56x56x66 células, 207 fps na cena; carga de 24 quadros 1,4 s.
 - **Falta:** carga em segundo plano/streaming de sequências longas, GI e neblina volumétrica iluminando o volume, NanoVDB,
   grades de velocidade (motion blur).
+
+### Volume carregado em segundo plano (2026-11-25, bug-fixer)
+- O clip (os .vdb lidos e reamostrados na grade) é lido num worker (`fire.c` `vol_work`/`vol_done`, cartão quieto
+  "Carregando um Volume Heterogêneo"); o volume aparece quando chega. O exemplo (24 .vdb) é gravado num worker na
+  1ª vez que um é posicionado (`editor.c` `volex_*`), e o ator ganha o arquivo quando ele existe. Sem workers (o jogo
+  sem eles) é feito na hora, como antes. O `--bench` espera (`async_idle`).
+- Medida (RTX 3060, validação): Adicionar > Efeitos Visuais > Volume Heterogêneo, o pior quadro 1110 -> 44 ms (o clip
+  de 24 quadros de 56x56x66 leva ~1,1 s no worker). Teste `place_volume_hitch`.

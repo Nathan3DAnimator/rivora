@@ -1,6 +1,6 @@
 id: gi-pro
 kind: concept
-title: Iluminação global (RealGI) a fundo | Global illumination (RealGI) in depth
+title: Iluminação global (RealGI) a fundo | Global illumination (RealGI) in depth | Iluminación global (RealGI) a fondo
 keys: gi, global illumination, iluminacao global, luz indireta, rebate, bounce, realgi, lumen, lightmap, sondas, probes, surface cache, ray tracing, ao, oclusao de ambiente
 --- pt
 O **RealGI** é híbrido:
@@ -14,3 +14,9 @@ O **RealGI** é híbrido:
 - **Probes** for what moves and baked **lightmaps** for what's Static (Build > Build Lighting).
 - **Contact AO** and **auto exposure** (like a camera).
 - The **GI** and **Surface Cache** view modes show what each part contributes.
+--- es
+**RealGI** es híbrido:
+- Una **caché de superficie** en tiempo real (la luz que rebota, actualizada un poco cada vez) y **ray tracing** por hardware cuando está disponible.
+- **Sondas** para lo que se mueve y **lightmaps** horneados para lo que es Static (Build > Build Lighting).
+- **AO de contacto** y **exposición automática** (como una cámara).
+- Los modos de vista **GI** y **Surface Cache** muestran lo que aporta cada parte.

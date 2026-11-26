@@ -50,6 +50,7 @@ void main() {
               : pc.pass == 1u ? UintBuf(f.visible_shadow).v[gl_InstanceIndex]
               : pc.pass == 3u ? UintBuf(f.visible_late).v[gl_InstanceIndex]
               : pc.pass == 6u ? UintBuf(addr_add(f.cl_work, 32u + 20u * f.cl_entries)).v[gl_InstanceIndex * 4u] // (the clusters: a draw per instance)
+              : (pc.pass & 0x80000000u) != 0u ? pc.pad + uint(gl_InstanceIndex) * (pc.pass & 0x1FFu) // (a selected crowd's part in the mask: its agents nparts apart)
               : uint(gl_InstanceIndex);
     Instance inst = InstanceBuf(pc.instances).i[slot];
     if (pc.pass == 1u && (pc.pad & 0x80000000u) != 0u) {
@@ -207,5 +208,5 @@ void main() {
         o_ray_bias += o_disp_bias; // (Q17) a displaced surface sinks under its BLAS that far
     }
     if (o_disp_bias > 0.0) o_ray_bias = -max(o_ray_bias, o_disp_bias); // (Q17: the sign says displaced)
-    gl_Position = (pc.pass == 2u ? f.tsr_vp : f.view_proj) * vec4(world, 1.0); // (the selection's mask: the output's size, no jitter)
+    gl_Position = (pc.pass == 2u || (pc.pass & 0x80000000u) != 0u ? f.tsr_vp : f.view_proj) * vec4(world, 1.0); // (the selection's mask: the output's size, no jitter)
 }

@@ -1,6 +1,6 @@
 id: rt-clusters
 kind: concept
-title: Ray tracing por clusters (Mega Geometry) | Cluster ray tracing (Mega Geometry)
+title: Ray tracing por clusters (Mega Geometry) | Cluster ray tracing (Mega Geometry) | Ray tracing por clusters (Mega Geometry)
 keys: mega geometry, rtx mega geometry, clusters, cluster acceleration structure, clas, blas, tlas, memoria do ray tracing, ray tracing memory, memoria de rt, vram do ray tracing, estrutura de aceleracao, acceleration structure, malha pesada ray tracing, heavy mesh ray tracing, nanite ray tracing, REALENGINE_NO_CLAS, VK_NV_cluster_acceleration_structure
 --- pt
 ```diagram steps
@@ -28,3 +28,16 @@ On **NVIDIA RTX** cards with a recent driver, the static meshes' ray tracing str
 - **On other cards** (AMD, Intel, Android) or with `REALENGINE_NO_CLAS=1` the classic BLAS stay, with no difference in the image.
 - What deforms (cloth, characters, crowds) keeps the usual dynamic BLAS.
 - **Not yet:** the ray sees each mesh's LOD 0 (the raster uses the LOD cut); per-instance BLAS with the same cut and the partitioned TLAS come later.
+--- es
+```diagram steps
+Cada malla estática cortada en clusters de 64 a 128 triángulos
+Cada cluster se vuelve un CLAS comprimido por el driver
+Una BLAS por malla apunta a sus clusters
+El rayo encuentra el triángulo por el índice de geometría (igual que el clásico)
+```
+En las tarjetas **NVIDIA RTX** con un driver reciente, las estructuras de ray tracing de las mallas estáticas se hacen de **clusters** (lo que NVIDIA llama RTX Mega Geometry, estandarizado por DXR en 2026). Es automático: no hay nada que activar.
+- **Menos memoria de video:** la escena `heavy` (2.1 millones de triángulos) pasó de 143 MB a 59 MB de BLAS (−59%); la casa −69%; el RPG −43%.
+- **La misma velocidad o mejor:** los clusters vienen del constructor espacial de meshoptimizer (hecho para ray tracing); el RPG quedó ~7% más rápido, heavy igual. La imagen es idéntica.
+- **En otras tarjetas** (AMD, Intel, Android) o con `REALENGINE_NO_CLAS=1` se mantienen las BLAS clásicas, sin diferencia en la imagen.
+- Lo que se deforma (tela, personajes, multitudes) mantiene la BLAS dinámica habitual.
+- **Todavía no:** el rayo ve el LOD 0 de cada malla (el raster usa el corte de LOD); la BLAS por instancia con el mismo corte y el TLAS particionado vienen después.

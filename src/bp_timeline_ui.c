@@ -1,5 +1,6 @@
 // The Timeline editor (bp_timeline.h bp_timeline_editor): Unreal's, a window of its own opened from a Timeline node
 #include <math.h>
+#include "ui_number.h" // (2026-11-25, item 20: a typed value past the slider is kept)
 #include <stdio.h>
 #include <string.h>
 
@@ -78,7 +79,7 @@ bool bp_timeline_editor(BpAsset* a, char* name, bool* open) {
     }
     igSameLine(0, 8);
     igSetNextItemWidth(igGetFontSize() * 5);
-    changed |= igDragFloat(TR("Length"), &tl->length, 0.01f, 0.01f, 3600.0f, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
+    changed |= ui_num_float(TR("Length"), &tl->length, 0.01f, 0.01f, 3600.0f, 0.01f, 3.4e38f, "%.2f s", 0);
     changed |= igCheckbox(TR("Use Last Keyframe"), &tl->use_last_key);
     igSameLine(0, 8);
     changed |= igCheckbox(TR("AutoPlay"), &tl->autoplay);
@@ -86,7 +87,7 @@ bool bp_timeline_editor(BpAsset* a, char* name, bool* open) {
     changed |= igCheckbox(TR("Loop"), &tl->loop);
     igSameLine(0, 8);
     igSetNextItemWidth(igGetFontSize() * 4);
-    changed |= igDragFloat(TR("Play Rate"), &tl->rate, 0.01f, 0.01f, 100.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    changed |= ui_num_float(TR("Play Rate"), &tl->rate, 0.01f, 0.01f, 100.0f, 0.01f, 3.4e38f, "%.2f", 0);
     // the tracks: add, pick, rename, remove
     if (igButton(TR("+ Float Track"), (ImVec2){ 0, 0 }) && bp_timeline_add_track(tl, TLT_FLOAT)) changed = true, TE.track = tl->ntracks - 1;
     igSameLine(0, 4);

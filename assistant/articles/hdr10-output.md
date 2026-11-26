@@ -1,6 +1,6 @@
 id: hdr10-output
 kind: howto
-title: Saída HDR10 no jogo | HDR10 output in the game
+title: Saída HDR10 no jogo | HDR10 output in the game | Salida HDR10 en el juego
 keys: hdr, hdr10, saida hdr, hdr output, monitor hdr, tela hdr, hdr display, st2084, pq, bt2020, rec2020, paper white, branco de papel, pico de brilho, peak brightness, nits, brilho alto, highlights, hdr no windows
 --- pt
 ```diagram steps
@@ -26,3 +26,15 @@ With **HDR Output**, the packaged game uses the player's HDR display: 10 bits pe
 - **Without an HDR display** (or with Windows HDR off), the game stays in SDR and logs "HDR10 output: unavailable on this display".
 - The intro and the loading screen stay in SDR; HDR10 turns on after them.
 - The editor stays in SDR, like Unreal's.
+--- es
+```diagram steps
+Project Settings > Plataformas: activa HDR Output (HDR10)
+Define Paper White (el blanco de la UI y del papel, ~200 nits) y Peak Brightness (el pico de la pantalla, ~1000)
+Empaqueta el juego: en una pantalla HDR (con el HDR de Windows activado) se abre en HDR10; si no, en SDR
+```
+Con **HDR Output**, el juego empaquetado usa la pantalla HDR del jugador: 10 bits por canal, colores BT.2020 y el código PQ (ST.2084).
+- **La imagen:** lo que era blanco en SDR queda en **Paper White**. Las partes más brillantes que el blanco (sol, lámparas, reflejos) suben hasta **Peak Brightness**, y los tonos medios quedan igual que en SDR.
+- **La UI** (UMG, menús, HUD) se dibuja por separado y se coloca encima en Paper White, con los colores que elegiste.
+- **Sin una pantalla HDR** (o con el HDR de Windows desactivado), el juego se queda en SDR y registra "HDR10 output: unavailable on this display".
+- La introducción y la pantalla de carga se quedan en SDR; el HDR10 se activa después de ellas.
+- El editor se queda en SDR, como el de Unreal.

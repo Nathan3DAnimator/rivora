@@ -1,6 +1,6 @@
 id: async-compute
 kind: concept
-title: Async compute | Async compute
+title: Async compute | Async compute | Async compute
 keys: async compute, compute assincrono, computacao assincrona, fila de compute, compute queue, paralelismo na gpu, gpu parallelism, overlap, sobreposicao, filas da gpu, gpu queues, async shaders
 --- pt
 ```diagram steps
@@ -24,3 +24,14 @@ The rest of the frame (the main pass) waits only for the simulation, then goes o
 - **What goes to the other queue:** the particles' simulation. The frame is sent in two parts, and only the second, which draws the particles, waits for it.
 - **When it helps:** when the frame's start is heavy (many shadows, a lot of scene) and the simulation is too. Measured in this engine (RTX 3060, the particle scene on Epic), it came out the same or 0.1 ms slower: the simulation is too short to pay for the extra submission. That is why it stays optional.
 - Cards without a compute-only queue keep a single queue, as before.
+--- es
+```diagram steps
+Cola de gráficos: el inicio del cuadro (culling, escena, sombras) se envía a la GPU
+Cola de cómputo, al mismo tiempo: la simulación de las partículas
+El resto del cuadro (el pase principal) espera solo a la simulación y sigue
+```
+**Async compute** usa la segunda cola de la tarjeta (la de cómputo, que tienen NVIDIA y AMD) para ejecutar trabajo de cómputo **al mismo tiempo** que los gráficos, en lugar de uno después del otro.
+- **Dónde activarlo:** Configuración del proyecto > Rendering > **Async Compute**. Viene desactivado por defecto, igual que Variable Rate Shading.
+- **Qué va a la otra cola:** la simulación de las partículas. El cuadro se envía en dos partes, y solo la segunda, que dibuja las partículas, la espera.
+- **Cuándo ayuda:** cuando el inicio del cuadro es pesado (muchas sombras, mucha escena) y la simulación también. Medido en este motor (RTX 3060, la escena de partículas en Épico), quedó igual o 0,1 ms más lento: la simulación es demasiado corta para compensar el envío extra. Por eso sigue siendo opcional.
+- Las tarjetas sin una cola solo de cómputo mantienen una única cola, como antes.

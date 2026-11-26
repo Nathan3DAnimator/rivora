@@ -1,6 +1,6 @@
 id: ecs-architecture
 kind: concept
-title: Arquitetura: ECS e dados (programar a engine) | Architecture: ECS and data (programming the engine)
+title: Arquitetura: ECS e dados (programar a engine) | Architecture: ECS and data (programming the engine) | Arquitectura: ECS y datos (programar el motor)
 keys: ecs, arquitetura, data oriented, orientado a dados, arquetipo, soa, entidade, componente, sistema, job system, memoria, alocacao, engine source, codigo da engine
 --- pt
 ```diagram compare
@@ -28,3 +28,16 @@ Parallel | locks | per stage, lock-free
 - **Job system:** fixed workers, one per core; systems in stages by their read and write dependencies.
 - **GPU-driven rendering:** culling and LOD on the GPU, bindless, few indirect draws, frames in flight with a timeline semaphore.
 - **PIE** copies the world's arrays (memcpy) on entering and restores them on leaving.
+--- es
+```diagram compare
+ | Objetos (herencia) | ECS (datos)
+Datos | dispersos | contiguos (SoA)
+Caché de la CPU | muchos fallos | secuencial
+Millones de actores | difícil | sí
+Paralelo | con locks | por etapa, sin locks
+```
+- **ECS por arquetipos:** una entidad es un índice + generación; los componentes están en arreglos contiguos (SoA) por arquetipo; los sistemas son funciones que recorren los arreglos.
+- **Sin malloc en un cuadro:** asignadores lineales por cuadro y pools, alineados a 64 bytes.
+- **Job system:** workers fijos, uno por núcleo; sistemas en etapas según sus dependencias de lectura y escritura.
+- **Renderizado dirigido por la GPU:** culling y LOD en la GPU, bindless, pocos draws indirectos, cuadros en vuelo con un timeline semaphore.
+- **PIE** copia los arreglos del mundo (memcpy) al entrar y los restaura al salir.

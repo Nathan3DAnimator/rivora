@@ -7,6 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "loc.h"
+#include "dialogue.h"
+#include "ui_widget.h"
+#include "sequencer.h" // (2026-11-24) the Level Sequence variable's test
 #include "bp_editor.h"
 #include "bp_internal.h"
 #include "bp_timeline.h"
@@ -14,6 +18,7 @@
 #include "components.h"
 #include "content.h"
 #include "editor.h"
+#include "platform.h"
 #include "platform_files.h"
 #include "level.h"
 #include "input.h"
@@ -177,6 +182,110 @@ static BpAsset* make_types_class(const char* F) {
     }
     printf("[RealEngine] bp-test: BP_TestTypes %u ops, %u registers, %u containers\n", a->ncode, a->nslots, a->narr);
     return a;
+}
+
+// (2026-11-24, item 14) Split Struct Pin twice (Transform -> Location -> X, Y, Z): split + recombine leave the node as it
+// was; the graph's undo takes a split back and redoes it; then BP_TestSplit's BeginPlay sets its transform with only
+// Location X / Y / Z (1234, -567, 89) and Rotation (yaw 30) typed in: it ends there (bp_test_check); the file read back
+// has the same pins (the second split kept)
+static Entity g_split;
+static BpAsset* make_split_class(const char* F) {
+    BpAsset* a = bp_create(BPA_CLASS, F, "BP_TestSplit", "Actor");
+    if (!a) return NULL;
+    BpGraph* g = &a->graphs[0];
+    while (g->nnodes) bp_remove_node(g, g->nodes[0].id);
+    uint32_t bpn = node(a, g, BPK_EVENT_BEGIN_PLAY, 0, NULL, NULL);
+    uint32_t sx = node(a, g, BPK_SET_TRANSFORM, 1, NULL, NULL);
+    link(g, bpn, "", sx, "");
+    BpNode* n = bp_node(g, sx);
+    if (!n) return NULL;
+    uint8_t n0 = n->npins;
+    static char names0[BP_MAX_PINS][BP_NAME];
+    for (int i = 0; i < n0; i++) snprintf(names0[i], BP_NAME, "%s", n->pins[i].name);
+    // split, split the part, recombine both: as it was
+    bool rt = bp_split_pin(a, g, n, (uint8_t)pin(g, sx, 0, "New Transform"), true);
+    rt = rt && bp_split_pin(a, g, n, (uint8_t)pin(g, sx, 0, "New Transform Location"), true);
+    uint8_t nsplit = n->npins;
+    int xp = pin(g, sx, 0, "New Transform Location X");
+    rt = rt && nsplit == n0 + 4 && n->pins[xp].sub2 == 1 && n->pins[xp].ptype2 == BPT_VECTOR;
+    rt = rt && bp_split_pin(a, g, n, (uint8_t)xp, false);
+    rt = rt && bp_split_pin(a, g, n, (uint8_t)pin(g, sx, 0, "New Transform Location"), false);
+    bool same = rt && n->npins == n0 && !n->split && !n->split2;
+    for (int i = 0; same && i < n0; i++) same = !strcmp(names0[i], n->pins[i].name);
+    // the graph's undo: a split taken back, redone
+    bp_graph_undo_push(a, 0);
+    bp_split_pin(a, g, bp_node(g, sx), (uint8_t)pin(g, sx, 0, "New Transform"), true);
+    uint8_t after = bp_node(g, sx)->npins;
+    bool undone = bp_graph_undo(a, false) && bp_node(g, sx)->npins == n0 && !bp_node(g, sx)->split;
+    bool redone = bp_graph_undo(a, true) && bp_node(g, sx)->npins == after && bp_node(g, sx)->split;
+    printf("[RealEngine] bp-test: Split Struct Pin: Transform -> 3 parts, Location -> X Y Z (%u -> %u pins), recombined %s; Ctrl+Z %s, Ctrl+Y %s\n", n0,
+           nsplit, same ? "as before" : "DIFFERENT", undone ? "took it back" : "FAILED", redone ? "redid it" : "FAILED");
+    if (!same || !undone || !redone) printf("[RealEngine] FAIL: bp-test: Split / Recombine Struct Pin or its undo\n"), g_fail = true;
+    // the transform: Location split again, its X Y Z typed in; Rotation's yaw 30
+    n = bp_node(g, sx);
+    if (!bp_split_pin(a, g, n, (uint8_t)pin(g, sx, 0, "New Transform Location"), true)) g_fail = true;
+    lit(g, sx, "New Transform Location X", 1234, 0, 0);
+    lit(g, sx, "New Transform Location Y", -567, 0, 0);
+    lit(g, sx, "New Transform Location Z", 89, 0, 0);
+    lit(g, sx, "New Transform Rotation", 0, 30, 0);
+    if (g_fail || !bp_save(a) || !bp_compile(a)) {
+        printf("[RealEngine] FAIL: bp-test: BP_TestSplit didn't compile: %s\n", a->error);
+        return NULL;
+    }
+    // the file read back: the same pins on its Set Actor Transform
+    char vp[300];
+    snprintf(vp, sizeof vp, "%s/BP_TestSplit.rbp", F);
+    BpAsset* c = bp_read_copy(vp);
+    const BpNode* cn = NULL;
+    for (uint32_t i = 0; c && c->ngraphs && i < c->graphs[0].nnodes; i++)
+        if (c->graphs[0].nodes[i].kind == BPK_SET_TRANSFORM) cn = &c->graphs[0].nodes[i];
+    n = bp_node(g, sx);
+    bool kept = cn && cn->npins == n->npins && cn->split == n->split && cn->split2 == n->split2;
+    for (int i = 0; kept && i < n->npins; i++) kept = !strcmp(cn->pins[i].name, n->pins[i].name) && cn->pins[i].lit.v[0] == n->pins[i].lit.v[0];
+    printf("[RealEngine] bp-test: BP_TestSplit saved and read back: %s (%u pins)\n", kept ? "the split pins kept" : "DIFFERENT", cn ? cn->npins : 0);
+    if (!kept) printf("[RealEngine] FAIL: bp-test: the split pins weren't saved\n"), g_fail = true;
+    bp_free_copy(c);
+    return g_fail ? NULL : a;
+}
+
+// (2026-11-24, item 15) The localization in Play: WBP_LocTest (a Text "Olá mundo") and DLG_LocTest (a line) gathered with
+// the project's native pt-BR and the target en, translated by the offline pseudo-localization (deterministic: the test's
+// provider), compiled; while playing, the culture switched to en: the widget's text and the line change at once, back to
+// pt-BR: the sources again (bp_test_check)
+static BpAsset* g_loc_wbp;
+static Dialogue* g_loc_dlg;
+static int g_loc_line;
+static bool loc_setup(const char* F) {
+    g_loc_wbp = bp_create(BPA_CLASS, F, "WBP_LocTest", "User Widget");
+    g_loc_dlg = dlg_create(F, "DLG_LocTest", false);
+    if (g_loc_wbp && !g_loc_wbp->ui && (g_loc_wbp->ui = calloc(1, sizeof(UiTree)))) ui_tree_default(g_loc_wbp->ui); // (bp_create makes no tree)
+    if (!g_loc_wbp || !g_loc_wbp->ui || !g_loc_dlg) {
+        printf("[RealEngine] FAIL: bp-test: the localization's widget or dialogue\n");
+        return false;
+    }
+    int ti = ui_tree_add(g_loc_wbp->ui, UIW_TEXT, 0);
+    if (ti < 0) return false;
+    snprintf(g_loc_wbp->ui->w[ti].name, sizeof g_loc_wbp->ui->w[ti].name, "Title");
+    snprintf(g_loc_wbp->ui->w[ti].text, sizeof g_loc_wbp->ui->w[ti].text, "Olá mundo");
+    g_loc_line = dlg_add_node(g_loc_dlg, DLG_LINE, 200, 0);
+    if (g_loc_line < 0) return false;
+    snprintf(g_loc_dlg->nodes[g_loc_line].text[0], DLG_TEXT, "Bom dia, viajante.");
+    if (!bp_save(g_loc_wbp) || !dlg_save(g_loc_dlg)) return false;
+    loc_set_content_root(content_root());
+    LocProject* p = loc_project();
+    snprintf(p->native, LOC_CULTURE, "pt-BR");
+    int en = loc_add_culture("en");
+    LocGatherStats gs = loc_gather();
+    LocProvider keep = *loc_provider();
+    loc_provider()->kind = LOC_PROV_PSEUDO;
+    bool tr = en >= 0 && loc_auto_translate(en, false);
+    *loc_provider() = keep;
+    char msg[160];
+    bool ok = tr && loc_save() && loc_compile(msg, sizeof msg) >= 2;
+    printf("[RealEngine] bp-test: localization: %u texts gathered (%u widgets, %u blueprints, %u dialogues), pseudo-translated to en, %s\n", gs.total,
+           gs.widgets, gs.blueprints, gs.dialogues, msg);
+    if (!ok || gs.widgets < 1 || gs.dialogues < 1) printf("[RealEngine] FAIL: bp-test: the localization's gather / translate / compile\n");
+    return ok;
 }
 
 // Enhanced Input: BeginPlay adds IMC_Default; IA_Move's Triggered sets the scale's z to 1 + 2 * its Y (W held: 3)
@@ -380,6 +489,8 @@ static BpAsset* make_timeline_class(const char* F, bool idle) {
     return a;
 }
 
+static bool g_stream_seen[3]; // (2026-11-24: stream_sink, below)
+static void stream_sink(const char* text, void* user);
 bool bp_test_setup(Editor* ed, const char* package_dir) {
     char dir[1024];
     snprintf(dir, sizeof dir, "%s/BpTest", content_root());
@@ -595,6 +706,12 @@ bool bp_test_setup(Editor* ed, const char* package_dir) {
     BpAsset* inp = make_input_class(F);
     if (!inp) return false;
     BpAsset* types = make_types_class(F);
+    BpAsset* splitc = make_split_class(F); // (2026-11-24, item 14)
+    if (!splitc) {
+        printf("[RealEngine] FAIL: bp-test: the split pins' class\n");
+        return false;
+    }
+    if (!loc_setup(F)) return false; // (2026-11-24, item 15)
     if (!types) {
         printf("[RealEngine] FAIL: bp-test: the types' class\n");
         return false;
@@ -615,6 +732,9 @@ bool bp_test_setup(Editor* ed, const char* package_dir) {
         g_ppv = ecs_create(&ed->world, COMP_BIT(COMP_NAME) | COMP_BIT(COMP_TRANSFORM) | COMP_BIT(COMP_POST_PROCESS));
         if (g_ppv) post_volume_defaults(ecs_get(&ed->world, g_ppv, COMP_POST_PROCESS));
         g_types = bp_spawn(&ed->world, types, (float[3]){ -500, 500, 50 }, (float[3]){ 0, 0, 0 });
+        g_split = bp_spawn(&ed->world, splitc, (float[3]){ 0, -300, 50 }, (float[3]){ 0, 0, 0 }); // (moves itself to 1234, -567, 89)
+        CTransform* stt = g_split ? ecs_get(&ed->world, g_split, COMP_TRANSFORM) : NULL;
+        if (stt) stt->flags |= TRANSFORM_NO_COLLISION;
         // (its Blueprint scales it to 42 by the values it checks: without collision, else a 42 m box where it ends up)
         CTransform* tt = g_types ? ecs_get(&ed->world, g_types, COMP_TRANSFORM) : NULL;
         if (tt) tt->flags |= TRANSFORM_NO_COLLISION;
@@ -688,15 +808,97 @@ bool bp_test_setup(Editor* ed, const char* package_dir) {
         slit(lg, lpr, "In String", "Stream level in");
         link(lg, lbeg, "", lld, "");
         link(lg, lld, "Completed", lpr, "");
+        // (2026-11-24) Loaded / Failed: StreamSub's Loaded prints and loads a level that doesn't exist, whose Failed prints
+        uint32_t lok = node(lb, lg, BPK_PRINT, 3, NULL, NULL);
+        slit(lg, lok, "In String", "Stream loaded ok");
+        uint32_t lbad = node(lb, lg, BPK_LOAD_STREAM, 4, NULL, NULL);
+        slit(lg, lbad, "Level Name", "NoSuchLevel_Q10");
+        uint32_t lfail = node(lb, lg, BPK_PRINT, 5, NULL, NULL);
+        slit(lg, lfail, "In String", "Stream failed ok");
+        uint32_t lwrong = node(lb, lg, BPK_PRINT, 6, NULL, NULL);
+        slit(lg, lwrong, "In String", "Stream WRONG: a missing level loaded");
+        link(lg, lld, "Loaded", lok, "");
+        link(lg, lok, "", lbad, "");
+        link(lg, lbad, "Failed", lfail, "");
+        link(lg, lbad, "Loaded", lwrong, "");
         if (g_fail || !bp_save(lb) || !bp_compile(lb)) {
             printf("[RealEngine] FAIL: bp-test: the Level Blueprint didn't compile: %s\n", lb->error);
             return false;
         }
     }
+    // (2026-11-24, item 11) typed asset references (Unreal's soft object references): BP_LevelRef's Target Level (a
+    // Level variable, default StreamSub) feeds Load Stream Level's Level Name, its Intro (a Level Sequence) Play
+    // Sequence's Sequence pin. One actor keeps the default, the other's Details set StreamSub2: each brings its own
+    // level in (their cubes). The class's file keeps the types and the values
+    if (!ed->bp_test_house) {
+        static World sub2;
+        ecs_init(&sub2);
+        Entity c2 = ecs_create(&sub2, COMP_BIT(COMP_NAME) | COMP_BIT(COMP_TRANSFORM) | COMP_BIT(COMP_STATIC_MESH));
+        snprintf(((CName*)ecs_get(&sub2, c2, COMP_NAME))->text, RE_NAME_MAX, "StreamedCube2");
+        CTransform* c2t = ecs_get(&sub2, c2, COMP_TRANSFORM);
+        c2t->location[1] = 800, c2t->location[2] = 50, c2t->scale[0] = c2t->scale[1] = c2t->scale[2] = 1;
+        ((CStaticMesh*)ecs_get(&sub2, c2, COMP_STATIC_MESH))->mesh = SHAPE_CUBE;
+        char sp2[1100];
+        snprintf(sp2, sizeof sp2, "%s/StreamSub2.rlevel", dir);
+        LevelCamera scam2 = { { 0, 0, 200 }, 0, 0, 90, 600 };
+        bool okl = level_save(&sub2, &scam2, sp2, NULL);
+        ecs_shutdown(&sub2);
+        Sequence* sq = seq_create(F, "SEQ_Q11");
+        BpAsset* lr = bp_create(BPA_CLASS, F, "BP_LevelRef", "Actor");
+        if (!okl || !sq || !lr) {
+            printf("[RealEngine] FAIL: bp-test: the level reference's assets could not be made\n");
+            return false;
+        }
+        BpVar* rv = &lr->vars[lr->nvars++];
+        memset(rv, 0, sizeof *rv), snprintf(rv->name, BP_NAME, "Target Level"), rv->type = BPT_NAME, rv->editable = true;
+        snprintf(rv->ref, BP_NAME, "Level"), snprintf(rv->sdef, sizeof rv->sdef, "StreamSub");
+        rv = &lr->vars[lr->nvars++];
+        memset(rv, 0, sizeof *rv), snprintf(rv->name, BP_NAME, "Intro"), rv->type = BPT_NAME, rv->editable = true;
+        snprintf(rv->ref, BP_NAME, "Level Sequence"), snprintf(rv->sdef, sizeof rv->sdef, "%s", sq->name);
+        BpGraph* rg = &lr->graphs[0];
+        while (rg->nnodes) bp_remove_node(rg, rg->nodes[0].id);
+        uint32_t rb = node(lr, rg, BPK_EVENT_BEGIN_PLAY, 0, NULL, NULL);
+        uint32_t rps = node(lr, rg, BPK_PLAY_SEQUENCE, 1, NULL, NULL);
+        uint32_t rgi = node(lr, rg, BPK_VAR_GET, 2, "Intro", NULL);
+        uint32_t rls = node(lr, rg, BPK_LOAD_STREAM, 3, NULL, NULL);
+        uint32_t rgl = node(lr, rg, BPK_VAR_GET, 4, "Target Level", NULL);
+        link(rg, rb, "", rps, "");
+        link(rg, rgi, "Intro", rps, "Sequence");
+        link(rg, rps, "", rls, "");
+        link(rg, rgl, "Target Level", rls, "Level Name");
+        if (g_fail || !bp_save(lr) || !bp_compile(lr)) {
+            printf("[RealEngine] FAIL: bp-test: BP_LevelRef didn't compile: %s\n", lr->error);
+            return false;
+        }
+        char rtext[8192] = "";
+        FILE* rf = re_fopen(lr->path, "rb");
+        if (rf) rtext[fread(rtext, 1, sizeof rtext - 1, rf)] = 0, fclose(rf);
+        bool kept = strstr(rtext, "Level Sequence") && strstr(rtext, "StreamSub") && strstr(rtext, "SEQ_Q11");
+        printf("[RealEngine] bp-test: BP_LevelRef saved with its Level and Level Sequence variables: %s\n", kept ? "kept" : "MISSING");
+        if (!kept) printf("[RealEngine] FAIL: bp-test: the asset reference variables weren't saved\n"), g_fail = true;
+        Entity ra = bp_spawn(&ed->world, lr, (float[3]){ -800, -800, 50 }, (float[3]){ 0, 0, 0 });
+        Entity rbb = bp_spawn(&ed->world, lr, (float[3]){ -900, -800, 50 }, (float[3]){ 0, 0, 0 });
+        CBlueprint* rob = rbb ? ecs_get(&ed->world, rbb, COMP_BLUEPRINT) : NULL;
+        if (!ra || !rob || !bp_override_set(rob, "Target Level", NULL, "StreamSub2")) {
+            printf("[RealEngine] FAIL: bp-test: BP_LevelRef's actors or the Details' value\n");
+            return false;
+        }
+        if (g_fail) return false;
+    }
     if (!ed->bp_test) ed->bp_test = 1;
+    memset(g_stream_seen, 0, sizeof g_stream_seen);
+    if (!ed->bp_test_house) bp_set_message_sink(stream_sink, NULL);
     editor_play(ed, 0.0);
     if (ed->bp_test == 3) editor_set_possessed(ed, false); // the walk seen from a still camera (--bp-walkview)
     return (g_actor || ed->bp_test_house) && g_char && bp_player(&ed->world) == g_char;
+}
+
+// (2026-11-24) the Level Blueprint's prints: Loaded, Failed, a wrong Loaded (the messages on screen age out in 5 s)
+static void stream_sink(const char* text, void* user) {
+    (void)user;
+    g_stream_seen[0] |= strstr(text, "Stream loaded ok") != NULL;
+    g_stream_seen[1] |= strstr(text, "Stream failed ok") != NULL;
+    g_stream_seen[2] |= strstr(text, "WRONG") != NULL;
 }
 
 bool bp_test_check(Editor* ed) {
@@ -729,7 +931,11 @@ bool bp_test_check(Editor* ed) {
         float pings = bp_get_instance_var(w, g_timeline, "Pings", v, 4, &wd, text, sizeof text, &is_text) ? v[0].v[0] : -1.0f;
         float done = bp_get_instance_var(w, g_timeline, "Done", v, 4, &wd, text, sizeof text, &is_text) ? v[0].v[0] : -1.0f;
         printf("[RealEngine] bp-test: Timeline: Value %.3f (want 2), Pings %.0f (want 1), Done %.0f (want 1)\n", val, pings, done);
-        if (fabsf(val - 2.0f) > 1e-3f || pings != 1.0f || done != 1.0f) printf("[RealEngine] FAIL: bp-test: the Timeline didn't play\n"), ok = false;
+        if (fabsf(val - 2.0f) > 1e-3f || pings != 1.0f || done != 1.0f) {
+            printf("[RealEngine] FAIL: bp-test: the Timeline didn't play\n"), ok = false;
+            void bp_debug_dump(Entity e, const char* label);
+            bp_debug_dump(g_timeline, "BP_TestTimeline"); // (2026-11-25: its code and registers, the cause on the next failure)
+        }
     }
     { // (2026-11-10) Expose on Spawn: the BP_TestSpawned the spawner made has Size 3 at its BeginPlay (its scale 3)
         const BpAsset* sc = bp_find_name(BPA_CLASS, "BP_TestSpawned");
@@ -864,14 +1070,61 @@ bool bp_test_check(Editor* ed) {
                g_bp_input_runs, it ? it->scale[0] : -1.0f, it ? it->scale[1] : -1.0f, it ? it->scale[2] : -1.0f);
         ok = false;
     }
+    { // (2026-11-24, item 15) the culture switched while playing: the widget's text and the line change at once
+        Entity we = g_loc_wbp ? ui_create_widget(w, g_loc_wbp) : ENTITY_NONE;
+        char w0[256] = "", w1[256] = "", w2[256] = "", d0[256] = "", d1[256] = "", want_w[256], want_d[256];
+        const char* s = we ? ui_text_shown(we, "Title") : NULL;
+        snprintf(w0, sizeof w0, "%s", s ? s : "?");
+        snprintf(d0, sizeof d0, "%s", g_loc_dlg ? dlg_node_text(g_loc_dlg, &g_loc_dlg->nodes[g_loc_line], 0) : "?");
+        bool sw = loc_switch("en");
+        double ms = loc_stats().last_switch_ms;
+        s = we ? ui_text_shown(we, "Title") : NULL;
+        snprintf(w1, sizeof w1, "%s", s ? s : "?");
+        snprintf(d1, sizeof d1, "%s", g_loc_dlg ? dlg_node_text(g_loc_dlg, &g_loc_dlg->nodes[g_loc_line], 0) : "?");
+        loc_switch("");
+        s = we ? ui_text_shown(we, "Title") : NULL;
+        snprintf(w2, sizeof w2, "%s", s ? s : "?");
+        loc_pseudo("Olá mundo", want_w, sizeof want_w), loc_pseudo("Bom dia, viajante.", want_d, sizeof want_d);
+        printf("[RealEngine] bp-test: Set Current Culture en in Play (%.3f ms): the widget \"%s\" -> \"%s\" -> back \"%s\"; the line \"%s\" -> \"%s\"\n", ms, w0, w1,
+               w2, d0, d1);
+        if (!sw || strcmp(w0, "Olá mundo") || strcmp(w1, want_w) || strcmp(w2, "Olá mundo") || strcmp(d0, "Bom dia, viajante.") || strcmp(d1, want_d))
+            printf("[RealEngine] FAIL: bp-test: the localization didn't switch the widget and the line live\n"), ok = false;
+        char ld[1100];
+        snprintf(ld, sizeof ld, "%s/Localization", content_root());
+        if (!getenv("REALENGINE_BP_KEEP")) re_remove_tree(ld);
+    }
+    { // (2026-11-24, item 14) BP_TestSplit: its Set Actor Transform with Location split twice (X Y Z typed in)
+        const CTransform* st = g_split ? ecs_get(w, g_split, COMP_TRANSFORM) : NULL;
+        bool at = st && fabsf(st->location[0] - 1234.0f) < 0.5f && fabsf(st->location[1] + 567.0f) < 0.5f && fabsf(st->location[2] - 89.0f) < 0.5f &&
+                  fabsf(st->rotation[1] - 30.0f) < 0.5f && fabsf(st->scale[0] - 1.0f) < 0.01f;
+        printf("[RealEngine] bp-test: Set Actor Transform with Location split into X Y Z: at (%.1f, %.1f, %.1f) yaw %.1f scale %.2f\n", st ? st->location[0] : 0.0f,
+               st ? st->location[1] : 0.0f, st ? st->location[2] : 0.0f, st ? st->rotation[1] : 0.0f, st ? st->scale[0] : 0.0f);
+        if (!at) printf("[RealEngine] FAIL: bp-test: the split Transform didn't put the actor at (1234, -567, 89), yaw 30\n"), ok = false;
+    }
     bool streamed = false; // the Level Blueprint's Load Stream Level brought the sublevel's cube
     for (uint32_t i = 1; i < w->slot_count && !streamed; i++) {
         Entity e = ecs_entity_at(w, i);
         const CName* n = e ? ecs_get(w, e, COMP_NAME) : NULL;
         streamed = n && !strcmp(n->text, "StreamedCube") && ecs_get(w, e, COMP_STREAMED);
     }
+    bool cube2 = false, seq_ran = seq_is_playing("SEQ_Q11"); // (2026-11-24) StreamSub2 by the Details' Level value
+    for (uint32_t i = 1; i < w->slot_count && !cube2; i++) {
+        Entity e = ecs_entity_at(w, i);
+        const CName* n = e ? ecs_get(w, e, COMP_NAME) : NULL;
+        cube2 = n && !strcmp(n->text, "StreamedCube2") && ecs_get(w, e, COMP_STREAMED);
+    }
+    printf("[RealEngine] bp-test: Level variable: StreamSub (default) %s, StreamSub2 (the actor's Details) %s; Level Sequence variable played %s\n",
+           streamed ? "in" : "missing", cube2 ? "in" : "missing", seq_ran ? "yes" : "no");
+    if (!cube2) printf("[RealEngine] FAIL: bp-test: the Level variable's Details value didn't load its level\n"), ok = false;
+    if (!seq_ran) printf("[RealEngine] FAIL: bp-test: Play Sequence by the Level Sequence variable didn't play\n"), ok = false;
     printf("[RealEngine] bp-test: level streaming %s\n", streamed ? "in" : "missing");
     if (!streamed) printf("[RealEngine] FAIL: bp-test: Load Stream Level (the Level Blueprint) didn't bring the sublevel in\n"), ok = false;
+    { // (2026-11-24) its Loaded and, for a missing level, its Failed fired (their prints, caught by stream_sink)
+        bp_set_message_sink(NULL, NULL);
+        bool loaded = g_stream_seen[0], failed = g_stream_seen[1], wrong = g_stream_seen[2];
+        printf("[RealEngine] bp-test: Load Stream Level's Loaded %s, a missing level's Failed %s\n", loaded ? "fired" : "MISSING", failed ? "fired" : "MISSING");
+        if (!loaded || !failed || wrong) printf("[RealEngine] FAIL: bp-test: Load Stream Level's Loaded / Failed outputs\n"), ok = false;
+    }
     editor_stop(ed, 0.0);
     char dir[1024];
     snprintf(dir, sizeof dir, "%s/BpTest", content_root());

@@ -510,6 +510,9 @@ void asset_picker_draw(void) {
 
 // --- The Details field ---
 
+static bool g_field_open_next;
+void asset_field_open_next(void) { g_field_open_next = true; }
+
 int asset_field(const char* id, const char* shown, const char* cur_ref, int kind, uint64_t kinds, bool allow_none, char* out, size_t cap) {
     igPushID_Str(id);
     ImGuiID owner = igGetID_Str("##field");
@@ -534,7 +537,8 @@ int asset_field(const char* id, const char* shown, const char* cur_ref, int kind
     ImDrawList_PopClipRect(dl);
     ui_icon(dl, ICON_SEARCH, p.x + w - fs * 1.4f, p.y + (h - fs) * 0.5f, fs, TH(TK_N12)); // (it opens the picker)
     if (hov) igSetItemTooltip("%s%s%s", shown && shown[0] ? shown : TR("None"), has && cur_ref[0] == '/' ? "\n" : "", has && cur_ref[0] == '/' ? cur_ref : "");
-    if (click) {
+    if (click || g_field_open_next) {
+        g_field_open_next = false;
         AssetPickerSpec s = { .title = TR("Pick Asset"), .kinds = kinds, .current = cur_ref, .allow_none = allow_none, .owner = owner };
         char title[96];
         snprintf(title, sizeof title, TR("Pick %s"), asset_kind_name((AssetKind)kind));

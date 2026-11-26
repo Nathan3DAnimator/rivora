@@ -5,6 +5,7 @@
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #include <cimgui.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -55,7 +56,7 @@ bool ia_ui_interactable(CInteractable* c) {
     ch |= igDragFloat(PL(TR("Interaction Range")), &c->range, 1.0f, 0.0f, 10000.0f, c->range > 0.0f ? "%.0f cm" : TR("the Interactor's"), 0);
     ch |= igDragFloat(PL(TR("View Angle")), &c->angle, 0.5f, 0.0f, 90.0f, c->angle > 0.0f ? "%.0f\xc2\xb0" : TR("the Interactor's"), 0);
     ch |= key_combo(PL(TR("Interact Key")), &c->key, true);
-    ch |= igInputTextWithHint(PL(TR("Input Action")), "IA_Interact", c->action, sizeof c->action, 0, NULL, NULL);
+    ch |= igInputTextWithHint(PL(TR("Input Action")), "IA_Interact", c->action, sizeof c->action, 0, NULL, NULL); // i18n: none (an asset name)
     ch |= igDragFloat(PL(TR("Hold Time")), &c->hold_time, 0.05f, 0.0f, 30.0f, c->hold_time > 0.0f ? "%.2f s" : TR("a press"), 0);
     bool again = !(c->flags & IA_ONCE);
     if (igCheckbox(PL(TR("Can Repeat")), &again)) c->flags = again ? (uint16_t)(c->flags & ~IA_ONCE) : (uint16_t)(c->flags | IA_ONCE), ch = true;
@@ -86,7 +87,7 @@ bool ia_ui_interactor(CInteractor* r) {
     ch |= igDragFloat(PL(TR("Interaction Range")), &r->range, 1.0f, 10.0f, 10000.0f, "%.0f cm", 0);
     ch |= igDragFloat(PL(TR("View Angle")), &r->angle, 0.5f, 1.0f, 90.0f, "%.0f\xc2\xb0", 0);
     ch |= key_combo(PL(TR("Interact Key")), &r->key, false);
-    ch |= igInputTextWithHint(PL(TR("Input Action")), "IA_Interact", r->action, sizeof r->action, 0, NULL, NULL);
+    ch |= igInputTextWithHint(PL(TR("Input Action")), "IA_Interact", r->action, sizeof r->action, 0, NULL, NULL); // i18n: none (an asset name)
     ch |= flag(PL(TR("Outline")), &r->flags, IAR_OUTLINE);
     ch |= flag(PL(TR("Glow")), &r->flags, IAR_GLOW);
     ch |= flag(PL(TR("Show Prompt")), &r->flags, IAR_PROMPT);
@@ -129,7 +130,7 @@ bool ia_ui_device(World* w, Entity self, CDevice* d) {
     int mo = (int)(d->motion < DEV_MOTION_COUNT ? d->motion : 0);
     if (igCombo_Str_arr(PL(TR("Motion")), &mo, mn, DEV_MOTION_COUNT, -1)) d->motion = (uint32_t)mo, ch = true;
     bool slide = d->motion == DEV_SLIDE;
-    ch |= igDragFloat(PL(TR(slide ? "Slide Distance" : "Open Angle")), &d->amount, slide ? 1.0f : 0.5f, slide ? -1000.0f : -180.0f, slide ? 1000.0f : 180.0f,
+    ch |= igDragFloat(PL((slide ? TR("Slide Distance") : TR("Open Angle"))), &d->amount, slide ? 1.0f : 0.5f, slide ? -1000.0f : -180.0f, slide ? 1000.0f : 180.0f,
                       slide ? "%.0f cm" : "%.0f\xc2\xb0", 0);
     ch |= igDragFloat(PL(TR("Open Time")), &d->time, 0.01f, 0.0f, 30.0f, "%.2f s", 0);
     ch |= igDragFloat(PL(TR("Auto Close")), &d->auto_close, 0.05f, 0.0f, 600.0f, d->auto_close > 0.0f ? "%.2f s" : TR("stays"), 0);

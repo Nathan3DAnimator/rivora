@@ -73,7 +73,7 @@ static void dll_close(void* dll) {
 static int plugin_by_name(const char* name) {
     if (P.loading >= 0 && name && !strcmp(P.p[P.loading].name, name)) return P.loading;
     for (uint32_t i = 0; i < P.n; i++)
-        if (name && !strcmp(P.p[i].name, name)) return (int)i;
+        if (name && !P.p[i].unloaded && !strcmp(P.p[i].name, name)) return (int)i;
     return P.loading;
 }
 
@@ -189,23 +189,29 @@ static bool ini_enabled(const char* name, bool* out) { // <project>/Config/Plugi
     return found;
 }
 
-typedef struct { const char* root; bool project; } ScanCtx;
+typedef struct { const char* root; bool project; uint32_t got[PLUGINS_MAX]; uint32_t ngot; } ScanCtx;
 
 static void scan_one(void* user, const ReDirEntry* de) {
-    const ScanCtx* c = user;
+    ScanCtx* c = user;
     const char* entry = de->name;
-    if (!de->is_dir || P.n >= PLUGINS_MAX || entry[0] == '.') return;
+    uint32_t at = P.n; // (2026-11-25) an unloaded plugin's slot first (a closed project's)
+    for (uint32_t i = 0; i < P.n; i++)
+        if (P.p[i].unloaded) {
+            at = i;
+            break;
+        }
+    if (!de->is_dir || at >= PLUGINS_MAX || entry[0] == '.') return;
     char path[900];
     snprintf(path, sizeof path, "%s/%s/plugin.json", c->root, entry);
     size_t len;
     char* text = read_text(path, &len);
     if (!text) return;
     for (uint32_t i = 0; i < P.n; i++) // (the project's copy wins over the engine's of the same name)
-        if (!strcmp(P.p[i].name, entry)) {
+        if (!P.p[i].unloaded && !strcmp(P.p[i].name, entry)) {
             free(text);
             return;
         }
-    PluginInfo* p = &P.p[P.n];
+    PluginInfo* p = &P.p[at];
     memset(p, 0, sizeof *p);
     snprintf(p->name, sizeof p->name, "%s", entry);
     snprintf(p->dir, sizeof p->dir, "%s/%s", c->root, entry);
@@ -219,6 +225,7 @@ static void scan_one(void* user, const ReDirEntry* de) {
         snprintf(p->version, sizeof p->version, "%s", json_get_str(r, "VersionName", "1.0"));
         snprintf(p->author, sizeof p->author, "%s", json_get_str(r, "CreatedBy", ""));
         snprintf(p->category, sizeof p->category, "%s", json_get_str(r, "Category", "Other"));
+        snprintf(p->icon, sizeof p->icon, "%s", json_get_str(r, "Icon", ""));
         snprintf(p->description, sizeof p->description, "%s", json_get_str(r, "Description", ""));
         snprintf(p->module, sizeof p->module, "%s", json_get_str(r, "Module", entry));
         def = json_get_bool(r, "EnabledByDefault", true);
@@ -237,7 +244,48 @@ static void scan_one(void* user, const ReDirEntry* de) {
             if ((s == force || s[-1] == ',') && (s[nl] == 0 || s[nl] == ',')) en = true;
     }
     p->enabled = p->enabled_at_start = en;
-    P.n++;
+    if (at == P.n) P.n++;
+    c->got[c->ngot++] = at;
+}
+
+// A plugin's functions, ticks and menu items dropped (a failed init, its project closed)
+static void drop_registrations(uint32_t i) {
+    uint32_t k = 0;
+    for (uint32_t j = 0; j < P.nf; j++)
+        if (P.f[j].plugin != i) P.f[k++] = P.f[j];
+    P.nf = k, P.p[i].nfuncs = 0;
+    k = 0;
+    for (uint32_t j = 0; j < P.nticks; j++)
+        if (P.ticks[j].plugin != i) P.ticks[k++] = P.ticks[j];
+    P.nticks = k, k = 0, P.p[i].nticks = 0;
+    for (uint32_t j = 0; j < P.nmenus; j++)
+        if (P.menus[j].plugin != i) P.menus[k++] = P.menus[j];
+    P.nmenus = k, P.p[i].nmenus = 0;
+}
+
+// (2026-11-25, bug-fixer) The closed project's plugins: their shutdown, then nothing of them left registered (their
+// nodes, ticks and menu items went on in the next project before). The slot stays, unloaded (the built-ins' indices
+// don't move; the next scan reuses it); the DLL stays mapped as at the editor's close (a thread of its own may still
+// run in it). The Blueprints and scripts compile again after (editor_open_project): none calls into it
+static void unload_project_plugins(void) {
+    for (uint32_t i = 0; i < P.n; i++) {
+        PluginInfo* p = &P.p[i];
+        if (!p->project || p->unloaded) continue;
+        if (p->loaded && p->shutdown && !p->faulted) {
+#ifdef _MSC_VER
+            __try {
+                p->shutdown();
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                printf("[RealEngine] Plugin %s: its shutdown crashed\n", p->name);
+            }
+#else
+            p->shutdown();
+#endif
+        }
+        drop_registrations(i);
+        printf("[RealEngine] Plugin %s (the closed project's) unloaded\n", p->name);
+        p->unloaded = true, p->loaded = false, p->enabled = p->enabled_at_start = false, p->shutdown = NULL;
+    }
 }
 
 static void load_one(uint32_t i) {
@@ -278,18 +326,7 @@ static void load_one(uint32_t i) {
     p->load_ms = (re_time_seconds() - t0) * 1000.0;
     if (rc != 0) {
         snprintf(p->error, sizeof p->error, rc == -2 ? "its init crashed" : "its init returned %d", rc);
-        // (what it registered stays out: its functions, ticks and menus dropped)
-        uint32_t k = 0;
-        for (uint32_t j = 0; j < P.nf; j++)
-            if (P.f[j].plugin != i) P.f[k++] = P.f[j];
-        P.nf = k, p->nfuncs = 0;
-        k = 0;
-        for (uint32_t j = 0; j < P.nticks; j++)
-            if (P.ticks[j].plugin != i) P.ticks[k++] = P.ticks[j];
-        P.nticks = k, k = 0;
-        for (uint32_t j = 0; j < P.nmenus; j++)
-            if (P.menus[j].plugin != i) P.menus[k++] = P.menus[j];
-        P.nmenus = k;
+        drop_registrations(i); // (what it registered stays out)
         dll_close(p->dll), p->dll = NULL, p->shutdown = NULL;
         return;
     }
@@ -312,20 +349,51 @@ static void builtin_refresh(void) {
         snprintf(p->version, sizeof p->version, "%s", RE_VERSION_STRING);
         snprintf(p->author, sizeof p->author, "Rivora Engine");
         snprintf(p->category, sizeof p->category, "Gameplay");
+        snprintf(p->icon, sizeof p->icon, "gamepad");
         snprintf(p->description, sizeof p->description,
                  "The ready-made game modules: Health and damage, Inventory and items, Interaction (doors, chests, levers), "
                  "Pause Menu and Options, Save Progress and checkpoints, Dialogue, Quests, Game Rules, Abilities and effects, "
                  "the modular HUD. Off: their nodes, components, actors and assets leave the menus.");
-        p->builtin = p->loaded = true;
+        p->builtin = p->loaded = p->builtin_default = true;
         i = (int)P.n++;
     }
+    for (uint32_t k = 0; k < P.n; k++) { // (every built-in: this project's choice, else its default)
+        PluginInfo* b = &P.p[k];
+        if (!b->builtin) continue;
+        bool on = b->builtin_default;
+        ini_enabled(b->name, &on);
+        b->enabled = b->enabled_at_start = on;
+    }
     if (i < 0) return;
-    bool en = true;
-    ini_enabled(PLUGIN_GAMEPLAY, &en);
-    P.p[i].enabled = P.p[i].enabled_at_start = en;
+    bool en = P.p[i].enabled;
     if (g_gameplay != en || !en) printf("[RealEngine] Plugin %s (built-in): %s\n", PLUGIN_GAMEPLAY, en ? "on" : "off");
     g_gameplay = en;
 }
+
+int plugins_add_builtin(const char* name, const char* friendly, const char* category, const char* icon, const char* author,
+                        const char* description, bool on_default) {
+    if (!name || !name[0]) return -1;
+    for (uint32_t k = 0; k < P.n; k++)
+        if (!strcmp(P.p[k].name, name)) return (int)k;
+    if (P.n >= PLUGINS_MAX) return -1;
+    PluginInfo* p = &P.p[P.n];
+    memset(p, 0, sizeof *p);
+    snprintf(p->name, sizeof p->name, "%s", name);
+    snprintf(p->friendly, sizeof p->friendly, "%s", friendly && friendly[0] ? friendly : name);
+    snprintf(p->version, sizeof p->version, "%s", RE_VERSION_STRING);
+    snprintf(p->author, sizeof p->author, "%s", author ? author : "");
+    snprintf(p->category, sizeof p->category, "%s", category && category[0] ? category : "Other");
+    snprintf(p->icon, sizeof p->icon, "%s", icon ? icon : "");
+    snprintf(p->description, sizeof p->description, "%s", description ? description : "");
+    p->builtin = p->loaded = true;
+    p->builtin_default = on_default;
+    bool on = on_default;
+    ini_enabled(p->name, &on);
+    p->enabled = p->enabled_at_start = on;
+    return (int)P.n++;
+}
+
+bool plugins_builtin_on(int i) { return i >= 0 && (uint32_t)i < P.n && P.p[i].builtin && P.p[i].enabled; }
 
 void plugins_init(const char* project_dir, bool editor) {
     // Once for the engine's plugins (and the project's when given); called again with a project (opened later): that
@@ -351,6 +419,7 @@ void plugins_init(const char* project_dir, bool editor) {
         return;
     }
     if (project_dir && project_dir[0] && strcmp(P.project, project_dir)) {
+        unload_project_plugins(); // (2026-11-25) the last project's first
         snprintf(P.project, sizeof P.project, "%s", project_dir);
         snprintf(dir, sizeof dir, "%s/Plugins", P.project);
         plugins_load_folder(dir, true);
@@ -403,12 +472,13 @@ uint32_t plugin_count(void) { return P.n; }
 const PluginInfo* plugin_at(uint32_t i) { return i < P.n ? &P.p[i] : NULL; }
 
 void plugin_set_enabled(uint32_t i, bool enabled) {
-    if (i >= P.n || !P.project[0]) return;
-    P.p[i].enabled = enabled;
-    if (P.p[i].builtin) { // (part of the engine: at once)
-        P.p[i].enabled_at_start = enabled;
+    if (i >= P.n) return;
+    if (P.p[i].builtin) { // (part of the engine: at once; without a project only for this run)
+        P.p[i].enabled = P.p[i].enabled_at_start = enabled;
         if (!strcmp(P.p[i].name, PLUGIN_GAMEPLAY)) g_gameplay = enabled;
     }
+    if (!P.project[0]) return;
+    P.p[i].enabled = enabled;
     char dir[800], path[900];
     snprintf(dir, sizeof dir, "%s/Config", P.project);
     re_make_dirs(dir);
@@ -507,8 +577,10 @@ void plugin_fn_spec(int fi, bool exec, char* out, size_t cap) {
 
 // (the tests, a plugin built meanwhile) every plugin under root not yet known, loaded
 uint32_t plugins_load_folder(const char* root, bool project) {
-    uint32_t first = P.n;
-    re_dir_walk(root, scan_one, &(ScanCtx){ root, project });
-    for (uint32_t i = first; i < P.n; i++) load_one(i);
-    return P.n - first;
+    static ScanCtx c; // (the slots scanned: new or an unloaded one reused)
+    memset(&c, 0, sizeof c);
+    c.root = root, c.project = project;
+    re_dir_walk(root, scan_one, &c);
+    for (uint32_t k = 0; k < c.ngot; k++) load_one(c.got[k]);
+    return c.ngot;
 }

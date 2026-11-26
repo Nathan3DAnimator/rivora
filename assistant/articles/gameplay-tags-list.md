@@ -1,6 +1,6 @@
 id: gameplay-tags-list
 kind: recipe
-title: Lista de tags do projeto e achar atores por tag | The project's tag list and finding actors by tag
+title: Lista de tags do projeto e achar atores por tag | The project's tag list and finding actors by tag | Lista de Gameplay Tags del proyecto
 keys: lista de tags, tag list, gameplay tag list, project settings gameplay tags, renomear tag, rename tag, apagar tag, seletor de tag, tag picker, escolher tag, get all actors with tag, get all actors with gameplay tag, achar atores por tag, find actors by tag, todos os inimigos, all enemies, atores com tag, defaulgameplaytags, defaultgameplaytags.ini
 --- pt
 As tags ficam numa **lista do projeto**, como na Unreal: **Project Settings > Gameplay Tags** (arquivo `Config/DefaultGameplayTags.ini`).
@@ -32,6 +32,28 @@ Tags live in a **project list**, like Unreal's: **Project Settings > Gameplay Ta
 
 ```diagram steps
 Project Settings > Gameplay Tags | Add Enemy, Enemy.Boss | Details > Gameplay Tags: pick | Get All Actors with Gameplay Tag (Enemy)
+```
+```blueprint
+Event BeginPlay -> Get All Actors with Gameplay Tag ( Gameplay Tag = "Enemy", Exact Match = false ) -> For Each Loop ( Out Actors ) -> Print String ( Get Display Name )
+```
+```real
+class Counter extends Actor
+    var total = 0
+
+    event BeginPlay()
+        var enemies = GetAllActorsWithGameplayTag("Enemy", false)
+        for e in enemies
+            total += 1
+        print("enemies: {total}")
+```
+--- es
+Las etiquetas viven en una **lista del proyecto**, como en Unreal: **Project Settings > Gameplay Tags** (el archivo `Config/DefaultGameplayTags.ini`).
+- **Add New Gameplay Tag** (`Enemy.Boss`), **Add Sub-tag** en una fila, **Rename** (también renombra las que están debajo y las de los actores del nivel) y **x** la borra de la lista. **Add the Level's Tags** trae las que los actores ya usan.
+- En **Detalles** y en los pines de los nodos de etiqueta, la etiqueta se elige en un **selector con búsqueda y el árbol**; escribir un nombre nuevo lo añade a la lista.
+- Para encontrar actores: **Get All Actors with Gameplay Tag** (la etiqueta o una de debajo; **Exact Match** solo el mismo nombre) y **Get All Actors with Tag** (exactamente ese nombre). Ambos leen solo los actores con el componente Gameplay Tags. Llámalo una vez (BeginPlay) y guarda el array.
+
+```diagram steps
+Project Settings > Gameplay Tags | Añade Enemy, Enemy.Boss | Detalles > Gameplay Tags: elegir | Get All Actors with Gameplay Tag (Enemy)
 ```
 ```blueprint
 Event BeginPlay -> Get All Actors with Gameplay Tag ( Gameplay Tag = "Enemy", Exact Match = false ) -> For Each Loop ( Out Actors ) -> Print String ( Get Display Name )

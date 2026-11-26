@@ -1,6 +1,6 @@
 id: vehicle-from-mesh
 kind: recipe
-title: Veículo a partir do seu modelo importado | A vehicle from your imported model
+title: Veículo a partir do seu modelo importado | A vehicle from your imported model | Crear un vehículo a partir de un modelo importado
 keys: veiculo da minha malha, vehicle from mesh, carro importado, imported car, meu modelo, my model, criar veiculo, make vehicle, malha importada, imported mesh, rodas, wheels, carroceria, body, roda nao gira, wheel not spinning, fbx carro, gltf carro, car model, modelo de carro, transformar em veiculo, turn into vehicle, converter em carro
 --- pt
 ```diagram steps
@@ -38,3 +38,21 @@ If the car drives sideways, the model's front isn't +X: in **Actor > Make Vehicl
 Event BeginPlay -> Enter Vehicle ( MyCar )
 ```
 See also [Vehicles](article:vehicles) and [Vehicle parts](article:vehicle-parts).
+--- es
+```diagram steps
+Importa el modelo (FBX, glTF, OBJ, .tlend) y arrástralo al nivel | Selecciona sus piezas: carrocería, ruedas y puertas | Actor > Make Vehicle from Selected > Car (u otro tipo) | Jugar (Alt+P): conduce al instante (W/S, A/D, Space)
+```
+## Cómo funciona
+No hay que construir nada a mano. Selecciona las piezas de tu modelo en el nivel y usa **Actor > Make Vehicle from Selected** (o el botón **Make Vehicle...** en los Detalles de una malla):
+- La pieza **más grande** se convierte en la **carrocería** (la caja de colisión y el centro de masa salen de su tamaño).
+- Las **ruedas** se encuentran por sus nombres (*wheel, tire, roda, pneu, rueda...*) o, sin nombre, por su forma (redonda, baja). Se miden el radio, el ancho y el lugar de cada una; la suspensión, el neumático, la dirección y la tracción vienen de la plantilla del tipo elegido (las ruedas delanteras giran, las traseras tiran).
+- Las **puertas** (*door, porta, puerta*) giran sobre su borde delantero (F abre). Todo lo demás va sobre la carrocería.
+- ¿Un modelo de una sola pieza (ruedas dentro de la carrocería)? Las ruedas se colocan bajo las esquinas, invisibles: el coche conduce igual.
+
+El vehículo nuevo tiene **Auto Possess** activado: pulsa Jugar y conduce. Su asset va a `Content/Vehicles`; haz doble clic para ajustar **Your Model** (malla de la carrocería, desplazamiento, giro, **Fit to Body Mesh**) y la **Mesh** de cada pieza.
+
+Si el coche conduce de lado, el frente del modelo no es +X: en **Actor > Make Vehicle from Selected > Front** elige +X, -X, +Y o -Y y hazlo de nuevo (o cambia el **Body Turn** del asset).
+```blueprint
+Event BeginPlay -> Enter Vehicle ( MyCar )
+```
+Consulta también [Vehículos](article:vehicles) y [Piezas de vehículo](article:vehicle-parts).

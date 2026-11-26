@@ -1,6 +1,6 @@
 id: physics
 kind: howto
-title: Física | Physics
+title: Física | Physics | Física
 keys: fisica, cair, gravidade, colisao, empurrar, caixa caindo, simulate physics, impulso, explosao, quebrar
 --- pt
 - Selecione o ator e ligue **Simulate Physics** no Details: ele cai, colide e rola.
@@ -12,3 +12,8 @@ keys: fisica, cair, gravidade, colisao, empurrar, caixa caindo, simulate physics
 - Pushes from code: `AddImpulse(...)`; explosions: `AddRadialImpulse(...)`.
 - Gravity and the simulation steps are in Project Settings. [Open them](open:project)
 - The **Physics** project template has a ready example.
+--- es
+- Selecciona el actor y activa **Simulate Physics** en Detalles: cae, colisiona y rueda.
+- Empujones desde código: `AddImpulse(...)`; explosiones: `AddRadialImpulse(...)`.
+- La gravedad y los pasos de la simulación están en Project Settings. [Abrirlos](open:project)
+- La plantilla de proyecto **Physics** tiene un ejemplo listo.

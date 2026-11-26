@@ -8,7 +8,7 @@ física, animação, áudio, multiplayer com Steam, VR e exportação para Andro
 
 *A free, open source game engine made for games, written from scratch in C11 and Vulkan 1.3. English below.*
 
-- **Site e doações:** https://createanimateplay.nathan3danimator.workers.dev
+- **Site e doações:** https://nathan3dstudio.com
 - **Apoiar:** [GitHub Sponsors](https://github.com/sponsors/Nathan3DAnimator) ou a seção de doação do site
 - **Downloads:** a página de releases (o editor também se atualiza sozinho, com o pacote assinado)
 - **Licença:** MIT (veja `LICENSE`). Os jogos feitos com a Rivora Engine são seus: venda à vontade, sem royalties.
@@ -64,7 +64,7 @@ As notas de desenvolvimento de cada área estão em `notas-dev/` (o índice est�
 full editor: visual Blueprints, scripting in four languages, real-time global illumination, physics, animation, audio,
 Steam multiplayer, VR and Android export.
 
-- **Website and donations:** https://createanimateplay.nathan3danimator.workers.dev
+- **Website and donations:** https://nathan3dstudio.com
 - **Support:** [GitHub Sponsors](https://github.com/sponsors/Nathan3DAnimator) or the website's donation section
 - **License:** MIT (see `LICENSE`). Games made with the Rivora Engine are yours: sell them freely, no royalties.
 - **Build:** Visual Studio 2022, the Vulkan SDK 1.3 and Python 3; see the commands above.

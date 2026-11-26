@@ -119,8 +119,13 @@ layout(set = 0, binding = 20) uniform sampler2D u_aerial;
 float ap_slice_km(float s) { float x = (s + 1.0) / float(AP_RES); return AP_MAX_KM * x * x; }
 
 // For a point seen at ndc, dist_cm away: rgb in-scattered light (lux of the frame's sun applied), a transmittance
+// (2026-11-25, item 19: the sky's blue inside the procedural facility's closed rooms, 4 of their 5 nits) Unreal's Aerial
+// Perspective Start Depth (0.1 km, its default): no air's light in the first 100 m. The froxels know no walls, and the
+// first slice (62.5 m) read through its square root gave a point 10 m away 40% of it, in every room of every interior
+#define AP_START_KM 0.1
 vec4 aerial_perspective(FrameBuf f, vec2 ndc, float dist_cm) {
-    float km = dist_cm * 1e-5 * f.sun_illuminance.w;
+    float km = max(dist_cm * 1e-5 - AP_START_KM, 0.0) * f.sun_illuminance.w;
+    if (km <= 0.0) return vec4(0.0, 0.0, 0.0, 1.0);
     float w = sqrt(clamp(km / AP_MAX_KM, 0.0, 1.0)) * float(AP_RES) - 1.0; // the slice index (fraction)
     vec2 uv = clamp((ndc * 0.5 + 0.5) * float(AP_RES), vec2(0.5), vec2(float(AP_RES) - 0.5)); // inside the slice
     vec2 size = vec2(float(AP_RES * AP_RES), float(AP_RES));

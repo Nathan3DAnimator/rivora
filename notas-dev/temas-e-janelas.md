@@ -100,7 +100,18 @@ Organizador, layouts salvos, e o X da janela maximizada fechando só a janela (f
   horizontal) e confere onde ela acoplou; depois, já janela própria e maximizada, fecha pelo X, pelo sistema
   (WM_CLOSE) e por um fechamento que chegou à principal: a janela fecha e a engine segue. Em segundo plano a janela
   própria fica fora da tela; visível, ela é maximizada de verdade e o teste confere que nasceu não maximizada e que
-  ocupou a área de trabalho. `REALENGINE_DOCK_DEBUG=1` mostra cada passo.
+  ocupou a área de trabalho. `REALENGINE_DOCK_DEBUG=1` mostra cada passo (com o foco do sistema e o mouse antes de
+  cada arraste).
+- **Por que o `dock_targets` falhou na suíte da 0.45 (20/11)**: o encaixe e o layout novo estavam certos; eram duas
+  causas no teste. (1) Os testes faziam a checagem de atualização (o comentário dizia que não; só o `--bench` a
+  pulava): um build mais velho que a release publicada (o `RE_VERSION_STRING` velho no cache do build principal, a
+  base de um A/B) abria a janela Atualizações no meio e os 12 estágios falhavam. Mesmo executável: 15/15 com
+  `REALENGINE_NO_UPDATE_CHECK=1`, 12 falhas sem. Agora todo ctest recebe a variável (`tools/suite_areas.cmake`).
+  (2) Falhas soltas de um alvo ou do clique duplo quando uma janela da engine pegava o foco do Windows: o backend
+  GLFW punha o cursor real nos quadros de espera e uma perda de foco (um clique em outro programa, a janela de outra
+  sessão) soltava os botões do ImGui no meio do arraste. Agora o teste é o dono da fila de entrada enquanto roda
+  (`drop_os_input`: mouse, teclado e foco do sistema descartados antes dos eventos dele). Prova: uma perda de foco
+  injetada no meio de cada arraste derrubava os 11 alvos sem o filtro e nenhum com ele. Custo: nenhum fora do teste.
 
 ## Medidas (RTX 3060, 2560x1417, `REALENGINE_BACKGROUND=1`)
 Antes = `main` a3bd783 (tema fixo da Unreal, layout fixo), depois = este branch (Órbita Escuro, DockSpace). Melhor de 3
@@ -263,3 +274,43 @@ Pedido: "usar o azul do R como base de todo o estilo". A seleção dos nós no M
 Tree, o widget selecionado no Designer do UMG e o estilo de grafo atual nas Preferências passaram de laranja para
 `TK_ACCENT` (o azul #2B6FE3 do Azul Real; em outro tema, o acento dele). O contorno de seleção na viewport 3D segue
 laranja (convenção da Unreal, contrasta com a interface azul).
+
+## Item 9: a janela Editores e as janelas soltas como as da Unreal (2026-11-25, pedido do usuário)
+Antes: cada editor de asset era uma janela ImGui solta e única por tipo (um Material só: abrir outro trocava o primeiro);
+arrastada para fora virava uma janela do GLFW **sem dono**: um clique no editor a jogava para trás dele (o Material do
+outro lado da tela "sumia"), cada uma tinha botão na barra de tarefas, e o swapchain dela pedia MAILBOX (o FIXME do
+backend: metade do fps com uma 2ª janela).
+- **Janelas com dono** (`ui_viewports.c`): o `Platform_CreateWindow` do backend embrulhado em `src/` (o `external/`
+  intocado) faz `SetWindowLongPtrW(GWLP_HWNDPARENT, <janela principal>)` antes de mostrar a janela; `io.ConfigViewports`
+  `NoTaskBarIcon` ligado, `NoDefaultParent` desligado, `ConfigDpiScaleFonts`/`Viewports` (o monitor de outro DPI).
+  `NoAutoMerge` ficou **desligado**: ligado, toda janela solta virava janela do sistema mesmo sobre o editor e os
+  arrastos do dock_test não acoplavam em nada (11 alvos falharam); sobre o editor ela é desenhada dentro dele (acima
+  dele de qualquer jeito). O `Renderer_CreateWindow` embrulhado escolhe o present das secundárias
+  (`REALENGINE_VP_PRESENT=fifo|mailbox|immediate`; refaz o swapchain uma vez se mudar). **Padrão: mailbox**, medido:
+  FIFO prendia o editor inteiro na taxa do monitor (437 -> 165 fps com 2 janelas soltas), mailbox 458 -> 391. Elas
+  continuam em SDR (`SRGB_NONLINEAR`, o pedido do backend).
+- **Janela Editores** (`editor_host.c`): uma janela com um DockSpace (`rivora_editors_dockspace`) desenhada antes dos
+  editores (editor.c) enquanto tem documento; cada editor chama `edhost_doc(&flag)` antes do `igBegin` (a classe
+  comum `RivoraAssetEditor`, `DockingAllowUnclassed`) e, ao abrir, entra nela como aba (`SetNextWindowDockID`). Entram
+  o Grafo (Blueprint), o Material, o visualizador, o Persona e as Partículas; Sequencer, Diálogo, Missão etc. seguem
+  janelas próprias. A primeira vez ela ocupa o retângulo do viewport (o visual do Q26).
+- **Material com várias instâncias** (`mat_editor.c`): `MatEd g_med[4]`, `E` é a que desenha (`g_me`); cada uma com a
+  câmera do preview, a chave da GPU (`BP_PV_KEY_MATERIAL` e `0x230 + slot`) e os caches que eram `static` de função
+  (seleção, UDIM, quadros animados). O visualizador e o Persona seguem únicos: o preview deles é o `AssetViewport`
+  compartilhado (multi-instância = mais alvos do `render_preview`, `PV_MAX` 8).
+  **Limitação conhecida**: um visualizador (Static Mesh/Textura) e um Persona de cada vez. Cada um fica ao lado dos
+  outros tipos na janela Editores, mas abrir uma segunda malha troca a que estava aberta.
+- **Fechar**: a troca de projeto e o fechar usam o `editor_docs.c` (bug-fixer); o layout do projeto
+  (`Saved/Layout.rlayout`) ganhou `[RealEngine][Documents]` com `open=/Content/...` (Grafos, Materiais, visualizador)
+  e reabre os que ainda existem; o layout é salvo antes da troca. Layouts com nome não levam documentos.
+- O Grafo de classe não usa mais o lugar do Q26 quando vai para a janela Editores (`SetNextWindowPos` desacopla a janela
+  no ImGui: `w->placed = 4`); a própria Editores toma aquele lugar.
+- **Teste**: `dock_targets` estendido (`dock_test_docs.c`): Grafo + Material abas de uma janela; 3 janelas próprias
+  (a Editores, o Material solto, a do teste) com `GW_OWNER` = a principal e o present pedido; a principal levantada
+  (`SetWindowPos HWND_TOP` sem ativar) e elas continuam acima; fps com 0 e com 3; troca de projeto com 0 documentos,
+  0 janelas e 0 erros de validação (os "imagem não adquirida" de cada janela solta vinham do próprio backend do ImGui:
+  `ImGui_ImplVulkanH_CreateOrResizeWindow` fazia a transição das imagens sem acquire; consertado pelo bug-fixer com a
+  marca [Real Engine] em imgui_impl_vulkan.cpp); o editor fecha com 2 janelas soltas e nenhuma sobra (`dock_test_after_shutdown`).
+  `--open-asset "a;b"` abre vários (as fotos).
+- **Medidas** (RTX 3060, 2560x1417, 2º monitor, `dock_targets`): sem janela solta 469-597 fps (1,7-2,1 ms); com 3
+  janelas soltas (mailbox) 393 fps (2,54 ms): +0,4-0,8 ms, o swapchain e o desenho de cada uma. FIFO: 165 fps.

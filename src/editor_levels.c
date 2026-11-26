@@ -3,6 +3,7 @@
 // new actors go), a Lighting Level or not. Lighting Levels stack: Build Lighting bakes the persistent level's lights,
 // then each lighting level's alone, and what is shown is the sum of the visible ones (Unreal's Lighting Scenarios: one).
 #include "editor.h"
+#include "ui_number.h" // (2026-11-25, item 20: a typed value past the slider is kept)
 
 #include "theme.h"
 #include <stdio.h>
@@ -654,7 +655,7 @@ static int level_card(Editor* ed, int slot, size_t actors, bool can, double now)
             igTextDisabled("%s", TR("Blend")); // (2026-11-19: inside the slider the grab covered the word)
             igSameLine(0, 4);
             igSetNextItemWidth(fs * 4.5f);
-            if (igDragFloat("##lvlblend", &s->weight, 0.01f, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) { // (a drag: a slider's grab covered the number)
+            if (ui_num_float("##lvlblend", &s->weight, 0.01f, 0.0f, 2.0f, 0.0f, 3.4e38f, "%.2f", 0)) { // (a drag: a slider's grab covered the number)
                 ed->dirty = true;
                 sublevels_apply_weight(&ed->world, s);
             }

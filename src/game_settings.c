@@ -6,8 +6,11 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #endif
+#include "loc.h" // (2026-11-24) the game's localization: the Culture setting
 #include "game_settings.h"
 #include "upscale.h"
+#include "upscale_vendor.h"
+#include "trace.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -110,26 +113,22 @@ void gus_default_path(const char* game_name, bool packaged, char* out, size_t ca
 
 static const char* const g_names[] = { "Scalability", "Resolution", "WindowMode", "VSync", "FrameRateLimit", "ResolutionScale",
                                        "MasterVolume", "MusicVolume", "SFXVolume", "VoiceVolume", "MouseSensitivity", "InvertY",
-                                       "Language", "AutoSave", "UpscalingMode", "DynamicResolution", "Upscaler" };
-enum { N_SCAL = 0, N_RES, N_WIN, N_VSYNC, N_FPS, N_RSCALE, N_VOL0, N_VOL1, N_VOL2, N_VOL3, N_SENS, N_INV, N_LANG, N_AUTOSAVE, N_UPMODE, N_DYNRES, N_UPS, N_COUNT };
+                                       "Language", "AutoSave", "UpscalingMode", "DynamicResolution", "Upscaler", "Culture" };
+enum { N_SCAL = 0, N_RES, N_WIN, N_VSYNC, N_FPS, N_RSCALE, N_VOL0, N_VOL1, N_VOL2, N_VOL3, N_SENS, N_INV, N_LANG, N_AUTOSAVE, N_UPMODE, N_DYNRES, N_UPS, N_CULTURE, N_COUNT };
 // (4.4a) the Upscaler's choices: the project's, then each one that can run here (its runtime installed, its GPU)
 static int ups_choices(int* kinds) {
     int n = 0;
     kinds[n++] = -1;
-    for (int k = 0; k < UPS_COUNT; k++)
-        if (upscale_available(k, NULL)) kinds[n++] = k;
+    for (int k = 0; k < UPS_COUNT; k++) // (2026-11-25: never waits: a vendor still being checked is listed once it answered)
+        if (k == UPS_TSR ? upscale_available(k, NULL) : ups_vendor_usable_nowait(k, NULL, NULL)) kinds[n++] = k;
     return n;
 }
 // (Q22) the Upscaler combo's choices asked once while loading (Play, the packaged game's start): the first ask loads
 // each vendor's runtime and starts NGX (~1.4 s), which happened in the frame that first drew the Options (pause_options:
-// a 1.4 s frame, 128 fps measured instead of 650). Later asks are the cached answers
-void gus_warm(void) {
-    int kinds[UPS_COUNT + 1];
-    double t0 = re_time_seconds();
-    int n = ups_choices(kinds);
-    double ms = (re_time_seconds() - t0) * 1000.0;
-    if (ms > 5.0) printf("[RealEngine] Game User Settings: the upscalers asked while loading (%d choices, %.0f ms)\n", n, ms);
-}
+// a 1.4 s frame, 128 fps measured instead of 650). Later asks are the cached answers. (2026-11-25, bug-fixer) asked on a
+// thread of their own: the Play's first frame waited for them (1224 ms in the UI sweep); the Options' combo waits only
+// if it is drawn before they answer (upscale_vendor.c)
+void gus_warm(void) { ups_vendor_warm_async(); }
 uint32_t gus_setting_count(void) { return N_COUNT; }
 const char* gus_setting_name(uint32_t i) { return i < N_COUNT ? g_names[i] : ""; }
 static int name_id(const char* n) {
@@ -267,6 +266,7 @@ bool gus_get(const char* name, float* value, char* text, size_t cap) {
     case N_DYNRES: v = s->dyn_res ? 1.0f : 0.0f; break;
     case N_UPS: v = (float)s->upscaler; break;
     case N_LANG: v = (float)s->language, snprintf(t, sizeof t, "%s", s->language >= 0 ? i18n_language_code(s->language) : "auto"); break;
+    case N_CULTURE: v = 0.0f, snprintf(t, sizeof t, "%s", s->culture); break; // (2026-11-24)
     default: {
         char action[GUS_NAME], from[GUS_NAME];
         bool gp;
@@ -333,6 +333,7 @@ bool gus_set(const char* name, float value, const char* text) {
         if (has_text) s->language = !_stricmp(text, "auto") || !_stricmp(text, "system") ? -1 : i18n_language_from_code(text);
         else s->language = value < 0.0f || value >= LANG_COUNT ? -1 : (int)value;
         break;
+    case N_CULTURE: snprintf(s->culture, sizeof s->culture, "%s", has_text ? text : ""); break; // (2026-11-24, loc.h)
     default: {
         char action[GUS_NAME], from[GUS_NAME];
         bool gp;
@@ -385,10 +386,17 @@ bool gus_options(const char* name, char* out, size_t cap) {
         for (int i = 0; i < n; i++) ADD(kinds[i] < 0 ? tr_lang("Project Default", lang) : upscale_kind_name(kinds[i]));
         return true;
     }
-    case N_LANG:
+    case N_LANG: {
+        const char* cs[LOC_MAX_CULTURES + 1];
+        int nc = loc_cultures(cs, LOC_MAX_CULTURES + 1);
+        if (nc > 1) { // (2026-11-24) the project's cultures (its localization): what the game is translated to
+            for (int i = 0; i < nc; i++) ADD(loc_culture_name(cs[i]));
+            return true;
+        }
         ADD(tr_lang("System", lang));
         for (int i = 0; i < LANG_COUNT; i++) ADD(i18n_language_name(i));
         return true;
+    }
     default: return false;
     }
 #undef ADD
@@ -420,7 +428,16 @@ int gus_option_index(const char* name) {
             if (r[i][0] == w && r[i][1] == h) return i;
         return 0;
     }
-    case N_LANG: return s->language + 1;
+    case N_LANG: {
+        const char* cs[LOC_MAX_CULTURES + 1];
+        int nc = loc_cultures(cs, LOC_MAX_CULTURES + 1);
+        if (nc > 1) { // (2026-11-24) the culture's place in the list (none: the native, first)
+            for (int i = 0; i < nc; i++)
+                if (!_stricmp(cs[i], s->culture)) return i;
+            return 0;
+        }
+        return s->language + 1;
+    }
     default: return -1;
     }
 }
@@ -441,7 +458,16 @@ bool gus_set_option(const char* name, int k) {
         snprintf(b, sizeof b, "%dx%d", r[k][0], r[k][1]);
         return gus_set(name, 0.0f, b);
     }
-    case N_LANG: return gus_set(name, (float)(k - 1), NULL);
+    case N_LANG: {
+        const char* cs[LOC_MAX_CULTURES + 1];
+        int nc = loc_cultures(cs, LOC_MAX_CULTURES + 1);
+        if (nc > 1) { // (2026-11-24) a culture: the game's texts; the engine's own (menus) follow when it is English, Portuguese or Spanish
+            if (k >= nc) return false;
+            gus_set("Culture", 0.0f, cs[k]);
+            return gus_set(name, !_strnicmp(cs[k], "pt", 2) ? (float)LANG_PT_BR : !_strnicmp(cs[k], "es", 2) ? (float)LANG_ES : !_strnicmp(cs[k], "en", 2) ? (float)LANG_EN : -1.0f, NULL);
+        }
+        return gus_set(name, (float)(k - 1), NULL);
+    }
     default: return false;
     }
 }
@@ -585,9 +611,11 @@ void gus_apply_live(void) {
     bool video = a.scalability != S.applied.scalability || a.res_scale != S.applied.res_scale || a.frame_limit != S.applied.frame_limit ||
                  a.upscale_mode != S.applied.upscale_mode || a.dyn_res != S.applied.dyn_res || a.upscaler != S.applied.upscaler;
     bool lang = a.language != S.applied.language;
+    bool culture = strcmp(a.culture, S.applied.culture) != 0;
     S.applied = a;
     if (video && S.host.apply_video) S.host.apply_video(&S.applied, false);
     if (lang && S.host.global_language) i18n_set_language(gus_language());
+    if (culture) loc_switch(S.applied.culture); // (2026-11-24) the project's localization, live
     S.serial++;
 }
 
@@ -596,15 +624,17 @@ void gus_apply(bool save) {
     bool display = S.cur.res_w != S.applied.res_w || S.cur.res_h != S.applied.res_h || S.cur.window_mode != S.applied.window_mode ||
                    S.cur.vsync != S.applied.vsync;
     bool lang = S.cur.language != S.applied.language;
+    bool culture = strcmp(S.cur.culture, S.applied.culture) != 0 || strcmp(S.cur.culture, loc_culture()) != 0;
     audio_set_master_volume(S.cur.volume[GUS_VOL_MASTER]);
     audio_set_user_class_volume(AUDIO_CLASS_MUSIC, S.cur.volume[GUS_VOL_MUSIC]);
     audio_set_user_class_volume(AUDIO_CLASS_SFX, S.cur.volume[GUS_VOL_SFX]);
     audio_set_user_class_volume(AUDIO_CLASS_VOICE, S.cur.volume[GUS_VOL_VOICE]);
     S.applied = S.cur;
-    if (S.host.apply_video) S.host.apply_video(&S.applied, display);
-    if (S.host.global_language && (lang || display)) i18n_set_language(gus_language());
+    if (S.host.apply_video) TRACE("Apply Settings: video", S.host.apply_video(&S.applied, display));
+    if (S.host.global_language && (lang || display)) TRACE("Apply Settings: language", i18n_set_language(gus_language()));
+    if (culture && (S.applied.culture[0] || loc_active())) TRACE("Apply Settings: culture", loc_switch(S.applied.culture)); // (2026-11-24, loc.h)
     S.serial++;
-    if (save) gus_save();
+    if (save) TRACE("Apply Settings: saved", gus_save());
 }
 
 // --- The pause, Quit Game ---

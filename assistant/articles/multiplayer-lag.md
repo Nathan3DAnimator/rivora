@@ -1,6 +1,6 @@
 id: multiplayer-lag
 kind: recipe
-title: Multiplayer sem lag: perda de pacote e tiros justos | Lag-free multiplayer: packet loss and fair shots
+title: Multiplayer sem lag: perda de pacote e tiros justos | Lag-free multiplayer: packet loss and fair shots | Multijugador sin lag: pérdida de paquetes y disparos justos
 keys: lag, ping alto, high ping, packet loss, perda de pacote, travando online, online stutter, teleporte, rubber band, rubberbanding, interpolacao, interpolation, jitter, compensacao de lag, lag compensation, server rewind, tiro justo, hit registration, hitscan, acertar tiro, lag compensated trace, rede ruim, bad network, emulacao de rede, network emulation
 --- pt
 ```diagram compare
@@ -44,3 +44,24 @@ Event Fire -> Run on Server ( "ServerFire", Get Local Player Index )
 Event ServerFire -> Lag Compensated Trace ( Start, End, Get RPC Sender, 0 ) -> Branch ( Hit ) True -> Destroy Actor ( Hit Actor )
 ```
 Test on a bad network: Project Settings > Online > Network Emulation (latency, jitter, loss). See also [Multiplayer](article:multiplayer).
+--- es
+```diagram compare
+| sin el motor | con el motor
+paquete perdido, actor detenido | atascado en el lugar equivocado hasta 2 s | en el lugar correcto en ~1 ida y vuelta
+retraso de dibujo | fijo | crece con la pérdida y el jitter, sin tirones
+salto de extrapolación | da un salto brusco | se desvanece en ~0,1 s
+disparo con lag | falla a quien estaba en la mira | acierta donde el tirador vio
+```
+## Pérdida de paquetes
+Para cada jugador, el servidor guarda el último estado que ese jugador **confirmó** haber recibido. Cuando un paquete se pierde, el estado se envía de nuevo tras una ida y vuelta. Con 20 % de pérdida en ambos sentidos, todo actor está en el lugar correcto en ~0,5 s después de detenerse; antes podía tardar 2 s. Los estados también se hicieron más pequeños: 12 bytes quieto y 18 caminando, contra 21.
+
+## Lag y jitter
+El cliente dibuja a los demás un poco en el pasado. Ese retraso crece solo con la pérdida (un snapshot perdido se cubre con la interpolación) y con el jitter, y cambia lentamente. El reloj de dibujo se acelera o se frena unos pocos por ciento en lugar de dar saltos. Cuando llega un estado que contradice la extrapolación, la diferencia se desvanece en ~0,1 s en lugar de dar un salto brusco.
+
+## Disparos justos (compensación de lag)
+En el servidor, el nodo **Lag Compensated Trace** prueba el disparo contra donde el tirador **vio** a los demás jugadores: retrocede la mitad de su ping más su retraso de dibujo, hasta 1 s. Los Characters se prueban por su cápsula.
+```blueprint
+Event Fire -> Run on Server ( "ServerFire", Get Local Player Index )
+Event ServerFire -> Lag Compensated Trace ( Start, End, Get RPC Sender, 0 ) -> Branch ( Hit ) True -> Destroy Actor ( Hit Actor )
+```
+Prueba en una red mala: Project Settings > Online > Network Emulation (latencia, jitter, pérdida). Véase también [Multijugador](article:multiplayer).

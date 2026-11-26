@@ -1,6 +1,6 @@
 id: icons-tooltips
 kind: concept
-title: Ícones e dicas dos controles | Icons and control tooltips
+title: Ícones e dicas dos controles | Icons and control tooltips | Iconos y descripciones de los controles
 keys: ícone, ícones, icone, icones, icon, icons, dica, dicas, tooltip, tooltips, descrição, descricao, description, o que faz este botão, what does this button do, para que serve, atalho, atalhos, shortcut, shortcuts, f1, cor do ícone, icon color, família, familia, family, duotom, duotone, tipo de asset, asset type, selo, badge, folha de ícones, icon sheet, iconos, ayuda emergente, información sobre herramientas, atajo, sound graph, grafo de som
 --- pt
 ```diagram steps
@@ -23,13 +23,13 @@ As famílias de asset têm cores fixas (todas do tema, então mudam com ele):
 
 | Família | Cor | Exemplos |
 |---|---|---|
-| Blueprint | ciano | Blueprint, Behavior Tree, script, macro |
+| Grafo | ciano | Grafo, Behavior Tree, script, macro |
 | Material | verde | Material, Material Instance |
 | Malha | laranja | Static Mesh, Skeletal Mesh, Landscape, veículo |
 | Animação | rosa | Animation, Montage, Blend Space, Level Sequence |
 | Áudio | violeta | Sound Wave, Sound Cue, Sound Graph |
 | Efeitos | âmbar | partículas, luzes, neblina |
-| UI | azul | Widget Blueprint, tema, controles |
+| UI | azul | Widget Graph, tema, controles |
 | Dados | cinza-azulado | Structure, Enum, Data Asset, Quest, Dialogue |
 | Nível | branco | Level, atores, câmera |
 
@@ -55,14 +55,46 @@ The asset families have fixed colors (all theme colors, so they change with it):
 
 | Family | Color | Examples |
 |---|---|---|
-| Blueprint | cyan | Blueprint, Behavior Tree, script, macro |
+| Graph | cyan | Graph, Behavior Tree, script, macro |
 | Material | green | Material, Material Instance |
 | Mesh | orange | Static Mesh, Skeletal Mesh, Landscape, vehicle |
 | Animation | pink | Animation, Montage, Blend Space, Level Sequence |
 | Audio | violet | Sound Wave, Sound Cue, Sound Graph |
 | Effects | amber | particles, lights, fog |
-| UI | blue | Widget Blueprint, theme, controls |
+| UI | blue | Widget Graph, theme, controls |
 | Data | blue-gray | Structure, Enum, Data Asset, Quest, Dialogue |
 | Level | white | Level, actors, camera |
 
 The tools use the theme's accent and the engine's own commands (Play, Simulate, Compile, Package, Project) the **Ignition** orange, with the orbit as their motif. In the Content Browser the asset's kind shows as a colored **badge** in the thumbnail's corner.
+--- es
+```diagram steps
+Deja el ratón sobre un control | La descripción aparece a su lado: icono, NOMBRE, atajo | Debajo: qué hace | F1: el Asistente busca ese control
+```
+## La descripción de cada control
+Cada botón, elemento de menú, casilla, campo y pestaña del editor tiene una descripción emergente. Deja el ratón sobre él medio segundo y aparece **al lado**, nunca encima:
+- arriba, el **icono** y el **nombre** del control en negrita, con su **atajo** como una tecla a la derecha (por ejemplo `Ctrl+S`);
+- debajo, **qué hace**, en inglés, portugués o español (el idioma del editor);
+- al final, **F1: más en el Asistente**. Al pulsar **F1** con el ratón sobre el control se abre el Asistente ya buscándolo.
+
+Un campo de una fila de Detalles usa la descripción de la propia fila (el nombre de la propiedad a la izquierda).
+
+## Los iconos
+Los iconos los dibuja el motor (vectoriales, nítidos a cualquier escala). Todos siguen la misma gramática:
+- una cuadrícula de 16, un trazo de 1,5 px que sigue la escala de la interfaz, extremos redondeados;
+- **duotono**: el trazo en el color del texto y el cuerpo con un relleno ligero (cerca del 20 %) en el **color de la familia**.
+
+Las familias de assets tienen colores fijos (todos son colores del tema, así que cambian con él):
+
+| Familia | Color | Ejemplos |
+|---|---|---|
+| Grafo | cian | Grafo, Behavior Tree, script, macro |
+| Material | verde | Material, Material Instance |
+| Malla | naranja | Static Mesh, Skeletal Mesh, Landscape, vehículo |
+| Animación | rosa | Animación, Montage, Blend Space, Level Sequence |
+| Audio | violeta | Sound Wave, Sound Cue, Sound Graph |
+| Efectos | ámbar | partículas, luces, niebla |
+| UI | azul | Widget Graph, tema, controles |
+| Datos | gris azulado | Structure, Enum, Data Asset, Quest, Dialogue |
+| Nivel | blanco | Nivel, actores, cámara |
+
+Las herramientas usan el acento del tema y los comandos propios del motor (Jugar, Simular, Compilar, Empaquetar, Proyecto) el naranja **Ignition**, con la órbita como motivo. En el Explorador de contenidos, el tipo de asset se muestra como una **insignia** de color en la esquina de la miniatura.

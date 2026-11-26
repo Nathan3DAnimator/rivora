@@ -1,6 +1,6 @@
 id: dynamic-bones
 kind: recipe
-title: Ossos dinâmicos: brincos, cabelo, cauda, alças e bolsas | Dynamic bones: earrings, hair, tails, straps and bags
+title: Ossos dinâmicos: brincos, cabelo, cauda, alças e bolsas | Dynamic bones: earrings, hair, tails, straps and bags | Huesos dinámicos: aretes, cabello, cola, correas y bolsas
 keys: ossos dinamicos, dynamic bones, jiggle bones, spring bones, animdynamics, osso com mola, ossos com fisica, brinco, earring, rabo de cavalo, ponytail, cabelo de ossos, bone hair, cauda, rabo, tail, alca, strap, cinto, belt, bolsinha, pouch, coldre, holster, mochila, backpack, bolsa, bag, balancar, sway, swing, vento nos ossos, wind, inercia, inertia, set dynamic bones enabled, set dynamic bones wind, reset dynamic bones
 --- pt
 Os **ossos dinâmicos** (como o AnimDynamics da Unreal) são cadeias de ossos do esqueleto movidas por molas: balançam com o movimento do próprio personagem, a gravidade e o vento, voltam à forma animada e **colidem com os corpos do Physics Asset** (um brinco nunca entra no pescoço). Servem para brincos, rabo de cavalo e cabelo feito de ossos, cauda, alças, cinto e bolsinhas, coldre e mochila.
@@ -29,6 +29,22 @@ Event Key R -> Reset Dynamic Bones ( Target = self )
 
 ```diagram steps
 Physics Asset | select the bone | + Chain (Earring) | Simulate: Sway | Play
+```
+```blueprint
+Event Begin Play -> Set Dynamic Bones Wind ( Target = self, Wind = Make Vector(300, 0, 0) )
+Event Key R -> Reset Dynamic Bones ( Target = self )
+```
+--- es
+Los **huesos dinámicos** (como el AnimDynamics de Unreal) son cadenas de huesos del esqueleto movidas por resortes: se balancean con el movimiento del propio personaje, la gravedad y el viento, vuelven a la forma animada y **colisionan con los cuerpos del Physics Asset** (un arete nunca entra en el cuello). Sirven para aretes, una coleta y cabello hecho de huesos, una cola, correas, un cinturón con sus bolsas, una pistolera y una mochila.
+- **Crear uno**: en el editor del Physics Asset, selecciona el primer hueso y **+ Chain on the selected bone** con un preset (Earring, Hair, Tail, Strap / Pouch, Heavy Bag). La cadena va desde ese hueso hasta los extremos (o hasta el **Last Bone**).
+- **Ajustar**: **Stiffness** (0 cuelga libre, 1 mantiene la forma), **Damping**, **Gravity**, **Wind Share**, **Character Inertia** (cuánto siente los pasos y los giros), **Radius** contra el cuerpo, **Angle Limit**.
+- **Verlo**: Simulate > **Dynamic Bones (Sway)** balancea el esqueleto en la vista previa.
+- En el juego se ejecutan solos (con o sin ragdoll, después de él). Nodos: **Set Dynamic Bones Enabled** (desactivado en personajes lejanos), **Set Dynamic Bones Wind**, **Reset Dynamic Bones** (después de un teletransporte).
+- Un accesorio colgado de un **socket** (Attach Actor To Socket) sigue la pose con los huesos dinámicos.
+- **Costo**: ~0,012 ms de CPU por personaje con 8 partículas (un arete y una cola).
+
+```diagram steps
+Physics Asset | selecciona el hueso | + Chain (Earring) | Simulate: Sway | Jugar
 ```
 ```blueprint
 Event Begin Play -> Set Dynamic Bones Wind ( Target = self, Wind = Make Vector(300, 0, 0) )

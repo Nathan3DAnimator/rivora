@@ -1,5 +1,6 @@
 // (Q11) The Toon and Outline sections of the Material Editor's Details and of a Material Instance (toon_ui.h)
 #include "toon_ui.h"
+#include "ui_number.h" // (2026-11-25, item 20: a typed value past the slider is kept)
 
 #include <math.h>
 #include <stdio.h>
@@ -45,7 +46,7 @@ bool toon_ui_draw(MatToon* t, bool toon_shading) {
     bool ch = false;
     if (toon_shading) {
         igSeparatorText(TR("Toon"));
-        ch |= igSliderInt(PL(TR("Toon Bands")), &t->bands, 0, 8, "%d", ImGuiSliderFlags_AlwaysClamp);
+        ch |= ui_slider_int(PL(TR("Toon Bands")), &t->bands, 0, 8, 0, TOON_BANDS_MAX, "%d", 0);
         ch |= igSliderFloat(PL(TR("Toon Softness")), &t->softness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         ch |= igSliderFloat(PL(TR("Shadow Threshold")), &t->shadow_threshold, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         ch |= igColorEdit3(PL(TR("Shadow Color")), t->shadow_color, 0);
@@ -68,22 +69,22 @@ bool toon_ui_draw(MatToon* t, bool toon_shading) {
         }
         igSeparatorText(TR("Toon Highlight and Rim"));
         ch |= igColorEdit3(PL(TR("Highlight Color")), t->spec_color, 0);
-        ch |= igSliderFloat(PL(TR("Highlight Strength")), &t->spec_strength, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        ch |= ui_slider_float(PL(TR("Highlight Strength")), &t->spec_strength, 0.0f, 4.0f, 0.0f, 3.4e38f, "%.2f", 0);
         ch |= igSliderFloat(PL(TR("Highlight Size")), &t->spec_size, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         ch |= igSliderFloat(PL(TR("Highlight Hardness")), &t->spec_hardness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         ch |= igColorEdit3(PL(TR("Rim Light Color")), t->rim_color, 0);
-        ch |= igSliderFloat(PL(TR("Rim Light Strength")), &t->rim_strength, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        ch |= ui_slider_float(PL(TR("Rim Light Strength")), &t->rim_strength, 0.0f, 4.0f, 0.0f, 3.4e38f, "%.2f", 0);
         ch |= igSliderFloat(PL(TR("Rim Light Width")), &t->rim_width, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         ch |= igSliderFloat(PL(TR("Rim Light Softness")), &t->rim_softness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         igSeparatorText(TR("Toon Hatching"));
         ch |= igSliderFloat(PL(TR("Hatching")), &t->hatch_strength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         if (t->hatch_strength > 0.0f) {
             ch |= igColorEdit3(PL(TR("Hatch Color")), t->hatch_color, 0);
-            ch |= igSliderFloat(PL(TR("Hatch Spacing")), &t->hatch_scale, 2.0f, 64.0f, "%.1f px", ImGuiSliderFlags_AlwaysClamp);
-            ch |= igSliderFloat(PL(TR("Hatch Angle")), &t->hatch_angle, -90.0f, 90.0f, "%.0f deg", ImGuiSliderFlags_AlwaysClamp);
+            ch |= ui_slider_float(PL(TR("Hatch Spacing")), &t->hatch_scale, 2.0f, 64.0f, 0.5f, 3.4e38f, "%.1f px", 0);
+            ch |= ui_slider_float(PL(TR("Hatch Angle")), &t->hatch_angle, -90.0f, 90.0f, UI_NO_HARD, "%.0f deg", 0);
             ch |= igSliderFloat(PL(TR("Hatch Threshold")), &t->hatch_threshold, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         }
-        ch |= igSliderFloat(PL(TR("Toon Ambient")), &t->ambient, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        ch |= ui_slider_float(PL(TR("Toon Ambient")), &t->ambient, 0.0f, 2.0f, 0.0f, 3.4e38f, "%.2f", 0);
     }
     igSeparatorText(TR("Outline"));
     ch |= igCheckbox(PL(TR("Draw Outline")), &t->outline);
@@ -92,10 +93,10 @@ bool toon_ui_draw(MatToon* t, bool toon_shading) {
         ch |= igSliderFloat(PL(TR("Line Width")), &t->outline_width, 0.0f, 12.0f, "%.1f px", ImGuiSliderFlags_AlwaysClamp);
         ch |= igCheckbox(PL(TR("Auto Adaptive")), &t->adaptive);
         if (t->adaptive) {
-            ch |= igDragFloat(PL(TR("Near Distance")), &t->near_dist, 0.1f, 0.0f, 1000.0f, "%.1f m", ImGuiSliderFlags_AlwaysClamp);
-            ch |= igDragFloat(PL(TR("Far Distance")), &t->far_dist, 0.5f, 0.1f, 5000.0f, "%.1f m", ImGuiSliderFlags_AlwaysClamp);
-            ch |= igSliderFloat(PL(TR("Near Width Scale")), &t->near_scale, 0.0f, 4.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
-            ch |= igSliderFloat(PL(TR("Far Width Scale")), &t->far_scale, 0.0f, 4.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+            ch |= ui_num_float(PL(TR("Near Distance")), &t->near_dist, 0.1f, 0.0f, 1000.0f, 0.0f, 3.4e38f, "%.1f m", 0);
+            ch |= ui_num_float(PL(TR("Far Distance")), &t->far_dist, 0.5f, 0.1f, 5000.0f, 0.1f, 3.4e38f, "%.1f m", 0);
+            ch |= ui_slider_float(PL(TR("Near Width Scale")), &t->near_scale, 0.0f, 4.0f, 0.0f, 3.4e38f, "%.2fx", 0);
+            ch |= ui_slider_float(PL(TR("Far Width Scale")), &t->far_scale, 0.0f, 4.0f, 0.0f, 3.4e38f, "%.2fx", 0);
             ch |= igSliderFloat(PL(TR("Width Curve")), &t->curve_exp, 0.1f, 8.0f, "%.2f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
             curve_plot(t);
         }

@@ -1,6 +1,6 @@
 id: vehicles
 kind: recipe
-title: Veículos: carros, motos, tanques, barcos, trens, aviões e helicópteros | Vehicles: cars, motorcycles, tanks, boats, trains, airplanes and helicopters
+title: Veículos: carros, motos, tanques, barcos, trens, aviões e helicópteros | Vehicles: cars, motorcycles, tanks, boats, trains, airplanes and helicopters | Vehículos: autos, motos, tanques, barcos, trenes, aviones y helicópteros
 keys: veiculo, vehicle, carro, car, moto, motorcycle, caminhao, truck, tanque, tank, barco, boat, trem, train, aviao, airplane, plane, helicoptero, helicopter, dirigir, drive, pilotar, fly, chaos vehicle, wheeled vehicle, acelerador, throttle, freio, brake, marcha, gear, cambio, gearbox, entrar no carro, enter vehicle, sair do carro, exit vehicle, jogo de corrida, racing game, jogo de carro, car game
 --- pt
 ```diagram steps
@@ -66,3 +66,35 @@ class Driver extends Actor
 ```
 Other nodes: *Set Brake Input*, *Set Handbrake Input*, *Set Flight Input*, *Set Gear*, *Set Engine On*, *Set Part Position*, *Toggle Part*, *Exit Vehicle*, *Get Engine RPM*, *Get Current Gear*. See also [Vehicle parts](article:vehicle-parts) and [Water and rails](article:water-rails).
 - **Crashes**: vehicles collide with each other; each crash dents them (a grid over the box), a crushed front loses power and a hit front wheel bends and the car pulls to one side. The damage is in `vehicle_info` (Damage).
+--- es
+```diagram steps
+Añadir rápido > Vehículos > Vehicle (una plantilla) | Detalles: Auto Possess (o Enter Vehicle en un Blueprint) | Jugar: W/S acelerador y freno, A/D dirección, Espacio freno de mano, F puertas | Doble clic en el asset: chasis, marchas y piezas
+```
+## Cómo funciona
+Un **Vehicle** (`.rvehicle`) es un **chasis** (masa, centro de masa, caja de colisión, resistencia) más **piezas**. Las 10 plantillas se conducen tal cual: Car, Sports Car, Truck 6x6 (con una caja volcable), Motorcycle, Tank (orugas), Boat, Locomotive, Train Wagon, Airplane y Helicopter.
+
+La física es propia, y profesional:
+- **Suspensión por raycast** con resortes, amortiguadores y barras estabilizadoras.
+- **Neumáticos por una fórmula mágica**, con deslizamiento, ángulo de deslizamiento y una elipse de fricción; control de tracción y ABS.
+- **Motor** con una curva de par, un embrague que patina al arrancar y un limitador.
+- **Caja de cambios**, automática o manual, y un **diferencial** abierto, bloqueado o autoblocante.
+- **Según el tipo**: orugas que giran en el sitio (tanque); una moto que se inclina sola en las curvas; flotabilidad, una hélice y un timón (barco); alas con pérdida de sustentación y superficies de control (avión); un rotor con colectivo, cíclico y estabilidad que se queda en el aire al soltar (helicóptero).
+
+Controles del jugador:
+
+| Vehículo | Controles |
+|---|---|
+| Auto, moto, camión, tanque | **W/S** acelerador; S frena y luego va en reversa. **A/D** dirección. **Espacio** freno de mano. **F/G/H/J** abren las piezas (puertas, capó, caja). |
+| Avión y helicóptero | **W/S** cabeceo. **A/D** alabeo. **Q/E** guiñada. **Shift/Ctrl** acelerador (avión) o colectivo (helicóptero). |
+
+```blueprint
+Event BeginPlay -> Enter Vehicle ( Target )
+```
+```real
+class Driver extends Actor
+    event Tick(dt: float)
+        SetThrottleInput(1)
+        SetSteeringInput(0.3)
+```
+Otros nodos: *Set Brake Input*, *Set Handbrake Input*, *Set Flight Input*, *Set Gear*, *Set Engine On*, *Set Part Position*, *Toggle Part*, *Exit Vehicle*, *Get Engine RPM*, *Get Current Gear*. Véase también [Piezas de vehículo](article:vehicle-parts) y [Agua y rieles](article:water-rails).
+- **Choques**: los vehículos chocan entre sí; cada choque los abolla (una cuadrícula sobre la caja), un frente aplastado pierde potencia y una rueda delantera golpeada se dobla y el auto se tira hacia un lado. El daño está en `vehicle_info` (Damage).

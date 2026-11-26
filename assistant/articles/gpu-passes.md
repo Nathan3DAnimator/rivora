@@ -1,6 +1,6 @@
 id: gpu-passes
 kind: howto
-title: GPU por passe e personagens de perto (otimização) | GPU per pass and close characters (optimization)
+title: GPU por passe e personagens de perto (otimização) | GPU per pass and close characters (optimization) | GPU por pase y personajes cercanos (optimización)
 keys: stat gpu, profilegpu, gpu passes, passes da gpu, custo por passe, gargalo da gpu, fps cai perto do personagem, chegar perto cai o fps, personagem perto pesado, close up lento, lod de personagem, lod skeletal mesh, ray tracing lod, checkerboard, xadrez, denoiser lento, video realista lento, fotorrealista lento, gpu-passes
 --- pt
 ```diagram steps
@@ -34,3 +34,19 @@ F10 > GPU Passes | The costliest pass on top | Work on that one only | Measure a
 - **GI rays out of the main pass** (Photoreal and Video-realistic): the main pass only notes what each pixel needs and a pass of its own traces the rays afterwards, with the GPU freer. In MyProject, Video-realistic Epic at native 1440p: 45 → 65 fps.
 - Asset tip: a game hero character is fine with 50 to 150 thousand triangles; above that, simplify it before importing.
 - See also: [Debug Viewer](article:debug-viewer), [Frame budget](article:performance-budget), [RT denoiser](article:rt-denoiser).
+--- es
+```diagram steps
+F10 > GPU Passes | El pase más costoso arriba | Trabaja solo en ese | Mide de nuevo (--gpu-passes)
+```
+## Dónde gasta la GPU (como el `stat gpu` de Unreal)
+- **F10 > GPU Passes** lista cada pase del cuadro con su tiempo: nubes, niebla, TLAS, GI, sombras, prepass, mallas, cielo, denoiser, TSR, post. Mide solo mientras la ventana está abierta; cerrada, no cuesta nada. [Abrir](open:debug)
+- En la línea de comandos: `--bench 5 --gpu-passes` imprime la misma tabla, del más costoso al menos costoso.
+- Un sistema nuevo aparece en la lista por sí solo con un `gpu_mark(cmd, "name")` antes de su pase.
+## Acercarse a un personaje bajó los FPS
+- De cerca, el personaje cubre la pantalla y **cada uno de sus píxeles lanza rayos** (sombras, reflejo; en Fotorrealista y Videorrealista también la GI). El costo crece con su área en pantalla, no con la cantidad de objetos.
+- **LODs automáticos para Skeletal Meshes:** el motor simplifica la malla sobre los mismos vértices (el skinning no cambia) y guarda el resultado en caché. De lejos dibuja menos triángulos.
+- **Ray tracing en el LOD 1:** los rayos ven el LOD 1 del personaje (un cuarto de los triángulos), como el *ray tracing LOD bias* de Unreal. Con el tigre de 309 mil triángulos pegado a la cámara: −1 ms en Realista y −3 ms en Videorrealista. `REALENGINE_SKIN_RT_LOD=0` vuelve al LOD 0.
+- **Tablero de ajedrez del denoiser** (Fotorrealista y Videorrealista, Bajo a Épico): cada píxel traza un rayo de GI por cuadro, difuso o especular, alternando en un tablero de ajedrez; el denoiser rellena el otro con los vecinos (como el ReBLUR de NVIDIA). Cinemático traza ambos.
+- **Rayos de GI fuera del pase principal** (Fotorrealista y Videorrealista): el pase principal solo anota lo que cada píxel necesita y un pase propio traza los rayos después, con la GPU más libre. En MyProject, Videorrealista Épico a 1440p nativo: 45 → 65 fps.
+- Consejo sobre assets: un personaje héroe de juego va bien con 50 a 150 mil triángulos; por encima de eso, simplifícalo antes de importar.
+- Consulta también: [Debug Viewer](article:debug-viewer), [Presupuesto del cuadro](article:performance-budget), [Denoiser de RT](article:rt-denoiser).

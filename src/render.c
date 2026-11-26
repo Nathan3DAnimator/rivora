@@ -1,4 +1,6 @@
+#include "io_json.h" // (2026-11-24: a mesh's .rlod settings)
 #include "render.h"
+#include "trace.h"
 #include "project.h"
 
 #include <ctype.h>
@@ -359,6 +361,9 @@ static const uint32_t s_debug_line_frag[] =
 static const uint32_t s_mask_frag[] =
 #include "mask.frag.inc"
     ;
+static const uint32_t s_mask_hair_frag[] = // (2026-11-25, item 17) a selected actor's hair in the mask
+#include "mask_hair.frag.inc"
+    ;
 static const uint32_t s_composite_frag[] =
 #include "composite.frag.inc"
     ;
@@ -556,8 +561,24 @@ static struct {
     uint32_t skin_room, skin_room_need;
     uint32_t skin_short; // (Q14) this frame's skins that found no room (their vertices): one reload for all of them
     bool mesh_skinned[RE_MAX_MESHES];
+    // (2026-11-24, item 4) a skin whose every vertex hangs on one bone (its weight on it whole, no morph targets): drawn as
+    // the mesh moved by that bone's palette row (render.c skin_rigid), never bent: no room, no BLAS of its own, its LODs
+    // and the static paths like any mesh, animated or not (-1: a real skin)
+    int16_t mesh_rigid_bone[RE_MAX_MESHES];
+    uint8_t mesh_collision[RE_MAX_MESHES]; // (2026-11-24, item 4) the asset's Collision Complexity (.rlod: 0 the actor's, 1 simple, 2 complex)
     struct SkinSlot* skins;
     uint32_t nskins, skins_cap;
+    // (2026-11-24, the Unamed scene: 2080 still Skeletal Meshes) each scene slot's live skin (its place in R.skins,
+    // UINT32_MAX none) and the skins drawn at their bind (no room, or a pose that is the bind's): no search, no retry.
+    // skin_gen moves when room may have come back (a load, a skin freed); skin_nv: each mesh's LOD 0 vertices, once a load
+    uint32_t* skin_map;
+    struct SkinRaw* skin_raw;
+    uint32_t skin_map_cap, skin_gen, skin_raw_n, skin_noroom_n;
+    uint32_t skin_rigid_n; // (2026-11-24) the rigid skins sent this frame (drawn as their mesh moved by their bone)
+    uint32_t dorm_n, dorm_slept, dorm_woke;
+    float last_cam[3]; // (2026-11-24) the last frame's camera (anim.c's update rate by distance)
+    bool have_cam; // (2026-11-24) the dormant dynamic instances this frame; slept and woke since the start
+    uint32_t skin_nv[RE_MAX_MESHES];
     GpuBuf skin_pal[RE_FRAMES_IN_FLIGHT], skin_hdr[RE_FRAMES_IN_FLIGHT];
     uint32_t skin_pal_cap, skin_hdr_cap, nskin_jobs, skin_pal_used, skin_verts;
     uint32_t* skin_jobs;
@@ -779,6 +800,7 @@ static struct {
     VkDescriptorSet set;
     VkPipelineLayout layout;
     VkPipeline mesh, mesh_rt, mesh_wire, shadow_pipe, sky, grid, mask_pipe, composite, composite_post; // mesh_rt: ray traced (RE_RT)
+    VkPipeline mask_hair_pipe; // (2026-11-25, item 17) a selected actor's hair in the selection's mask (hair.vert, mask_hair.frag)
     VkPipeline dd_pipe, dd_lines;            // (2026-11-19) the debug lines over the composite (debug_draw.h); the batches' as hardware lines
     GpuBuf dd_buf[RE_FRAMES_IN_FLIGHT];      // ... their primitives a frame slot (host visible)
     GpuBuf dd_tbuf[RE_FRAMES_IN_FLIGHT];     // ... the batches' trace records (DdTrace)
@@ -845,6 +867,8 @@ static struct {
     // (2026-11-16) what wants the RE_EXT pipelines besides the rain: the materials, the decals (any_ext / any_ext_masked
     // also go on the first frame it rains, so they are made; the frames without rain then use the plain ones again)
     bool ext_mat, ext_mat_masked;
+    bool ext_decal;              // (2026-11-24) decals drawn this frame: every mesh's RE_EXT (they are in those variants)
+    uint32_t runs_plain, runs_ext; // the main pass's runs drawn plain / RE_EXT, the last frame (render_ext_runs)
     // auto exposure: the histogram and the adapted value (GPU), a copy of the value per frame slot for the stats
     VkPipeline exposure_pipe;
     GpuBuf exposure, exposure_read[RE_FRAMES_IN_FLIGHT];
@@ -896,8 +920,20 @@ static struct {
     bool vis_want;
 
     // what render_scene recorded this frame, for the mask and composite: the selected slot and its mesh
-#define MASK_MAX 4096 // outlined actors at most (a bigger selection outlines its first ones)
+#define MASK_MAX 32768 // outlined meshes at most (a bigger selection outlines its first ones; 2026-11-25: 4096, a crowd's agents x parts)
     uint32_t mask_draws, mask_slot[MASK_MAX], mask_mesh[MASK_MAX];
+    // (2026-11-25, item 17) each draw's id (mask.frag's pad: 2 + the selected actor's index, its parts sharing it; 0: the
+    // slot's own), the mask left cleared last frame with nothing selected (its pass skipped until a selection or a resize)
+    uint32_t mask_id[MASK_MAX];
+    // (2026-11-25, item 17) a selected crowd's parts: one draw a part, its agents as instances (their slots nparts apart:
+    // mesh.vert's crowd mask), 840 draws of 30 agents x 28 parts took 0.200 ms, 0.017 the rest
+#define MASK_CROWD (CROWD_MAX_RUNS * 256)
+    uint32_t mask_cn, mask_c_slot[MASK_CROWD], mask_c_mesh[MASK_CROWD], mask_c_stride[MASK_CROWD], mask_c_count[MASK_CROWD], mask_c_id[MASK_CROWD];
+    uint32_t mask_c_inst; // (their instances in all: the tests' count of the agents' parts drawn)
+    bool mask_idle;
+    const uint8_t* mask_sel; // (2026-11-25) this frame's selected entity slots (a bit each; frame memory), their count, the world
+    uint32_t mask_sel_n;
+    World* mask_world;
     uint32_t mask_hl, mask_hl_mode; // the last mask_hl draws are the game's highlight (interaction.h), in its mode
     // (Q11) the outline (outline.c): a byte per scene slot (its material's or its actor's outline is on: instance_of), any
     // so far (none: the pass costs nothing), the materials' outline generation the slots were marked by
@@ -945,6 +981,10 @@ static struct {
 } R;
 
 const RenderStats* render_stats(void) { return &R.stats; }
+void render_ext_runs(uint32_t* plain, uint32_t* ext, uint32_t* meshes) { // (2026-11-24)
+    *plain = R.runs_plain, *ext = R.runs_ext, *meshes = 0;
+    for (uint32_t i = 0; i < RE_MAX_MESHES; i++) *meshes += R.mesh_ext[i];
+}
 
 uint32_t render_mesh_slot(uint32_t mesh) {
     if (mesh < R.nmeshes) return mesh; // a basic shape (or a slot)
@@ -1016,6 +1056,56 @@ uint32_t render_mesh_lods(uint32_t mesh, uint32_t tris[4], float error[4]) {
         if (error) error[l] = l < n ? R.lod_error[s][l] : 0.0f;
     }
     return n;
+}
+// (2026-11-25, item 17) the selection's mask as the last frame left it (the tests: --scene selection), read back with the
+// GPU idle: how many pixels are set, a hash of which ones (two poses of a skin differ), the last frame's mask draws
+bool render_mask_read(VkCtx* vk, uint32_t* set, uint64_t* hash, uint32_t* draws, uint8_t* copy, size_t cap, uint32_t* w, uint32_t* h) {
+    *set = 0, *hash = 0, *draws = R.mask_draws + R.mask_c_inst;
+    if (w) *w = R.out_w;
+    if (h) *h = R.out_h;
+    if (!R.mask.image || !R.out_w || !R.out_h) return false;
+    VkDeviceSize n = (VkDeviceSize)R.out_w * R.out_h;
+    GpuBuf b;
+    if (!gpu_buf_create(vk, &b, n, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) return false;
+    vkDeviceWaitIdle(vk->device);
+    VkCommandBuffer cmd = gpu_begin_once(vk);
+    VkImageLayout was = R.mask.layout;
+    gpu_transition(cmd, &R.mask, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
+                   VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, false);
+    VkBufferImageCopy c = { 0 };
+    c.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, c.imageSubresource.layerCount = 1;
+    c.imageExtent = (VkExtent3D){ R.out_w, R.out_h, 1 };
+    vkCmdCopyImageToBuffer(cmd, R.mask.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.buffer, 1, &c);
+    gpu_transition(cmd, &R.mask, was == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : was, VK_PIPELINE_STAGE_2_COPY_BIT,
+                   VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT, false);
+    gpu_end_once(vk, cmd);
+    const uint8_t* p = b.mapped;
+    uint64_t hh = 1469598103934665603ull;
+    for (VkDeviceSize i = 0; i < n; i++)
+        if (p[i]) (*set)++, hh = (hh ^ (uint64_t)i) * 1099511628211ull;
+    *hash = hh;
+    if (copy && cap >= n) memcpy(copy, p, n); // (the pixels themselves: the test's own look at the outline)
+    gpu_buf_destroy(vk, &b);
+    return true;
+}
+
+// (2026-11-25, item 16) a skin's mesh (RMESH_SKINNED: uv2's bits its 4 bones and weights; groom.c binds hair roots to them)
+bool render_mesh_is_skinned(uint32_t mesh) {
+    uint32_t s = render_mesh_slot(mesh);
+    return s < R.nmeshes && R.mesh_skinned[s];
+}
+
+// (2026-11-24, item 4) its Nanite as loaded (the Static / Skeletal Mesh viewer's Nanite Settings): its DAG's clusters (0:
+// none) and its LODs' clusters (the Masked path), whether it is a rigid skin
+uint32_t render_mesh_nanite(uint32_t mesh, uint32_t* lod_clusters, bool* rigid) {
+    uint32_t s = render_mesh_slot(mesh);
+    if (lod_clusters) *lod_clusters = 0;
+    if (rigid) *rigid = false;
+    if (s >= R.nmeshes) return 0;
+    if (lod_clusters)
+        for (uint32_t l = 0; l < MAX_LODS && l < R.lod_count[s]; l++) *lod_clusters += R.cluster_count[s][l];
+    if (rigid) *rigid = R.mesh_skinned[s] && R.mesh_rigid_bone[s] >= 0; // (skin_is_rigid's)
+    return R.dag_count[s];
 }
 // cull.comp's choice on the CPU: an imported mesh's coarsest LOD whose error stays under a pixel (Epic), a basic shape's
 // LOD by its radius on screen (48 px, then x0.4 a level)
@@ -1475,6 +1565,9 @@ typedef struct MeshStage {
     uint32_t dag_first[RE_MAX_MESHES], dag_count[RE_MAX_MESHES]; // the cluster LOD DAGs (mesh_clod.h; in the clusters)
     bool any_dag;
     bool mesh_skinned[RE_MAX_MESHES]; // RMESH_SKINNED: their instances bend their own vertices ("skin")
+    int16_t mesh_rigid_bone[RE_MAX_MESHES]; // (2026-11-24) R.mesh_rigid_bone's
+    uint8_t mesh_collision[RE_MAX_MESHES];  // (2026-11-24) R.mesh_collision's
+    float mesh_fallback[RE_MAX_MESHES];     // (2026-11-24) its rays' share of LOD 0's triangles (.rlod "fallback": the BLAS's LOD)
     uint32_t skinned_nv, skin_room;
     // their morph targets (R.morphs' words: each mesh's CSR then its deltas) and the names
     uint32_t* mw;
@@ -1517,6 +1610,58 @@ static void stage_free(MeshStage* st) {
     free(st);
 }
 
+// The skins' room at most (vertices: 6 M, 192 MB; 2026-11-24, item 4: 10 M with 6 GB of VRAM, 16 M with 8 GB and up: 5000
+// animated characters of ~1000 vertices, each bent twice, the last frame's for the velocity); REALENGINE_SKIN_ROOM_MAX lowers
+// it (the skin_noroom test: the room full with a few skins, as 2080 capsules fill the 6 M)
+static uint32_t g_skin_room_cap = 6u << 20; // (render_init: by the GPU's own memory)
+static uint32_t skin_room_max(void) {
+    static uint32_t m;
+    if (!m) {
+        const char* v = getenv("REALENGINE_SKIN_ROOM_MAX");
+        m = v && atoi(v) > 0 && (uint32_t)atoi(v) < g_skin_room_cap ? (uint32_t)atoi(v) : g_skin_room_cap;
+    }
+    return m;
+}
+#define SKIN_ROOM_MAX skin_room_max()
+#define SKINS_MAX 16384u
+// (2026-11-24, item 4) a mesh's own settings saved beside it by the viewer (.<file>.rlod, JSON): "nanite" -1 auto, 0 off, 1 on;
+// "fallback" its rays' share of LOD 0's triangles (%); "collision" 0 the actor's, 1 simple, 2 complex. Absent: the defaults
+static void mesh_side_read(const char* path, int* nanite, float* fallback, int* collision) {
+    const char* bn = path + strlen(path);
+    while (bn > path && bn[-1] != '/' && bn[-1] != '\\') bn--;
+    char side[1200];
+    snprintf(side, sizeof side, "%.*s.%s.rlod", (int)(bn - path), path, bn);
+    FILE* f = re_fopen(side, "rb");
+    if (!f) return;
+    char buf[1024];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    JsonDoc d;
+    if (!json_parse(buf, n, &d, NULL, 0)) return;
+    *nanite = json_get_int(&d.root, "nanite", *nanite);
+    *fallback = (float)json_get_num(&d.root, "fallback", *fallback);
+    *collision = json_get_int(&d.root, "collision", *collision);
+    json_free(&d);
+    if (*nanite < -1 || *nanite > 1) *nanite = -1;
+    if (*collision < 0 || *collision > 2) *collision = 0;
+    if (!(*fallback > 0.0f) || *fallback > 100.0f) *fallback = 100.0f;
+} // (2026-11-24, item 4) live skins at most (the vertices' room usually ends them first)
+// A mesh's LOD 0 vertices (its indices' highest + 1; 0: none), the bend of a skin on it: counted once a load (R.skin_nv)
+static uint32_t skin_mesh_nv(uint32_t mesh) {
+    if (mesh >= RE_MAX_MESHES) return 0u;
+    if (R.skin_nv[mesh]) return R.skin_nv[mesh] == UINT32_MAX ? 0u : R.skin_nv[mesh];
+    const Mesh* me = &R.meshes[mesh];
+    uint32_t nv = 0;
+    if (R.cpu_i && me->index_count) {
+        uint32_t hi = 0;
+        for (uint32_t q = 0; q < me->index_count; q++)
+            if (R.cpu_i[me->first_index + q] > hi) hi = R.cpu_i[me->first_index + q];
+        nv = hi + 1u;
+    }
+    R.skin_nv[mesh] = nv ? nv : UINT32_MAX;
+    return nv;
+}
 // Any thread: the vertices, indices and clusters' buffers made, their data in one host staging buffer
 static bool stage_gpu_prepare(VkCtx* vk, MeshStage* st) {
     MeshBuilder* b = &st->b;
@@ -1528,7 +1673,7 @@ static bool stage_gpu_prepare(VkCtx* vk, MeshStage* st) {
     // (skin_bind: out of room, the meshes reloaded with what it needed), 6 M vertices at most (192 MB)
     uint64_t room = (uint64_t)st->skinned_nv * 8u;
     if (room < R.skin_room_need) room = R.skin_room_need;
-    if (room > (6u << 20)) room = 6u << 20;
+    if (room > SKIN_ROOM_MAX) room = SKIN_ROOM_MAX;
     st->skin_room = (uint32_t)room;
     // (TRANSFER_SRC: render_skin_readback, the morph test's look at a skin)
     bool ok = gpu_buf_create(vk, &st->g_v, sv + sizeof(GpuVertex) * room,
@@ -1602,6 +1747,8 @@ static void stage_imported(MeshStage* st, AsyncTask* task) {
             if (mesh_skinned_lods(&mb))
                 printf("[RealEngine] Skin LODs: %s, %u LODs (%u -> %u triangles) in %.0f ms\n", s.files[i].vpath, mb.lods.count,
                        mb.lods.index_count[0] / 3u, mb.lods.index_count[mb.lods.count - 1] / 3u, (re_time_seconds() - tl) * 1000.0);
+            else if (mb.lods.index_count[0] / 3u >= 4096u) // (2026-11-24: a big skin drawn whole at every distance: said)
+                printf("[RealEngine] aviso: Skin LODs: %s ficou sem LODs (%u triangulos em toda distancia)\n", s.files[i].vpath, mb.lods.index_count[0] / 3u);
         }
         if (!builder_room(b, mb.nv, mb.ni)) {
             mesh_built_free(&mb);
@@ -1629,6 +1776,19 @@ static void stage_imported(MeshStage* st, AsyncTask* task) {
         // costs nothing
         bool skinned = (mb.flags & RMESH_SKINNED) != 0u; // (its instances bend their own vertices: drawn whole)
         st->mesh_skinned[s2] = skinned;
+        st->mesh_rigid_bone[s2] = -1;
+        if (skinned && !mb.morph.count) { // (2026-11-24) one bone holding every vertex whole: a rigid skin (its bones in uv2's bits, skin.comp)
+            int rb = -1;
+            for (uint32_t q = 0; q < mb.nv && rb != -2; q++) {
+                uint32_t bx, by;
+                memcpy(&bx, &mb.v[q].uv2[0], 4), memcpy(&by, &mb.v[q].uv2[1], 4);
+                int b = -1;
+                for (int k = 0; k < 4 && b < 0; k++)
+                    if (((by >> (8 * k)) & 255u) >= 254u) b = (int)((bx >> (8 * k)) & 255u); // (its whole weight on that bone)
+                rb = b < 0 || (rb >= 0 && rb != b) ? -2 : b;
+            }
+            if (rb >= 0) st->mesh_rigid_bone[s2] = (int16_t)rb;
+        }
         if (skinned) st->skinned_nv += mb.nv;
         st->morph_count[s2] = 0;
         if (skinned && mb.morph.count && mb.morph.nv == mb.nv) { // its morph targets: the CSR, the deltas, the names
@@ -1650,7 +1810,18 @@ static void stage_imported(MeshStage* st, AsyncTask* task) {
             } else
                 st->mw_cap = st->nmw; // (no memory: the mesh without its morphs)
         }
-        if (mb.lods.count && mb.lods.index_count[0] >= 16384u * 3u && !skinned) {
+        // (2026-11-24, item 4) the mesh's own settings beside it (.<file>.rlod, the Static / Skeletal Mesh viewer's): Nanite
+        // (clusters) automatic / on / off, its rays' fallback share, its Collision Complexity. A skin's DAG serves all its
+        // instances (a live one's clusters widened by its pose's reach, cull.comp pass 6; its Masked clusters only off it)
+        int side_nanite = -1, side_coll = 0;
+        float side_fb = 100.0f;
+        mesh_side_read(s.files[i].path, &side_nanite, &side_fb, &side_coll);
+        if (side_nanite < 0 && getenv("REALENGINE_NANITE_ALL")) side_nanite = 1; // (the tests: every mesh's "On")
+        st->mesh_collision[s2] = (uint8_t)side_coll, st->mesh_fallback[s2] = side_fb;
+        // (Auto: from 16 384 triangles; a Skeletal Mesh from 4096: its instances come in crowds, the Unamed's 5000 capsules)
+        uint32_t auto_min = (mb.flags & RMESH_SKINNED) ? 4096u : 16384u;
+        bool want_cl = side_nanite == 1 ? mb.lods.index_count[0] >= 512u * 3u : side_nanite == 0 ? false : mb.lods.index_count[0] >= auto_min * 3u;
+        if (mb.lods.count && want_cl) {
             MeshCluster* mc;
             uint32_t* mp;
             uint32_t cfirst[RMESH_MAX_LODS], ccount[RMESH_MAX_LODS];
@@ -1679,8 +1850,10 @@ static void stage_imported(MeshStage* st, AsyncTask* task) {
             // near side fine and the far side coarse, the hidden and the outside clusters skipped (cull.comp pass 6)
             MeshDagCluster* dc;
             uint32_t *dp, *di, dni;
-            // (not a mesh of loose pieces, cards: more vertices than triangles; their DAG simplifies nothing, their LODs thin)
-            bool pieces = mb.nv > mb.lods.index_count[0] / 3u;
+            // (not a mesh of loose pieces, cards: their DAG simplifies nothing, their LODs thin. 2026-11-25: counted by its
+            // islands joined by position, over one in 8 triangles; the vertices' count took the UV and normal seams for
+            // pieces: the Unamed capsule, 9949 vertices for 9284 triangles in 115 shells, had no DAG)
+            bool pieces = mesh_islands(&mb, 0u, NULL) * 8u > mb.lods.index_count[0] / 3u;
             // (Q17) the copies of a vertex a hair apart (a UV seam's, a pole's: a generated sphere's seam at cos(2 pi))
             // moved onto the first one before the DAG: clusterlod welds by the exact position, so both sides of such a
             // seam simplify together (else T-junctions along it, which displacement opens into cracks). The canonical
@@ -1885,10 +2058,17 @@ static bool stage_upload(VkCtx* vk, MeshStage* st) {
     R.vertex_count = b->nv;
     R.skin_room = st->skin_room;
     memcpy(R.mesh_skinned, st->mesh_skinned, sizeof R.mesh_skinned);
+    memcpy(R.mesh_rigid_bone, st->mesh_rigid_bone, sizeof R.mesh_rigid_bone); // (2026-11-24)
+    memcpy(R.mesh_collision, st->mesh_collision, sizeof R.mesh_collision);
     printf("[RealEngine] Basic shapes: %u vertices, %u triangles.\n", b->nv, b->ni / 3);
     R.cpu_v = b->v; // kept: the lightmap bake rasterizes the UV2 on the CPU
     R.cpu_i = b->idx;
     b->v = NULL, b->idx = NULL;
+    // (2026-11-24) the skins' LOD 0 vertices once here (skin_bind scanned a mesh's indices for every skin not yet bound,
+    // every frame: 2080 capsules without room were 49 M reads a frame); a Spline Mesh's or a soft body's mesh on its first
+    memset(R.skin_nv, 0, sizeof R.skin_nv);
+    for (uint32_t s = 0; s < R.nmeshes && s < RE_MAX_MESHES; s++)
+        if (R.mesh_skinned[s]) skin_mesh_nv(s);
     stage_free(st);
     return true;
 }
@@ -2471,7 +2651,8 @@ static struct {
     uint32_t pipelines0;
 } RJ;
 static bool den_rt_job_running(void);
-bool render_pipelines_pending(void) { return RJ.thread != NULL || den_rt_job_running(); } // (the measures wait: the Masked rays' pipelines change the frame's cost)
+static bool ext_job_running(void); // (2026-11-25: the RE_EXT set's job)
+bool render_pipelines_pending(void) { return RJ.thread != NULL || den_rt_job_running() || ext_job_running(); } // (the measures wait: the Masked rays' pipelines change the frame's cost)
 static int rt_alpha_job(void* arg) {
     (void)arg; // (normal priority: below it, the editor's uncapped frames starved it past 25 s)
     build_rt_pipelines(&RJ.vk, RJ.samples, true, false, RJ.p);
@@ -2531,60 +2712,141 @@ static void rt_alpha_job_start(VkCtx* vk) {
 // The Principled's extra lobes' pipelines (RE_EXT), made the first frame a material with them is sent: the plain ones
 // alone until then (startup and memory pay nothing for a project without coat, anisotropy or subsurface)
 // The masked runs' raster RE_EXT pair (while a Masked / Two Sided material has the lobes)
-static void ext_masked_raster(VkCtx* vk, VkSampleCountFlagBits samples) {
+static void ext_masked_raster(VkCtx* vk, VkSampleCountFlagBits samples, VkPipeline* m_x, VkPipeline* m_eq_x) {
     VkShaderModule vx = SHADER(vk, s_mesh_vert_x), f0 = SHADER_X(vk, s_mesh_frag_masked_x), f1 = SHADER_X(vk, s_mesh_frag_masked_eq_x);
     PipeDesc dm = { vx, f0, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, samples, VK_COMPARE_OP_GREATER_OR_EQUAL, true, true,
                     false, false, false, VK_CULL_MODE_NONE };
     dm.main = dm.split = true;
     dm.name = "mesh_m_x";
-    R.mesh_m_x = pipeline(vk, &dm);
+    *m_x = pipeline(vk, &dm);
     dm.name = NULL;
     dm.fs = f1, dm.depth_op = VK_COMPARE_OP_EQUAL, dm.depth_write = false; // (after the prepass: its depth already cut)
-    R.mesh_m_eq_x = pipeline(vk, &dm);
+    *m_eq_x = pipeline(vk, &dm);
     vkDestroyShaderModule(vk->device, vx, NULL);
     vkDestroyShaderModule(vk->device, f0, NULL);
     vkDestroyShaderModule(vk->device, f1, NULL);
 }
-static void ext_pipelines_ensure_now(VkCtx* vk) {
+// The RE_EXT set: the ones missing when asked (the flags), made into out (the main thread or the job below)
+typedef struct ExtSet {
+    VkPipeline mesh_x, lsm_x, m_x, m_eq_x, rt[RT_PIPES];
+    bool want_m, want_x, want_lsm, want_rt, rt_alpha;
+    VkSampleCountFlagBits samples;
+} ExtSet;
+static bool ext_wanted(ExtSet* s) { // (false: nothing missing)
+    memset(s, 0, sizeof *s);
     bool need_m = R.any_ext_masked && (!R.mesh_m_x || (gi_available() && !R.mesh_rt_m_x));
-    if (!R.any_ext || !R.pipe_samples || (!need_m && R.mesh_x && R.mesh_lsm_x && (!gi_available() || R.mesh_rt_x))) return;
-    double t0 = re_time_seconds();
-    if (R.any_ext_masked && !R.mesh_m_x) ext_masked_raster(vk, R.pipe_samples);
-    if (!R.mesh_x) {
-        PipeDesc d = { SHADER(vk, s_mesh_vert_x), SHADER_X(vk, s_mesh_frag_x), VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, R.pipe_samples,
+    if (!R.any_ext || !R.pipe_samples || (!need_m && R.mesh_x && R.mesh_lsm_x && (!gi_available() || R.mesh_rt_x))) return false;
+    s->want_m = R.any_ext_masked && !R.mesh_m_x;
+    s->want_x = !R.mesh_x, s->want_lsm = !R.mesh_lsm_x;
+    s->want_rt = gi_available() && (!R.mesh_rt_x || (R.any_ext_masked && !R.mesh_rt_m_x));
+    s->rt_alpha = R.pipe_rt_alpha, s->samples = R.pipe_samples;
+    return true;
+}
+static void ext_build(VkCtx* vk, ExtSet* s) {
+    if (s->want_m) ext_masked_raster(vk, s->samples, &s->m_x, &s->m_eq_x);
+    if (s->want_x) {
+        PipeDesc d = { SHADER(vk, s_mesh_vert_x), SHADER_X(vk, s_mesh_frag_x), VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, s->samples,
                        VK_COMPARE_OP_GREATER_OR_EQUAL, true, true, false, false, false, VK_CULL_MODE_BACK_BIT };
         d.main = d.split = true;
         d.name = "mesh_x";
         d.vrs = true;
-        R.mesh_x = pipeline(vk, &d);
+        s->mesh_x = pipeline(vk, &d);
         vkDestroyShaderModule(vk->device, d.vs, NULL);
         vkDestroyShaderModule(vk->device, d.fs, NULL);
     }
-    if (!R.mesh_lsm_x) { // (Q11: the maps' and SSR's variant with them, Low / no rays)
-        PipeDesc d = { SHADER(vk, s_mesh_vert_x), SHADER_X(vk, s_mesh_frag_lsm_x), VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, R.pipe_samples,
+    if (s->want_lsm) { // (Q11: the maps' and SSR's variant with them, Low / no rays)
+        PipeDesc d = { SHADER(vk, s_mesh_vert_x), SHADER_X(vk, s_mesh_frag_lsm_x), VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, s->samples,
                        VK_COMPARE_OP_GREATER_OR_EQUAL, true, true, false, false, false, VK_CULL_MODE_BACK_BIT };
         d.main = d.split = true;
         d.name = "mesh_lsm_x";
         d.vrs = true;
-        R.mesh_lsm_x = pipeline(vk, &d);
+        s->lsm_x = pipeline(vk, &d);
         vkDestroyShaderModule(vk->device, d.vs, NULL);
         vkDestroyShaderModule(vk->device, d.fs, NULL);
     }
-    if (gi_available() && (!R.mesh_rt_x || (R.any_ext_masked && !R.mesh_rt_m_x))) {
-        VkPipeline p[RT_PIPES];
-        build_rt_pipelines_ex(vk, R.pipe_samples, R.pipe_rt_alpha, false, true, p); // (its RE_EXT ones alone; the missing kept)
-        for (int i = 0; i < RT_PIPES; i++) {
-            if (i >= 6 && !*rt_pipe(i)) *rt_pipe(i) = p[i];
-            else if (p[i]) vkDestroyPipeline(vk->device, p[i], NULL);
-        }
+    if (s->want_rt) build_rt_pipelines_ex(vk, s->samples, s->rt_alpha, false, true, s->rt); // (its RE_EXT ones alone)
+}
+// Into R where still missing (the rest destroyed: made meanwhile by another path)
+static void ext_install(VkCtx* vk, ExtSet* s) {
+#define EXT_PUT(dst, src) do { if ((src) && !(dst)) (dst) = (src); else if (src) vkDestroyPipeline(vk->device, (src), NULL); (src) = VK_NULL_HANDLE; } while (0)
+    EXT_PUT(R.mesh_m_x, s->m_x);
+    EXT_PUT(R.mesh_m_eq_x, s->m_eq_x);
+    EXT_PUT(R.mesh_x, s->mesh_x);
+    EXT_PUT(R.mesh_lsm_x, s->lsm_x);
+    for (int i = 0; i < RT_PIPES; i++) {
+        if (i >= 6) EXT_PUT(*rt_pipe(i), s->rt[i]);
+        else if (s->rt[i]) vkDestroyPipeline(vk->device, s->rt[i], NULL), s->rt[i] = VK_NULL_HANDLE;
     }
+#undef EXT_PUT
+}
+static void ext_drop(VkCtx* vk, ExtSet* s) {
+    VkPipeline* all[4] = { &s->mesh_x, &s->lsm_x, &s->m_x, &s->m_eq_x };
+    for (int i = 0; i < 4; i++)
+        if (*all[i]) vkDestroyPipeline(vk->device, *all[i], NULL), *all[i] = VK_NULL_HANDLE;
+    destroy_rt_set(vk, s->rt);
+}
+static void ext_pipelines_ensure_now(VkCtx* vk) {
+    ExtSet s;
+    if (!ext_wanted(&s)) return;
+    double t0 = re_time_seconds();
+    ext_build(vk, &s);
+    if (!pb_here(1)) ext_install(vk, &s);
     if (!pb_here(1)) printf("[RealEngine] The extra lobes' pipelines (RE_EXT) made in %.0f ms.\n", (re_time_seconds() - t0) * 1000.0);
 }
 static void ext_pipelines_ensure(VkCtx* vk) { PIPE_BATCH(vk, ext_pipelines_ensure_now(vk)); }
 
+// (2026-11-25, bug-fixer) The RE_EXT set made on a thread when a frame first needs it (Rain placed: 257 ms of its frame
+// went making it, 300-450 ms frames in the UI sweep's Rain; a Light Function, a Force Toon light, a material with extra
+// lobes the same). Until it is in, the plain pipelines draw (the main pass picks the RE_EXT ones only once they exist):
+// the rain wets the surfaces a few frames later
+static struct {
+    ReThread* thread;
+    VkCtx vk; // (a copy: its counters the thread's own)
+    ExtSet s;
+    bool toon;
+    volatile int32_t done;
+    double t0;
+} EJ;
+static int ext_job(void* arg) {
+    (void)arg;
+    ext_build(&EJ.vk, &EJ.s);
+    re_atomic_store(&EJ.done, 1);
+    return 0;
+}
+static bool ext_job_running(void) { return EJ.thread != NULL; }
+static void ext_job_cancel(VkCtx* vk) { // (waits: its pipelines thrown away)
+    if (!EJ.thread) return;
+    while (!re_atomic_load(&EJ.done)) crash_heartbeat(), re_sleep_seconds(0.005);
+    re_thread_join(EJ.thread);
+    EJ.thread = NULL;
+    ext_drop(vk, &EJ.s);
+}
+static void ext_job_poll(VkCtx* vk) {
+    if (!EJ.thread || !re_atomic_load(&EJ.done)) return;
+    re_thread_join(EJ.thread);
+    EJ.thread = NULL;
+    if (EJ.s.samples != R.pipe_samples || EJ.toon != R.toon_spv) { // (made again meanwhile: another MSAA or the toon twins)
+        ext_drop(vk, &EJ.s);
+        return;
+    }
+    ext_install(vk, &EJ.s);
+    printf("[RealEngine] The extra lobes' pipelines (RE_EXT) made in the background in %.0f ms.\n", (re_time_seconds() - EJ.t0) * 1000.0);
+}
+// The frame's ask: started on the job (no thread: made here, as before)
+static void ext_pipelines_request(VkCtx* vk) {
+    ext_job_poll(vk);
+    if (EJ.thread) return;
+    ExtSet s;
+    if (!ext_wanted(&s)) return;
+    EJ.vk = *vk, EJ.s = s, EJ.toon = R.toon_spv, EJ.done = 0, EJ.t0 = re_time_seconds();
+    EJ.thread = re_thread_start(ext_job, NULL);
+    if (!EJ.thread) ext_pipelines_ensure(vk);
+}
+
 // The main pass's pipelines depend on the sample count: rebuilt when it changes
 static void build_msaa_pipelines_now(VkCtx* vk, VkSampleCountFlagBits samples) {
     rt_alpha_job_cancel(vk);
+    ext_job_cancel(vk); // (its set for the old MSAA: thrown away)
     R.vrs_built = vk->vrs && vrs_wanted(); // (VRS wanted: its flag in the pipelines)
     destroy_msaa_pipelines(vk);
     R.pipe_rt_alpha = R.any_masked;
@@ -2626,7 +2888,7 @@ static void build_msaa_pipelines_now(VkCtx* vk, VkSampleCountFlagBits samples) {
     R.mesh_m = pipeline(vk, &dm);
     dm.fs = mfe, dm.depth_op = VK_COMPARE_OP_EQUAL, dm.depth_write = false; // (after the prepass: its depth already cut)
     R.mesh_m_eq = pipeline(vk, &dm);
-    if (R.any_ext && R.any_ext_masked) ext_masked_raster(vk, samples); // (2026-11-10: else made when one appears)
+    if (R.any_ext && R.any_ext_masked) ext_masked_raster(vk, samples, &R.mesh_m_x, &R.mesh_m_eq_x); // (2026-11-10: else made when one appears)
     if (gi_available()) { // the ray traced shadows and reflections in a pipeline of their own: their ray query code
         // takes registers (occupancy) from every pixel, so it runs only when they are on
         VkPipeline p[RT_PIPES];
@@ -2813,6 +3075,13 @@ static void build_fixed_pipelines_now(VkCtx* vk) {
     PipeDesc mk = { mv, kf, VK_FORMAT_R8_UNORM, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, VK_COMPARE_OP_GREATER_OR_EQUAL, true,
                     true, false, false, false, VK_CULL_MODE_NONE }; // reversed Z: the nearest selected object's id
     R.mask_pipe = pipeline(vk, &mk);
+    { // (2026-11-25, item 17) the hair's ribbons into the mask (the same targets and test)
+        VkShaderModule hv = SHADER(vk, s_hair_vert), hm = SHADER(vk, s_mask_hair_frag);
+        PipeDesc mh = mk;
+        mh.vs = hv, mh.fs = hm;
+        R.mask_hair_pipe = pipeline(vk, &mh);
+        vkDestroyShaderModule(vk->device, hv, NULL), vkDestroyShaderModule(vk->device, hm, NULL);
+    }
     vkDestroyShaderModule(vk->device, cf, NULL), cf = VK_NULL_HANDLE;
     composite_pipelines(vk);
     // the OIT pass (Translucent materials): one sample, tested against the scene's depth, nothing written to it
@@ -3416,11 +3685,13 @@ static bool ensure_targets(VkCtx* vk, uint32_t w, uint32_t h, uint32_t ow, uint3
         R.have_prev_vp = false;
         R.tsr_reset = true;
     }
+    R.mask_idle = false; // (2026-11-25: the new mask cleared and its layout set once before its pass is skipped)
     bool ok = (rescale || gpu_image_create(vk, &R.hdr, ow, oh, VK_FORMAT_R16G16B16A16_SFLOAT, // (transfer dst: DLSS clears its output on a reset)
                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT, // (src: SSR's copy, A4c)
                            VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT) &&
-              gpu_image_create(vk, &R.mask, ow, oh, VK_FORMAT_R8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+              gpu_image_create(vk, &R.mask, ow, oh, VK_FORMAT_R8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT, // (2026-11-25: render_mask_read)
                            VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT) &&
               gpu_image_create(vk, &R.mask_depth, ow, oh, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                                VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)) &&
@@ -3506,6 +3777,13 @@ typedef struct SkinSlot {
     uint32_t morph_sk, morph_hash;
     uint8_t morph_map[RMESH_MAX_MORPHS];
 } SkinSlot;
+// (2026-11-24) A skin drawn at its bind (the mesh's own vertices, no room taken): no room for it (SKIN_RAW_ROOM, until
+// skin_gen moves), or its pose is the bind's (SKIN_RAW_BIND, while its palette's version stays ver)
+enum { SKIN_RAW_ROOM = 1, SKIN_RAW_BIND = 2 };
+typedef struct SkinRaw {
+    Entity e;
+    uint32_t mesh, gen, ver, why;
+} SkinRaw;
 // (skin.comp's SkinJob, scalar: 64 bytes) morph: its targets' count (0: no weight set, the loop skipped), the CSR and the
 // deltas (R.morphs) and the weights (after the palette)
 typedef struct SkinJobGpu {
@@ -3519,6 +3797,14 @@ typedef struct SkinJobGpu {
 void render_skin_stats(uint32_t* skins, uint32_t* bent, uint32_t* verts, double* cpu_ms) {
     *skins = R.nskins, *bent = R.nskin_jobs, *verts = R.skin_verts, *cpu_ms = R.skin_ms;
 }
+void render_skin_bind_stats(uint32_t* at_bind, uint32_t* no_room) { *at_bind = R.skin_raw_n, *no_room = R.skin_noroom_n; }
+uint32_t render_skin_rigid_count(void) { return R.skin_rigid_n; } // (2026-11-24)
+int render_mesh_collision(uint32_t slot) { return slot < RE_MAX_MESHES && slot < R.nmeshes ? R.mesh_collision[slot] : 0; } // (2026-11-24)
+bool render_last_camera(float pos[3]) { // (2026-11-24)
+    memcpy(pos, R.last_cam, 12);
+    return R.have_cam;
+}
+void render_dormant_stats(uint32_t* now, uint32_t* slept, uint32_t* woke) { *now = R.dorm_n, *slept = R.dorm_slept, *woke = R.dorm_woke; }
 void render_morph_off(bool off) { R.morph_off = off; }
 void render_morph_stats(uint32_t* meshes, uint32_t* jobs, uint32_t* verts) {
     *meshes = R.morph_meshes, *jobs = R.morph_jobs, *verts = R.morph_deltas;
@@ -3574,6 +3860,115 @@ static uint32_t skin_morph_weights(World* w, SkinSlot* k, Entity owner, float* w
 static void skin_reset(VkCtx* vk) { // (the GPU idle: a reload)
     for (uint32_t i = 0; i < R.nskins; i++) gi_dyn_blas_free(vk, &R.skins[i].blas);
     R.nskins = 0;
+    if (R.skin_map) memset(R.skin_map, 0xFF, sizeof(uint32_t) * R.skin_map_cap);
+    R.skin_gen++; // (the room is new: the skins without room try again)
+}
+
+// (2026-11-24) The slot -> skin map and the skins at their bind, as long as the scene's slots; false: no memory
+static bool skin_map_room(uint32_t s) {
+    if (s < R.skin_map_cap) return true;
+    uint32_t c = R.skin_map_cap ? R.skin_map_cap : 1024u;
+    while (c <= s || c < R.scene_cap) c *= 2u;
+    uint32_t* m = realloc(R.skin_map, sizeof(uint32_t) * c);
+    if (!m) return false;
+    R.skin_map = m;
+    SkinRaw* r = realloc(R.skin_raw, sizeof(SkinRaw) * c);
+    if (!r) return false;
+    R.skin_raw = r;
+    memset(m + R.skin_map_cap, 0xFF, sizeof(uint32_t) * (c - R.skin_map_cap));
+    memset(r + R.skin_map_cap, 0, sizeof(SkinRaw) * (c - R.skin_map_cap)); // (gen 0: none, skin_gen starts at 1)
+    R.skin_map_cap = c;
+    if (!R.skin_gen) R.skin_gen = 1u;
+    return true;
+}
+// The map from place `from` on (the list moved: a skin made or freed before them)
+static void skin_map_fix(uint32_t from) {
+    for (uint32_t i = from; i < R.nskins; i++)
+        if (!R.skins[i].dead_at && R.skins[i].slot < R.skin_map_cap) R.skin_map[R.skins[i].slot] = i;
+}
+// Slot s's live skin of entity e on mesh (NULL: none): the map; a slot whose mesh changed has two for a few frames,
+// the other one then searched
+static SkinSlot* skin_find(uint32_t s, Entity e, uint32_t mesh) {
+    uint32_t i = s < R.skin_map_cap ? R.skin_map[s] : UINT32_MAX;
+    if (i >= R.nskins) return NULL;
+    SkinSlot* k = &R.skins[i];
+    if (k->slot == s && k->e == e && k->mesh == mesh && !k->dead_at) return k;
+    for (uint32_t j = 0; j < R.nskins; j++)
+        if (R.skins[j].slot == s && R.skins[j].e == e && R.skins[j].mesh == mesh && !R.skins[j].dead_at) return &R.skins[j];
+    return NULL;
+}
+// A skin's palette now (its CSkeletalMesh's; NULL: none yet, its bind) and its version (0 without one: anim.c's start
+// at 1, so the first palette made is a change)
+static const float (*skin_palette(World* w, Entity e, uint32_t* nb, uint32_t* ver))[3][4] {
+    const CAttach* at = ecs_get(w, e, COMP_ATTACH);
+    *nb = 0, *ver = 0;
+    const float(*pal)[3][4] = at ? anim_skin_palette(at->owner, nb, ver) : NULL;
+    if (!pal) *nb = 1, *ver = 0;
+    return pal;
+}
+// (2026-11-24) Its pose is its bind's: every bone's palette the identity (a Skeletal Mesh standing still with no
+// animation; none yet) and no morph targets. Bent, its vertices would be the mesh's own: drawn from them, no room taken
+// (the Unamed scene's 2080 capsules needed 41 M vertices of a room of 6 M, 1764 of them out of room every frame)
+static bool skin_pose_is_bind(uint32_t mesh, const float (*pal)[3][4], uint32_t nb) {
+    if (mesh < RE_MAX_MESHES && R.morph_count[mesh] && R.morphs.buffer) return false; // (its weights may bend it)
+    if (!pal) return true;
+    for (uint32_t b = 0; b < nb; b++)
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 4; c++) { // (the rotation and scale within 1e-4, the move within 0.01 cm: a float's error far out)
+                float d = pal[b][r][c] - (c == r ? 1.0f : 0.0f);
+                if (fabsf(d) > (c == 3 ? 0.01f : 1e-4f)) return false;
+            }
+    return true;
+}
+// (2026-11-24, item 4) A rigid skin (R.mesh_rigid_bone: every vertex on one bone): the instance's rows times that bone's
+// palette row (the bone's pose times its bind's inverse, in the mesh's space), the mesh's own vertices drawn: no room, no
+// BLAS of its own, its LODs, its shadow and its rays as any mesh's, a moving one's through the dynamic set's compare. Any
+// thread (dyn_one's jobs, skin_bind). The 2080 capsules of the Unamed scene are such skins (two bones, one holding all)
+static void skin_rigid(World* w, Entity e, uint32_t mesh, GpuInstance* o) {
+    uint32_t nb, ver;
+    const float(*pal)[3][4] = skin_palette(w, e, &nb, &ver);
+    if (!pal || !nb) return; // (no pose yet: its bind)
+    uint32_t b = (uint32_t)R.mesh_rigid_bone[mesh];
+    if (b >= nb) b = nb - 1u;
+    const float(*p)[4] = pal[b];
+    float r[3][4];
+    for (int i = 0; i < 3; i++) {
+        for (int c = 0; c < 4; c++)
+            r[i][c] = o->rows[i][0] * p[0][c] + o->rows[i][1] * p[1][c] + o->rows[i][2] * p[2][c];
+        r[i][3] += o->rows[i][3];
+    }
+    memcpy(o->rows, r, sizeof r);
+}
+static bool skin_is_rigid(uint32_t mesh) { return mesh < RE_MAX_MESHES && R.mesh_skinned[mesh] && R.mesh_rigid_bone[mesh] >= 0; }
+
+// The fields skin_bind writes into a bone skin's instance (its own vertices, last frame's, its BLAS)
+static void skin_instance(const SkinSlot* k, GpuInstance* o) {
+    o->ids[1] |= INST_SKINNED;
+    o->ids[2] = R.lods[k->mesh][k->rt_lod].first_index; // (the rays' hits: their triangle in the LOD the BLAS holds)
+    o->ids[3] = k->base;
+    uint32_t prev = k->base + k->nv;
+    memcpy(&o->lightmap_st[0], &prev, 4);
+    memcpy(&o->lightmap_st[2], &k->blas.addr, 8);
+}
+// (2026-11-24) Any thread (dyn_one, the dynamic set compared in parallel): slot s's bone skin would do nothing this frame
+// (its pose and its morph weights as when it was last bent, or drawn at its bind and still so). o: its instance as
+// skin_bind would make it. 0: it has work (or isn't known), 1: its live skin, 2: at its bind
+static int skin_still(World* w, Entity e, uint32_t s, uint32_t mesh, GpuInstance* o) {
+    if (skin_is_rigid(mesh)) return skin_rigid(w, e, mesh, o), 3; // (2026-11-24: its rows by its bone; compared as any mesh)
+    if (s >= R.skin_map_cap) return 0;
+    uint32_t nb, ver;
+    skin_palette(w, e, &nb, &ver);
+    uint32_t i = R.skin_map[s];
+    if (i < R.nskins) {
+        const SkinSlot* k = &R.skins[i];
+        if (k->slot != s || k->e != e || k->mesh != mesh || k->dead_at || !k->done || k->pal_version != ver) return 0;
+        if (mesh < RE_MAX_MESHES && R.morph_count[mesh] && R.morphs.buffer) return 0; // (its weights: read on this thread)
+        skin_instance(k, o);
+        return 1;
+    }
+    const SkinRaw* r = &R.skin_raw[s];
+    if (r->gen == R.skin_gen && r->e == e && r->mesh == mesh && (r->why == SKIN_RAW_ROOM || r->ver == ver)) return 2;
+    return 0;
 }
 
 // The LOD a skin's rays see (its BLAS, refit every frame it moves): LOD 1 when it has one, like Unreal's ray tracing LOD
@@ -3644,6 +4039,11 @@ static void skin_room_grow(VkCtx* vk) {
     if (want < twice) want = twice;
     R.skin_short = 0;
     if (want <= R.skin_room_need) return; // (asked already: the reload on its way)
+    if (R.skin_room >= SKIN_ROOM_MAX) { // (2026-11-24) the room at its most: a reload of every mesh would give none more
+        R.skin_room_need = want;
+        printf("[RealEngine] Skins: out of room at the most (%u vertices): the rest drawn at their bind\n", R.skin_room);
+        return;
+    }
     R.skin_room_need = want;
     printf("[RealEngine] Skins: out of room (%u vertices), the meshes reloaded with %u\n", R.skin_room, R.skin_room_need);
     render_meshes_reload_async(vk);
@@ -3654,22 +4054,39 @@ static void skin_room_grow(VkCtx* vk) {
 static bool skin_bind(VkCtx* vk, World* w, uint32_t s, Entity e, uint32_t fslot, GpuInstance* o, const ClothSoftView* sv, const SplineMeshView* spv) {
     uint32_t mesh = o->ids[1] >> INST_SHAPE_SHIFT;
     const Mesh* me = &R.meshes[mesh];
-    SkinSlot* k = NULL;
-    for (uint32_t i = 0; i < R.nskins && !k; i++)
-        if (R.skins[i].slot == s && R.skins[i].e == e && R.skins[i].mesh == mesh && !R.skins[i].dead_at) k = &R.skins[i];
+    if (!sv && !spv && skin_is_rigid(mesh)) { // (2026-11-24, item 4) a rigid skin: its rows by its bone, nothing bent
+        skin_rigid(w, e, mesh, o);
+        R.skin_rigid_n++;
+        return false;
+    }
+    if (!skin_map_room(s)) return false;
+    // (2026-11-24, the Unamed scene) its skin by the slot's map (a search of the whole list for each skin: O(n^2) a frame)
+    SkinSlot* k = skin_find(s, e, mesh);
     if (!k) {
-        uint32_t nv = 0, base;
-        if (R.cpu_i && me->index_count) { // (LOD 0's vertices: its indices' highest + 1)
-            uint32_t hi = 0;
-            for (uint32_t q = 0; q < me->index_count; q++)
-                if (R.cpu_i[me->first_index + q] > hi) hi = R.cpu_i[me->first_index + q];
-            nv = hi + 1u;
+        SkinRaw* r = &R.skin_raw[s];
+        // (2026-11-24) no room for it since the last load or the last skin freed: drawn at its bind, not tried again (the
+        // first fit over the whole list for each of 1764 capsules, every frame)
+        if (r->gen == R.skin_gen && r->e == e && r->mesh == mesh && r->why == SKIN_RAW_ROOM) return R.skin_noroom_n++, false;
+        if (!sv && !spv) { // a bone skin whose pose is its bind's: drawn from the mesh's vertices (no room, no bend, no BLAS)
+            uint32_t nb, ver;
+            if (r->gen == R.skin_gen && r->e == e && r->mesh == mesh && r->why == SKIN_RAW_BIND) {
+                skin_palette(w, e, &nb, &ver);
+                if (ver == r->ver) return false;
+            }
+            const float(*pal)[3][4] = skin_palette(w, e, &nb, &ver);
+            if (skin_pose_is_bind(mesh, pal, nb)) {
+                *r = (SkinRaw){ e, mesh, R.skin_gen, ver, SKIN_RAW_BIND };
+                return false;
+            }
         }
-        if (!nv || R.nskins >= 4096u || !skin_alloc(nv, &base)) {
+        uint32_t nv = skin_mesh_nv(mesh), base; // (LOD 0's vertices: counted at the load)
+        if (!nv || R.nskins >= SKINS_MAX || !skin_alloc(nv, &base)) { // (2026-11-24: was 4096; the lists grow, their room is the limit)
             // no room: the meshes are made again with more (between frames), the skin drawn at its bind meanwhile
             // (Q14) summed over the frame, one reload after it (skin_room_grow): a level of many small skins (Spline Mesh
             // pieces, a cable's segments) reloaded the meshes once per piece, a dozen reloads in a row
             R.skin_short += nv * 2u;
+            *r = (SkinRaw){ e, mesh, R.skin_gen, 0u, SKIN_RAW_ROOM };
+            R.skin_noroom_n++;
             return false;
         }
         if (R.nskins >= R.skins_cap) {
@@ -3690,6 +4107,8 @@ static bool skin_bind(VkCtx* vk, World* w, uint32_t s, Entity e, uint32_t fslot,
         k = &R.skins[at];
         memset(k, 0, sizeof *k);
         k->slot = s, k->e = e, k->mesh = mesh, k->nv = nv, k->src = (uint32_t)me->vertex_offset, k->base = base;
+        skin_map_fix(at); // (it and the ones after it, one place up)
+        R.skin_raw[s].gen = 0; // (not at its bind any more)
         k->rt_lod = sv || spv ? 0u : skin_rt_lod(mesh); // (a soft body's or a Spline Mesh's: its LOD 0, the vertices it bends)
         if (gi_available()) gi_dyn_blas_create(vk, &k->blas, R.lods[mesh][k->rt_lod].index_count / 3u, nv - 1u);
         if (mesh < RE_MAX_MESHES) R.omm_bad[mesh] = true; // (its BLAS is its own: no micromap)
@@ -3789,9 +4208,8 @@ static bool skin_bind(VkCtx* vk, World* w, uint32_t s, Entity e, uint32_t fslot,
     }
     // its palette: the CSkeletalMesh it belongs to (none yet: its bind)
     const CAttach* at = ecs_get(w, e, COMP_ATTACH);
-    uint32_t nb = 0, ver = 0;
-    const float(*pal)[3][4] = at ? anim_skin_palette(at->owner, &nb, &ver) : NULL;
-    if (!pal) nb = 1, ver = 1;
+    uint32_t nb, ver;
+    const float(*pal)[3][4] = skin_palette(w, e, &nb, &ver);
     bool bent = false;
     // its morph targets' weights (nothing to do without: the CPU cost is a table read)
     float mw[RMESH_MAX_MORPHS];
@@ -3827,12 +4245,7 @@ static bool skin_bind(VkCtx* vk, World* w, uint32_t s, Entity e, uint32_t fslot,
         bent = k->done; // (the first bend isn't a motion)
         k->done = true, k->pal_version = ver, k->morph_hash = mhash;
     }
-    o->ids[1] |= INST_SKINNED;
-    o->ids[2] = R.lods[mesh][k->rt_lod].first_index; // (the rays' hits: their triangle in the LOD the BLAS holds)
-    o->ids[3] = k->base;
-    uint32_t prev = k->base + k->nv;
-    memcpy(&o->lightmap_st[0], &prev, 4);
-    memcpy(&o->lightmap_st[2], &k->blas.addr, 8);
+    skin_instance(k, o); // (the same fields skin_still gives a still one: dyn_one compares them)
     return bent;
 }
 
@@ -3840,13 +4253,18 @@ static bool skin_bind(VkCtx* vk, World* w, uint32_t s, Entity e, uint32_t fslot,
 static void skin_sweep(VkCtx* vk) {
     for (uint32_t i = 0; i < R.nskins;) {
         SkinSlot* k = &R.skins[i];
-        if (k->seen + 2u < R.frame_no && !k->dead_at) k->dead_at = R.frame_no;
+        if (k->seen + 2u < R.frame_no && !k->dead_at) {
+            k->dead_at = R.frame_no;
+            if (k->slot < R.skin_map_cap && R.skin_map[k->slot] == i) R.skin_map[k->slot] = UINT32_MAX;
+        }
         if (k->dead_at && R.frame_no - k->dead_at > RE_FRAMES_IN_FLIGHT + 1u) {
             gi_dyn_blas_free(vk, &k->blas);
             memmove(k, k + 1, sizeof(SkinSlot) * (R.nskins - i - 1));
             R.nskins--;
             for (uint32_t q = 0; q < R.nskin_jobs; q++) // (this frame's jobs after it: one place down, as in skin_bind)
                 if (R.skin_jobs[q] > i) R.skin_jobs[q]--;
+            skin_map_fix(i);
+            R.skin_gen++; // (its room free: the skins without room try again)
             continue;
         }
         i++;
@@ -3878,12 +4296,20 @@ static void skin_record(VkCommandBuffer cmd, uint32_t slot, Push push) {
                 CS | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | (rt ? AS : 0),
                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT | (rt ? VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR : 0));
     if (!rt) return;
+    // (2026-11-24, item 4) in one build call (5000 animated skins were 5000)
+    GiDynBlasJob* bj = R.nskin_jobs ? RE_FRAME_ALLOC(GiDynBlasJob, R.nskin_jobs) : NULL;
     for (uint32_t i = 0; i < R.nskin_jobs; i++) {
         SkinSlot* k = &R.skins[R.skin_jobs[i]];
         const Mesh* me = &R.lods[k->mesh][k->rt_lod];
-        gi_dyn_blas_record(cmd, &k->blas, R.vertices.addr + (VkDeviceAddress)k->base * sizeof(GpuVertex), k->nv - 1u,
-                           R.indices.addr + (VkDeviceAddress)me->first_index * sizeof(uint32_t));
+        if (!bj) { // (no frame memory: one by one)
+            gi_dyn_blas_record(cmd, &k->blas, R.vertices.addr + (VkDeviceAddress)k->base * sizeof(GpuVertex), k->nv - 1u,
+                               R.indices.addr + (VkDeviceAddress)me->first_index * sizeof(uint32_t));
+            continue;
+        }
+        bj[i] = (GiDynBlasJob){ &k->blas, R.vertices.addr + (VkDeviceAddress)k->base * sizeof(GpuVertex),
+                                R.indices.addr + (VkDeviceAddress)me->first_index * sizeof(uint32_t), k->nv - 1u };
     }
+    if (bj) gi_dyn_blas_record_batch(cmd, bj, R.nskin_jobs);
     gpu_barrier(cmd, AS, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, AS | CS | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
 }
@@ -3900,6 +4326,7 @@ static void upload_mesh_info(VkCtx* vk) {
         if (R.mesh_skinned[s]) mi[s].sphere[3] *= 1.35f; // (a skin's pose reaches past its bind's bounds: arms, a kick)
         mi[s].lod_count = R.lod_count[s] | (R.mesh_masked[s] ? MESH_INFO_MASKED : 0u) | (R.mesh_error_lod[s] ? MESH_INFO_ERROR_LOD : 0u) |
                           (R.mesh_translucent[s] ? MESH_INFO_TRANSLUCENT : 0u) | (R.mesh_omm[s] ? MESH_INFO_OMM : 0u) |
+                          (R.mesh_ext[s] ? MESH_INFO_EXT : 0u) | // (2026-11-24: its own run of draws, the RE_EXT pipelines there only)
                           (R.mesh_skinned[s] ? MESH_INFO_SKINNED | (skin_rt_lod(s) << MESH_INFO_RT_LOD_SHIFT) : 0u);
         for (int l = 1; l < MAX_LODS; l++) mi[s].lod_error[l - 1] = R.lod_error[s][l];
         for (uint32_t l = 0; l < MAX_LODS; l++) {
@@ -3955,6 +4382,7 @@ static bool reload_apply(VkCtx* vk, MeshStage* st) {
     memset(R.mesh_masked, 0, sizeof R.mesh_masked), R.any_masked = false, R.any_tess = false; // (marked again as they are sent)
     memset(R.mesh_translucent, 0, sizeof R.mesh_translucent), R.any_translucent = false;
     R.any_ext = false, R.any_ext_masked = false, R.ext_mat = R.ext_mat_masked = false;
+    memset(R.mesh_ext, 0, sizeof R.mesh_ext); // (2026-11-24: marked again as they are sent, their runs with them)
     R.any_sss = false;
     // (the BLAS made again without micromaps)
     memset(R.omm_slot, 0, sizeof R.omm_slot), memset(R.omm_bad, 0, sizeof R.omm_bad), memset(R.omm_done, 0, sizeof R.omm_done);
@@ -3983,7 +4411,14 @@ static void reload_work(AsyncTask* t, void* arg) {
     async_status(t, "%s", TR("Sending them to the GPU..."));
     if (!async_cancelled(t) && stage_gpu_prepare(RL.vk, st)) { // (failed: the main thread tries again)
         GiMesh gm[RE_MAX_MESHES];
-        for (uint32_t s = 0; s < st->nmeshes; s++) gm[s] = (GiMesh){ st->meshes[s].first_index, st->meshes[s].index_count, st->meshes[s].vertex_offset };
+        for (uint32_t s = 0; s < st->nmeshes; s++) {
+            gm[s] = (GiMesh){ st->meshes[s].first_index, st->meshes[s].index_count, st->meshes[s].vertex_offset };
+            // (2026-11-24, item 4) its rays on the coarsest LOD still holding its Fallback share of LOD 0's triangles (.rlod)
+            float fb = s >= SHAPE_COUNT && st->mesh_fallback[s] > 0.0f ? st->mesh_fallback[s] : 100.0f;
+            for (uint32_t l = 1; fb < 99.99f && l < st->lod_count[s] && l < MAX_LODS; l++)
+                if ((double)st->lods[s][l].index_count >= (double)st->lods[s][0].index_count * fb / 100.0)
+                    gm[s].first_index = st->lods[s][l].first_index, gm[s].index_count = st->lods[s][l].index_count;
+        }
         st->blas = gi_blas_prepare(RL.vk, st->g_v.addr, st->b.nv, st->g_i.addr, gm, (int)st->nmeshes, st->b.v, st->b.idx);
     }
 }
@@ -4315,6 +4750,14 @@ bool render_init(VkCtx* vk) {
     VkPhysicalDeviceFeatures feats;
     vkGetPhysicalDeviceFeatures(vk->gpu, &feats);
     R.wire_ok = feats.fillModeNonSolid;
+    { // (2026-11-24, item 4) the skins' room by the GPU's own memory (a phone and a small card keep the 6 M)
+        VkPhysicalDeviceMemoryProperties mp;
+        vkGetPhysicalDeviceMemoryProperties(vk->gpu, &mp);
+        VkDeviceSize vram = 0;
+        for (uint32_t h = 0; h < mp.memoryHeapCount; h++)
+            if ((mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && mp.memoryHeaps[h].size > vram) vram = mp.memoryHeaps[h].size;
+        g_skin_room_cap = vram >= (7ull << 30) + (512ull << 20) ? 16u << 20 : vram >= (5ull << 30) + (512ull << 20) ? 10u << 20 : 6u << 20;
+    }
     R.indep_blend = feats.independentBlend;
     R.split_ok = R.indep_blend && vk->unused_attachments && vk->ray_query; // (gi_available: after gi_init)
     R.den_ok = R.split_ok && !getenv("REALENGINE_NO_DENOISER_TARGETS"); // (the main pass's 4 targets; the env: a measure of their cost)
@@ -4533,11 +4976,13 @@ void render_shutdown(VkCtx* vk) {
     gpu_buf_destroy(vk, &R.morphs);
     free(R.morph_names), R.morph_names = NULL;
     free(R.skins), R.skins = NULL, R.skins_cap = 0;
+    free(R.skin_map), free(R.skin_raw), R.skin_map = NULL, R.skin_raw = NULL, R.skin_map_cap = 0;
     for (int f = 0; f < RE_FRAMES_IN_FLIGHT; f++) gpu_buf_destroy(vk, &R.skin_pal[f]), gpu_buf_destroy(vk, &R.skin_hdr[f]);
     R.skin_pal_cap = R.skin_hdr_cap = 0;
     if (R.skin_pipe) vkDestroyPipeline(vk->device, R.skin_pipe, NULL), R.skin_pipe = VK_NULL_HANDLE;
     gi_shutdown(vk);
     rt_alpha_job_cancel(vk); // (a job still compiling: waited for)
+    ext_job_cancel(vk);
     den_rt_job_wait(vk, false);
     pw_join(vk, false); // (a prewarm never taken: quit from the Project Browser)
     free(PB.it), PB.it = NULL, PB.n = PB.cap = 0;
@@ -4547,7 +4992,7 @@ void render_shutdown(VkCtx* vk) {
     if (R.dd_pipe) vkDestroyPipeline(vk->device, R.dd_pipe, NULL), R.dd_pipe = VK_NULL_HANDLE;
     if (R.dd_lines) vkDestroyPipeline(vk->device, R.dd_lines, NULL), R.dd_lines = VK_NULL_HANDLE;
     for (int f = 0; f < RE_FRAMES_IN_FLIGHT; f++) gpu_buf_destroy(vk, &R.dd_buf[f]), gpu_buf_destroy(vk, &R.dd_tbuf[f]);
-    VkPipeline ps[] = { R.shadow_m, R.cloth_shadow, R.shadow_pipe, R.mask_pipe, R.composite, R.exposure_pipe, R.cull_pipe, R.tlas_fill_pipe, R.hiz_pipe,
+    VkPipeline ps[] = { R.shadow_m, R.cloth_shadow, R.shadow_pipe, R.mask_pipe, R.mask_hair_pipe, R.composite, R.exposure_pipe, R.cull_pipe, R.tlas_fill_pipe, R.hiz_pipe,
                         R.velocity_pipe, R.velocity_crowd_pipe, R.velocity_hair_pipe, R.velocity_cloth_pipe, R.bloom_pipe, R.composite_post, R.crowd_pipe, R.split_pipe, R.mesh_tl, R.mesh_rt_tl, R.tsr_pipe, R.omm_pipe, R.gtao_pipe, R.sss_pipe, R.vrs_pipe, R.vrs_fov_pipe, R.ups_mv_pipe, R.decal_bin_pipe, R.den_pipes[0], R.den_pipes[1], R.den_pipes[2], R.den_trace_pipe };
     for (size_t i = 0; i < sizeof ps / sizeof ps[0]; i++)
         if (ps[i]) vkDestroyPipeline(vk->device, ps[i], NULL);
@@ -4726,6 +5171,11 @@ static bool rel_bit(uint32_t slot) { return !R.rel_cur || slot >= R.rel_cur_slot
 #define SLOT_ALIVE 1u
 #define SLOT_DYNAMIC 2u
 #define SLOT_UNBUILT 4u
+// (2026-11-24, item 4) a dynamic instance still for 120 frames (DORM_FRAMES): kept in the dynamic set's compare, but sent
+// without INST_DYNAMIC: in the static TLAS (built again once), out of the dynamic one, its shadow cached with the static
+// casters' (the 5000 standing capsules redrew theirs every frame); the first change wakes it (dyn loop)
+#define SLOT_DORMANT 8u
+#define DORM_FRAMES 120u
 
 // A mesh actor's instance (slot = its entity index); false (and zeroed) when nothing is drawn there. bmn/bmx: its world
 // bounds (the shadow box's casters).
@@ -4786,6 +5236,7 @@ static void glass_fill(World* w, GpuFrame* fr, const float cam[3]) {
     fr->rgi_info[1] = n;
 }
 
+static __declspec(thread) bool t_dyn_worker; // (2026-11-25) instance_of called by dyn_one (a worker, every frame)
 static bool instance_of(World* w, Entity e, bool editor, GpuInstance* o, float bmn[3], float bmx[3], bool* dynamic,
                         bool* unbuilt) {
     memset(o, 0, sizeof *o);
@@ -4821,7 +5272,9 @@ static bool instance_of(World* w, Entity e, bool editor, GpuInstance* o, float b
             memcpy(&o->emissive_rough[0], &slot, 4);
             o->emissive_rough[1] = uv;
             { // (2026-11-23) its glow for the GI's rays (before: 0, a material's emission lit nothing)
-                float nits[3] = { m->avg_emis[0] * 100.0f, m->avg_emis[1] * 100.0f, m->avg_emis[2] * 100.0f };
+                float ae[3]; // (2026-11-24: its slot's own, the Emission Intensity applied)
+                if (!mat_slot_emission(slot, ae)) memcpy(ae, m->avg_emis, sizeof ae);
+                float nits[3] = { ae[0] * 100.0f, ae[1] * 100.0f, ae[2] * 100.0f };
                 uint32_t pk = render_emis_pack(nits, lights_emissive_light(w, e, editor, NULL));
                 memcpy(&o->emissive_rough[2], &pk, 4);
             }
@@ -4861,7 +5314,8 @@ static bool instance_of(World* w, Entity e, bool editor, GpuInstance* o, float b
             }
             // (a mesh's runs are opaque, masked or translucent as a whole: one that also carries a Translucent material is
             // drawn by the OIT pass, which has no RE_EXT: said once, its name. The masked runs have theirs: 2026-11-10)
-            if (mat_ext(m) && !mat_translucent(m) && mesh < RE_MAX_MESHES) R.mesh_ext[mesh] = true;
+            // (2026-11-24) its own run of draws from now on (the cull's: MESH_INFO_EXT), the only one with the RE_EXT pipelines
+            if (mat_ext(m) && !mat_translucent(m) && mesh < RE_MAX_MESHES && !R.mesh_ext[mesh]) R.mesh_ext[mesh] = R.masked_dirty = true;
             if (mesh < RE_MAX_MESHES && R.mesh_ext[mesh] && !R.mesh_ext_warned[mesh] && R.mesh_translucent[mesh]) {
                 R.mesh_ext_warned[mesh] = true;
                 printf("[RealEngine] aviso: mesh %s has Translucent materials too: its extra lobes, vertex colors "
@@ -4885,10 +5339,13 @@ static bool instance_of(World* w, Entity e, bool editor, GpuInstance* o, float b
     }
     *dynamic = mob == MOBILITY_MOVABLE || (ecs_mask(w, e) & (COMP_BIT(COMP_ROTATING) | COMP_BIT(COMP_CLOTH))); // (Q9: a soft body's mesh bends)
     if (*dynamic) o->ids[1] |= INST_DYNAMIC;
-    // (Q21) a still instance of an imported mesh, opaque or Masked: an impostor may stand for it far away (farview.c)
+    // (Q21) a still instance of an imported mesh, opaque or Masked: an impostor may stand for it far away (farview.c).
+    // (2026-11-25, item 4) a rigid skin's too, Movable or not: its rows its bone's (skin_rigid), the cull swaps it for the
+    // card only while it sleeps (dormant: INST_DYNAMIC cleared), the Unamed's capsules far away
+    bool rigid = mesh < RE_MAX_MESHES && R.mesh_skinned[mesh] && R.mesh_rigid_bone[mesh] >= 0;
     bool far_note = false, far_plant = false, far_allowed = true;
     uint32_t far_key = 0;
-    if (!*dynamic && mesh >= SHAPE_COUNT && mesh < RE_MAX_MESHES && mesh != R.imp_card && !R.mesh_skinned[mesh] &&
+    if ((!*dynamic || rigid) && mesh >= SHAPE_COUNT && mesh < RE_MAX_MESHES && mesh != R.imp_card && (!R.mesh_skinned[mesh] || rigid) &&
         (o->ids[1] & (INST_TRANSLUCENT | INST_SKINNED)) == 0u && !ecs_get(w, e, COMP_SKELETAL_MESH)) {
         uint32_t key = 0xFFFFFFFFu;
         if (o->ids[1] & INST_MATERIAL) memcpy(&key, &o->emissive_rough[0], 4), key += 1u;
@@ -4905,7 +5362,9 @@ static bool instance_of(World* w, Entity e, bool editor, GpuInstance* o, float b
         bmn[r] = c - x;
         bmx[r] = c + x;
     }
-    if (far_note) farview_note_instance(mesh, far_key, far_plant, far_allowed, bmn, bmx); // (with its box: farview.c skips props too small to ever switch)
+    // (with its box: farview.c skips props too small to ever switch; 2026-11-25: not from dyn_one's workers, every frame in
+    // parallel: a Movable rigid skin is noted once, by the scene's build)
+    if (far_note && !t_dyn_worker) farview_note_instance(mesh, far_key, far_plant, far_allowed, bmn, bmx);
     return true;
 }
 
@@ -5158,10 +5617,11 @@ static void dyn_remove(uint32_t s) {
             R.dyn_inst[j] = R.dyn_inst[R.ndyn];
             break;
         }
-    R.slot_state[s] &= ~SLOT_DYNAMIC;
+    R.slot_state[s] &= ~(SLOT_DYNAMIC | SLOT_DORMANT);
 }
 
-typedef struct DynOut { GpuInstance o; float mn[3], mx[3]; bool alive, same; } DynOut; // same: as last sent (nothing to do)
+// same: as last sent (nothing to do); skin: a still skin's (skin_still: 1 its live skin, 2 at its bind)
+typedef struct DynOut { GpuInstance o; float mn[3], mx[3]; bool alive, same; uint8_t skin; } DynOut;
 typedef struct DynJob { World* w; bool editor; DynOut* out; } DynJob;
 
 // An instance's world box from its rows and mesh (the virtual shadow maps' dirty boxes: where it was)
@@ -5186,17 +5646,27 @@ static void dyn_one(DynJob* j, uint32_t i) {
     bool dynamic, unbuilt;
     DynOut* d = &j->out[i];
     Entity e = ecs_entity_at(j->w, R.dyn[i]);
+    t_dyn_worker = true; // (instance_of: no impostor notes from the workers)
     d->alive = instance_of(j->w, e, j->editor, &d->o, d->mn, d->mx, &dynamic, &unbuilt);
+    t_dyn_worker = false;
     // (2026-11-19, the Q8 leftover) compared here, in parallel: 20 thousand bodies at rest were 20 thousand compares on
     // the render's thread every frame. Same as last sent (its moving bit as the frame gives it), not a skin, a Spline
     // Mesh or a soft body (bent each frame): the serial loop only counts its bounds
-    d->same = false;
+    d->same = false, d->skin = 0;
     if (!d->alive) return;
     uint32_t mesh = d->o.ids[1] >> INST_SHAPE_SHIFT, s = R.dyn[i];
-    if (R.skin_jobs && mesh < RE_MAX_MESHES && (R.mesh_skinned[mesh] || (ecs_mask(j->w, e) & (COMP_BIT(COMP_ATTACH) | COMP_BIT(COMP_CLOTH))))) return;
-    if (memcmp(d->o.rows, R.dyn_inst[i].rows, sizeof d->o.rows) != 0) return;
     GpuInstance q = d->o;
+    // (2026-11-24, the Unamed scene) a bone skin whose pose didn't change (or drawn at its bind) is compared as the rest:
+    // 2080 still capsules went through skin_bind every frame on the render's thread
+    if (R.skin_jobs && mesh < RE_MAX_MESHES && R.mesh_skinned[mesh]) {
+        int k = skin_still(j->w, e, s, mesh, &q);
+        if (!k) return;
+        d->skin = (uint8_t)k;
+    } else if (R.skin_jobs && mesh < RE_MAX_MESHES && (ecs_mask(j->w, e) & (COMP_BIT(COMP_ATTACH) | COMP_BIT(COMP_CLOTH))))
+        return;
+    if (memcmp(q.rows, R.dyn_inst[i].rows, sizeof q.rows) != 0) return;
     if (R.moved_at[s] && R.frame_no - R.moved_at[s] < 60u) q.ids[1] |= INST_MOVING;
+    if (R.slot_state[s] & SLOT_DORMANT) q.ids[1] &= ~INST_DYNAMIC; // (2026-11-24: sent without it while dormant)
     d->same = memcmp(&q, &R.dyn_inst[i], sizeof q) == 0;
 }
 
@@ -5444,6 +5914,7 @@ static bool scene_prepare(VkCtx* vk, World* w, const RenderView* view, uint32_t 
     crowd_prepare(vk, slot); // (the crowds' agents and parts for crowd.comp)
     for (int k = 0; k < 3; k++) dmn[k] = 1e30f, dmx[k] = -1e30f;
 
+    memcpy(R.last_cam, view->pos, sizeof R.last_cam), R.have_cam = true; // (2026-11-24: anim.c's rate by distance)
     // the hot slots: the log's, then the selection and the one before it
     uint32_t nlog = w->changes - R.seen_changes;
     uint32_t* hot = RE_FRAME_ALLOC(uint32_t, nlog + 3);
@@ -5520,7 +5991,9 @@ static bool scene_prepare(VkCtx* vk, World* w, const RenderView* view, uint32_t 
     // whose transform changed in the last 60 frames is moving (INST_MOVING): the surface cache and the probes leave it out
     // then (the contact GI shades it), its own texels are redone every frame; standing still it is a wall like any other
     R.frame_no++;
-    R.nskin_jobs = R.skin_pal_used = R.skin_verts = R.morph_jobs = R.morph_deltas = 0;
+    R.nskin_jobs = R.skin_pal_used = R.skin_verts = R.morph_jobs = R.morph_deltas = R.skin_raw_n = R.skin_noroom_n = R.skin_rigid_n = R.dorm_n = 0;
+    static int no_dorm = -1; // (2026-11-24: REALENGINE_NO_DORMANT=1: never dormant, the measures' before)
+    if (no_dorm < 0) no_dorm = getenv("REALENGINE_NO_DORMANT") != NULL;
     R.skin_jobs = R.nskins || R.ndyn ? RE_FRAME_ALLOC(uint32_t, R.ndyn + 1) : NULL;
     double skin_t0 = re_time_seconds();
     for (int k = 0; k < 3; k++) R.dyn_mn[k] = 1e30f, R.dyn_mx[k] = -1e30f;
@@ -5540,7 +6013,22 @@ static bool scene_prepare(VkCtx* vk, World* w, const RenderView* view, uint32_t 
         float* bmn = dj.out[i].mn;
         float* bmx = dj.out[i].mx;
         if (dj.out[i].same) { // (at rest, as sent: its bounds counted, nothing else)
-            R.slot_state[s] = (uint8_t)(SLOT_DYNAMIC | SLOT_ALIVE);
+            uint8_t dorm = R.slot_state[s] & SLOT_DORMANT;
+            R.slot_state[s] = (uint8_t)(SLOT_DYNAMIC | SLOT_ALIVE | dorm);
+            // (2026-11-24, item 4) still long enough (not a live skin, a cloth, a crowd's): dormant from now on
+            if (!dorm && !no_dorm && (R.dyn_inst[i].ids[1] & INST_ALIVE) && !(R.dyn_inst[i].ids[1] & (INST_SKINNED | INST_MOVING)) &&
+                R.frame_no - R.moved_at[s] >= DORM_FRAMES && !(ecs_mask(w, ecs_entity_at(w, s)) & COMP_BIT(COMP_CLOTH))) {
+                R.dyn_inst[i].ids[1] &= ~INST_DYNAMIC;
+                SEND(s, &R.dyn_inst[i]);
+                R.slot_state[s] |= SLOT_DORMANT;
+                if (R.dyn_inst[i].ids[1] & INST_CAST_SHADOW) shadows_dirty_box(dj.out[i].mn, dj.out[i].mx); // (the static pages: with it now)
+                rebuild_static = R.dyn_changed = true;
+                R.dorm_slept++;
+            }
+            if (R.slot_state[s] & SLOT_DORMANT) R.dorm_n++;
+            if (dj.out[i].skin == 1u && s < R.skin_map_cap && R.skin_map[s] < R.nskins) R.skins[R.skin_map[s]].seen = R.frame_no; // (kept: skin_sweep)
+            else if (dj.out[i].skin == 2u) R.skin_raw_n++, R.skin_noroom_n += R.skin_raw[s].why == SKIN_RAW_ROOM;
+            else if (dj.out[i].skin == 3u) R.skin_rigid_n++; // (2026-11-24: a rigid skin at rest)
             for (int k = 0; k < 3; k++) R.dyn_mn[k] = fminf(R.dyn_mn[k], bmn[k]), R.dyn_mx[k] = fmaxf(R.dyn_mx[k], bmx[k]);
             if (R.dyn_inst[i].ids[1] & INST_CAST_SHADOW)
                 for (int k = 0; k < 3; k++) dmn[k] = fminf(dmn[k], bmn[k]), dmx[k] = fmaxf(dmx[k], bmx[k]);
@@ -5548,13 +6036,23 @@ static bool scene_prepare(VkCtx* vk, World* w, const RenderView* view, uint32_t 
         }
         GpuInstance o = dj.out[i].o;
         bool alive = dj.out[i].alive;
+        if (R.slot_state[s] & SLOT_DORMANT) { // (2026-11-24) it changed: awake (out of the static TLAS, its cached shadow redone)
+            rebuild_static = R.dyn_changed = true;
+            if (R.dyn_inst[i].ids[1] & INST_CAST_SHADOW) {
+                float omn[3], omx[3];
+                rows_bounds(&R.dyn_inst[i], omn, omx);
+                shadows_dirty_box(omn, omx);
+            }
+            R.dorm_woke++;
+        }
         R.slot_state[s] = (uint8_t)(SLOT_DYNAMIC | (alive ? SLOT_ALIVE : 0u));
         bool posed = false; // a skin bent this frame (its pose changed): it moved for its shadow and the velocity pass
         ClothSoftView sv;
         SplineMeshView spv;
-        if (alive && R.skin_jobs && (o.ids[1] >> INST_SHAPE_SHIFT) < RE_MAX_MESHES && R.mesh_skinned[o.ids[1] >> INST_SHAPE_SHIFT])
+        if (alive && R.skin_jobs && (o.ids[1] >> INST_SHAPE_SHIFT) < RE_MAX_MESHES && R.mesh_skinned[o.ids[1] >> INST_SHAPE_SHIFT]) {
             posed = skin_bind(vk, w, s, ecs_entity_at(w, s), slot, &o, NULL, NULL);
-        else if (alive && R.skin_jobs && (o.ids[1] >> INST_SHAPE_SHIFT) < RE_MAX_MESHES && (ecs_mask(w, ecs_entity_at(w, s)) & COMP_BIT(COMP_ATTACH)) &&
+            if (!(o.ids[1] & INST_SKINNED) && !skin_is_rigid(o.ids[1] >> INST_SHAPE_SHIFT)) R.skin_raw_n++; // (drawn at its bind)
+        } else if (alive && R.skin_jobs && (o.ids[1] >> INST_SHAPE_SHIFT) < RE_MAX_MESHES && (ecs_mask(w, ecs_entity_at(w, s)) & COMP_BIT(COMP_ATTACH)) &&
                  spline_mesh_view(w, ecs_entity_at(w, s), &spv))
             posed = skin_bind(vk, w, s, ecs_entity_at(w, s), slot, &o, NULL, &spv); // (Q14: a Spline Mesh piece, a Cable's segment)
         else if (alive && R.skin_jobs && (o.ids[1] >> INST_SHAPE_SHIFT) < RE_MAX_MESHES && (ecs_mask(w, ecs_entity_at(w, s)) & COMP_BIT(COMP_CLOTH)) &&
@@ -5736,6 +6234,7 @@ static VkDeviceAddress scene_record(VkCtx* vk, VkCommandBuffer cmd, uint32_t slo
             for (uint32_t i = 0; d && i < R.ndyn; i++) {
                 const GpuInstance* o = &R.dyn_inst[i];
                 if (!(o->ids[1] & INST_ALIVE)) continue;
+                if (R.slot_state[R.dyn[i]] & SLOT_DORMANT) continue; // (2026-11-24: dormant: in the static TLAS)
                 if (!rel_bit(R.dyn[i])) continue; // can't show up in the view (nor its shadow, nor its light)
                 // made on the stack, then copied: the mapped memory is write-combined (the bit fields' read-modify-
                 // writes straight into it cost a read from the bus each: 14 ms for 28 000 animated parts)
@@ -5939,6 +6438,10 @@ static void ts(VkCommandBuffer cmd, uint32_t slot, uint32_t i, VkPipelineStageFl
 // The draws of a list in runs of meshes of one class (Masked or not, a shape or imported): each run's non-empty commands,
 // packed by cull.comp (pass 1/4) with their count: DrawIndexedIndirectCount draws only those (a mesh's LOD commands are
 // mostly empty; they cost +10% of the main pass with 89 meshes registered, notas-dev/render.md)
+// (2026-11-24) the RE_EXT runs' pipelines (opaque, masked, imported, imported masked; NULL: the plain ones), and the runs
+// drawn plain / RE_EXT this frame (the mat_class_split test, the bench's line)
+static VkPipeline g_run_x[4];
+static uint32_t g_run_count[2];
 static uint32_t draw_runs(VkCommandBuffer cmd, VkDeviceSize list_off, VkPipeline opaque, VkPipeline masked, VkPipeline opaque_t,
                           VkPipeline masked_t) {
     const VkDeviceSize stride = sizeof(VkDrawIndexedIndirectCommand);
@@ -5947,7 +6450,11 @@ static uint32_t draw_runs(VkCommandBuffer cmd, VkDeviceSize list_off, VkPipeline
     uint32_t n = R.ncmd / MAX_LODS, list = (uint32_t)(list_off / ((VkDeviceSize)R.ncmd * stride));
     VkDeviceSize cbase = ((VkDeviceSize)R.ncmd * 3 * 20 + ((VkDeviceSize)R.ncmd * 6 + 1) * 4 + 15) & ~(VkDeviceSize)15;
     VkDeviceSize counts = cbase + (VkDeviceSize)R.ncmd * 3 * stride;
-#define RUN_CLASS(i) ((R.mesh_masked[i] ? 1 : 0) | ((i) >= SHAPE_COUNT ? 2 : 0) | (R.mesh_translucent[i] ? 4 : 0)) // (cull.comp's runs)
+    // (2026-11-24) the meshes drawn by an RE_EXT material: their own runs (MESH_INFO_EXT), drawn with g_run_x's pipelines
+    // when the pass gives them (the main pass: only those pay the RE_EXT variants' registers and spills)
+#define RUN_CLASS(i) ((R.mesh_masked[i] ? 1 : 0) | ((i) >= SHAPE_COUNT ? 2 : 0) | (R.mesh_translucent[i] ? 4 : 0) | (R.mesh_ext[i] ? 8 : 0)) // (cull.comp's runs)
+    VkPipeline px4[4] = { g_run_x[0], g_run_x[1] ? g_run_x[1] : g_run_x[0], g_run_x[2] ? g_run_x[2] : g_run_x[0],
+                          g_run_x[3] ? g_run_x[3] : g_run_x[1] ? g_run_x[1] : g_run_x[0] };
     VkPipeline bound = VK_NULL_HANDLE;
     uint32_t runs = 0;
     for (uint32_t a = 0; a < n;) {
@@ -5959,7 +6466,10 @@ static uint32_t draw_runs(VkCommandBuffer cmd, VkDeviceSize list_off, VkPipeline
             a = b;
             continue;
         }
-        VkPipeline p = (m & 4) ? masked : p4[((m & 1) && masked ? 1 : 0) | ((m & 2) && opaque_t ? 2 : 0)];
+        int pk = ((m & 1) && masked ? 1 : 0) | ((m & 2) && opaque_t ? 2 : 0);
+        bool xr = (m & 8) && !(m & 4) && px4[pk] && opaque;
+        VkPipeline p = (m & 4) ? masked : xr ? px4[pk] : p4[pk];
+        if (opaque) g_run_count[xr ? 1 : 0]++;
         if (p != bound) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p), bound = p;
         vkCmdDrawIndexedIndirectCount(cmd, R.draws.buffer, cbase + ((VkDeviceSize)list * R.ncmd + (VkDeviceSize)a * MAX_LODS) * stride,
                                       R.draws.buffer, counts + ((VkDeviceSize)list * n + a) * 4, (b - a) * MAX_LODS, (uint32_t)stride);
@@ -6661,6 +7171,7 @@ bool render_scene(VkCtx* vk, VkCommandBuffer cmd, World* w, const RenderView* vi
     float dmn[3], dmx[3];
     if (!scene_prepare(vk, w, view, slot, &dyn_inst, &ndyn, dmn, dmx)) return false;
     rt_alpha_job_poll(vk); // (the Masked shadow rays' pipelines, once the thread made them)
+    ext_job_poll(vk); // (the RE_EXT set, once its thread made it)
     omm_update(vk);
     if (R.toon_rebuild || R.tess_rebuild) { // (Q11) a Toon material sent: the pipelines made again with the RE_EXT ones' RE_TOON twins (once); (Q22) a displaced one: with their tess twins
         R.toon_rebuild = R.tess_rebuild = false;
@@ -6678,14 +7189,88 @@ bool render_scene(VkCtx* vk, VkCommandBuffer cmd, World* w, const RenderView* vi
     for (int k = 0; k < 3; k++) smn[k] = fminf(R.static_mn[k], dmn[k]), smx[k] = fmaxf(R.static_mx[k], dmx[k]);
     R.mask_draws = 0;
     uint32_t nsel = view->selection ? view->selection_count : (view->selected != ENTITY_NONE ? 1u : 0u);
+    // (2026-11-25, item 17) the selected actors' own meshes and those of everything hanging from them (CAttach: a Skeletal
+    // Mesh's parts and skin, a Blueprint's components, a vehicle's, a Landscape's chunks), each with its actor's id: one
+    // outline around the whole actor. A bitset of the selected (thousands selected: no O(n m))
+    uint8_t* selbits = nsel ? RE_FRAME_ALLOC(uint8_t, (w->slot_count + 8u) / 8u) : NULL;
+    if (selbits) memset(selbits, 0, (w->slot_count + 8u) / 8u);
+    R.mask_sel = selbits, R.mask_sel_n = selbits ? w->slot_count : 0u, R.mask_world = w; // (the hair's outline: groom_draw_mask)
     for (uint32_t i = 0; i < nsel && R.mask_draws < MASK_MAX; i++) {
         Entity e = view->selection ? view->selection[i] : view->selected;
-        const CStaticMesh* sm = ecs_get(w, e, COMP_STATIC_MESH);
         uint32_t s = entity_index(e);
+        if (selbits && s < w->slot_count) selbits[s >> 3] |= (uint8_t)(1u << (s & 7u));
+        const CStaticMesh* sm = ecs_get(w, e, COMP_STATIC_MESH);
         if (sm && s < R.scene_cap && (R.slot_state[s] & SLOT_ALIVE)) {
             R.mask_slot[R.mask_draws] = s;
             R.mask_mesh[R.mask_draws] = render_mesh_slot(sm->mesh);
+            R.mask_id[R.mask_draws] = 2u + s;
             R.mask_draws++;
+        }
+    }
+    for (uint32_t ai = 0; selbits && ai < w->archetype_count && R.mask_draws < MASK_MAX; ai++) {
+        const EcsArchetype* a = &w->archetypes[ai];
+        const uint64_t need = COMP_BIT(COMP_ATTACH) | COMP_BIT(COMP_STATIC_MESH);
+        if ((a->mask & need) != need) continue;
+        const Entity* ents = ecs_arch_entities(a);
+        for (uint32_t i = 0; i < a->count && R.mask_draws < MASK_MAX; i++) {
+            uint32_t s = entity_index(ents[i]);
+            if (s >= R.scene_cap || !(R.slot_state[s] & SLOT_ALIVE)) continue;
+            // up its chain (the parent it hangs from, then its owner): the first selected one names the outline
+            uint32_t sel = UINT32_MAX;
+            Entity cur = ents[i];
+            for (int depth = 0; depth < 64 && sel == UINT32_MAX; depth++) { // (a rig's parts hang one from another: pelvis, spine, neck, head... deeper than 8)
+                const CAttach* at = ecs_get(w, cur, COMP_ATTACH);
+                if (!at) break;
+                uint32_t ps = entity_index((Entity)at->parent), os = entity_index((Entity)at->owner);
+                if (at->parent && ps < w->slot_count && (selbits[ps >> 3] & (1u << (ps & 7u)))) sel = ps;
+                else if (at->owner && os < w->slot_count && (selbits[os >> 3] & (1u << (os & 7u)))) sel = os;
+                cur = at->parent ? (Entity)at->parent : (Entity)at->owner;
+                if (cur == ents[i]) break;
+            }
+            if (sel == UINT32_MAX) continue;
+            const CStaticMesh* sm = ecs_get(w, ents[i], COMP_STATIC_MESH);
+            R.mask_slot[R.mask_draws] = s;
+            R.mask_mesh[R.mask_draws] = render_mesh_slot(sm->mesh);
+            R.mask_id[R.mask_draws] = 2u + sel;
+            R.mask_draws++;
+        }
+    }
+    R.mask_cn = R.mask_c_inst = 0;
+    { // (2026-11-25, item 17) a selected Crowd Spawner's agents: each part a draw with every agent as an instance (their
+        // slots after the world's, as crowd_prepare lays them: its base + agent x parts + part), the spawner's id
+        const CrowdDraw* cd;
+        uint32_t nc = selbits ? crowd_draws(&cd) : 0u, cbase = 0;
+        for (uint32_t i = 0; i < nc && i < CROWD_MAX_RUNS; i++) {
+            uint64_t parts = (uint64_t)cd[i].nagents * cd[i].nparts;
+            if (cbase + parts > R.crowd_room) break;
+            uint32_t s = entity_index(cd[i].e);
+            if (s < w->slot_count && (selbits[s >> 3] & (1u << (s & 7u))) && cd[i].mesh && cd[i].nparts <= 511u) {
+                uint32_t h = (2u + s) * 2654435761u; // (mask.frag's hash of the id, done here: its byte rides in the pass)
+                // each part's coarsest LOD under half a pixel of error at the crowd's nearest (the spawner's distance less
+                // its radius; the part's scale from its baked rows): 30 Mannequins at 15 m whole took 0.2 ms
+                const CTransform* ct = ecs_get(w, cd[i].e, COMP_TRANSFORM);
+                const CCrowd* cc = ecs_get(w, cd[i].e, COMP_CROWD);
+                float dd = 0.0f;
+                if (ct)
+                    for (int k = 0; k < 3; k++) dd += (ct->location[k] - view->pos[k]) * (ct->location[k] - view->pos[k]);
+                dd = fmaxf(sqrtf(dd) - (cc ? cc->radius : 0.0f), 100.0f);
+                float px_cm = view->w / (2.0f * dd * tanf(fmaxf(view->fov_deg, 1.0f) * 0.5f * DEG2RAD));
+                for (uint32_t p = 0; p < cd[i].nparts && R.mask_cn < MASK_CROWD; p++) {
+                    uint32_t ms = render_mesh_slot(cd[i].mesh->parts[p].mesh), lod = 0;
+                    const float* rw = &cd[i].baked[(size_t)p * 12];
+                    float sc = fmaxf(sqrtf(rw[0] * rw[0] + rw[4] * rw[4] + rw[8] * rw[8]), fmaxf(sqrtf(rw[1] * rw[1] + rw[5] * rw[5] + rw[9] * rw[9]),
+                                                                                             sqrtf(rw[2] * rw[2] + rw[6] * rw[6] + rw[10] * rw[10])));
+                    for (uint32_t l = ms < R.nmeshes ? R.lod_count[ms] : 0u; l-- > 1u && !lod;)
+                        if (R.lods[ms][l].index_count && R.lod_error[ms][l] * sc * px_cm < 0.5f) lod = l;
+                    R.mask_c_slot[R.mask_cn] = R.crowd_base + cbase + p;
+                    R.mask_c_mesh[R.mask_cn] = ms | lod << 24;
+                    R.mask_c_stride[R.mask_cn] = cd[i].nparts;
+                    R.mask_c_count[R.mask_cn] = cd[i].nagents;
+                    R.mask_c_id[R.mask_cn] = 1u + (h >> 24) % 254u;
+                    R.mask_cn++, R.mask_c_inst += cd[i].nagents;
+                }
+            }
+            cbase += (uint32_t)parts;
         }
     }
     R.mask_hl = 0, R.mask_hl_mode = view->highlight_mode & 3u;
@@ -6696,6 +7281,7 @@ bool render_scene(VkCtx* vk, VkCommandBuffer cmd, World* w, const RenderView* vi
         if (sm && s < R.scene_cap && (R.slot_state[s] & SLOT_ALIVE)) {
             R.mask_slot[R.mask_draws] = s;
             R.mask_mesh[R.mask_draws] = render_mesh_slot(sm->mesh);
+            R.mask_id[R.mask_draws] = 1u; // (the highlight's id, mask.frag's top one)
             R.mask_draws++, R.mask_hl++;
         }
     }
@@ -6975,8 +7561,9 @@ bool render_scene(VkCtx* vk, VkCommandBuffer cmd, World* w, const RenderView* vi
         }
         fr->decals = R.decal_buf[slot].addr, fr->decal_tiles = R.decal_tiles[slot].addr;
         fr->decal_count = nd, fr->decal_tiles_x = tx, fr->decal_tiles_y = ty, fr->decal_pad = 0;
-        if (nd && !R.ext_mat) { // (the decals are drawn by the RE_EXT pipelines: from now on)
-            R.any_ext = R.ext_mat = true;
+        R.ext_decal = nd != 0; // (2026-11-24: the frames with decals, not from now on)
+        if (nd && !R.any_ext) { // (the decals are drawn by the RE_EXT pipelines: made now)
+            R.any_ext = true;
             printf("[RealEngine] Decals: the RE_EXT pipelines\n");
         }
     }
@@ -6995,7 +7582,7 @@ bool render_scene(VkCtx* vk, VkCommandBuffer cmd, World* w, const RenderView* vi
     mr_fill(fr, view, slot, near_cm); // (Q25b) mixed reality (mr.glsl)
     fr->view_mode = view->view_mode;
     // composite.frag: bit 0 the outline is drawn, bits 1-2 the highlight's mode (IAR_OUTLINE, IAR_GLOW)
-    fr->pad0 = (R.mask_draws ? 1u : 0u) | (R.mask_hl ? R.mask_hl_mode << 1 : 0u);
+    fr->pad0 = (R.mask_draws || R.mask_cn ? 1u : 0u) | (R.mask_hl ? R.mask_hl_mode << 1 : 0u);
 
     // Global illumination: the probe grid around the camera, the addresses the hit shaders read
     bool pt = view->view_mode == VIEW_PATH_TRACING && gi_available();
@@ -7647,45 +8234,65 @@ bool render_scene(VkCtx* vk, VkCommandBuffer cmd, World* w, const RenderView* vi
         R.any_ext = R.any_ext_masked = true;
         printf("[RealEngine] Rain: the RE_EXT pipelines (the rain on the surfaces is in them)\n");
     }
-    ext_pipelines_ensure(vk); // (the first frame a material with extra lobes is sent)
+    TRACE("Render: RE_EXT pipelines", ext_pipelines_request(vk)); // (the first frame a material with extra lobes is sent: on a thread)
     bool wire = view->view_mode == VIEW_WIREFRAME && R.mesh_wire, rt = (fr->gi_flags & (GI_REFLECTIONS | GI_RT_SHADOWS)) && R.mesh_rt;
     // (the Principled's extra lobes: their RE_EXT variants while a material sent has them; the plain ones keep their registers)
     bool lf_now = lights_function_seen(); // (Q4: the Light Functions are in the RE_EXT variants)
-    bool ext = (R.ext_mat || rain_now || lf_now || tf_now) && R.mesh_x && (!rt || R.mesh_rt_x);
+    // (2026-11-24) the materials' RE_EXT per mesh: only the runs of the meshes an RE_EXT material draws (MESH_INFO_EXT) take
+    // those pipelines, the rest keep the plain ones (before: one such material switched every mesh, ~5-15% of the main
+    // pass). The rain, the Light Functions, a Force Toon light and the decals still switch all of them (what they touch
+    // isn't known per mesh). REALENGINE_NO_EXT_SPLIT=1: all of them, the measure's "before"
+    static int no_split = -1;
+    if (no_split < 0) no_split = getenv("REALENGINE_NO_EXT_SPLIT") != NULL;
+    bool ext_any = (R.ext_mat || R.ext_decal || rain_now || lf_now || tf_now) && R.mesh_x && (!rt || R.mesh_rt_x);
+    bool ext_all = ext_any && (R.ext_decal || rain_now || lf_now || tf_now || no_split);
+    VkPipeline runx[4] = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VkPipeline main_o, main_m, main_ot, main_mt;
+    for (int px = ext_any && !ext_all ? 1 : 0; px >= 0; px--) { // (the RE_EXT runs' set first, then the plain one)
+    bool ext = px ? true : ext_all;
     // (Low / no RT: the local lights' maps first, in their own variant; the lobes' then wait for a frame without maps)
-    VkPipeline main_o = wire ? R.mesh_wire : rt ? (ext ? R.mesh_rt_x : R.mesh_rt) : (fr->gi_flags & (GI_LOCAL_SM | GI_SSR)) && R.mesh_lsm ? (ext && R.mesh_lsm_x ? R.mesh_lsm_x : R.mesh_lsm) : ext ? R.mesh_x : R.mesh; // (A4c: SSR is in the RE_LSM variant, not the plain one; Q11: with the RE_EXT features, mesh_lsm_x)
+    main_o = wire ? R.mesh_wire : rt ? (ext ? R.mesh_rt_x : R.mesh_rt) : (fr->gi_flags & (GI_LOCAL_SM | GI_SSR)) && R.mesh_lsm ? (ext && R.mesh_lsm_x ? R.mesh_lsm_x : R.mesh_lsm) : ext ? R.mesh_x : R.mesh; // (A4c: SSR is in the RE_LSM variant, not the plain one; Q11: with the RE_EXT features, mesh_lsm_x)
     // the masked meshes are always in the prepass (cull.comp): with it, only the pixel it kept is shaded (hair cards
     // dozens deep cost 19 ms when each layer ran the cut and the shading); without it, the cut here
     // (2026-11-10) the masked runs' RE_EXT ones while a Masked / Two Sided material has the lobes (hair, leaves with a coat)
     static int no_extm = -1; // (REALENGINE_NO_MASKED_EXT: the plain masked ones, the measure's "before")
     if (no_extm < 0) no_extm = getenv("REALENGINE_NO_MASKED_EXT") != NULL;
     bool extm = ext && (R.ext_mat_masked || rain_now || lf_now || tf_now) && !no_extm && (rt ? R.mesh_rt_m_x && R.mesh_rt_m_eq_x : R.mesh_m_x && R.mesh_m_eq_x);
-    VkPipeline main_m = wire ? VK_NULL_HANDLE : occl ? (rt ? (extm ? R.mesh_rt_m_eq_x : R.mesh_rt_m_eq) : (extm ? R.mesh_m_eq_x : R.mesh_m_eq))
+    main_m = wire ? VK_NULL_HANDLE : occl ? (rt ? (extm ? R.mesh_rt_m_eq_x : R.mesh_rt_m_eq) : (extm ? R.mesh_m_eq_x : R.mesh_m_eq))
                                                        : (rt ? (extm ? R.mesh_rt_m_x : R.mesh_rt_m) : (extm ? R.mesh_m_x : R.mesh_m));
     bool extmt = extm && R.mesh_rt_m_t_x && R.mesh_rt_m_eq_t_x;
-    VkPipeline main_ot = rt && !wire ? (ext && R.mesh_rt_t_x ? R.mesh_rt_t_x : R.mesh_rt_t) : VK_NULL_HANDLE,
-               main_mt = rt && !wire ? (occl ? (extmt ? R.mesh_rt_m_eq_t_x : R.mesh_rt_m_eq_t) : (extmt ? R.mesh_rt_m_t_x : R.mesh_rt_m_t)) : VK_NULL_HANDLE;
+    main_ot = rt && !wire ? (ext && R.mesh_rt_t_x ? R.mesh_rt_t_x : R.mesh_rt_t) : VK_NULL_HANDLE,
+    main_mt = rt && !wire ? (occl ? (extmt ? R.mesh_rt_m_eq_t_x : R.mesh_rt_m_eq_t) : (extmt ? R.mesh_rt_m_t_x : R.mesh_rt_m_t)) : VK_NULL_HANDLE;
     if (R.den_on && rt && !wire) { // the denoiser's (den_rt: the same set, writing its targets)
         main_o = ext && R.den_rt[6] ? R.den_rt[6] : R.den_rt[0];
         main_m = occl ? (extm && R.den_rt[9] ? R.den_rt[9] : R.den_rt[2]) : (extm && R.den_rt[8] ? R.den_rt[8] : R.den_rt[1]);
         main_ot = ext && R.den_rt[7] ? R.den_rt[7] : R.den_rt[3];
         main_mt = occl ? (extmt && R.den_rt[11] ? R.den_rt[11] : R.den_rt[5]) : (extmt && R.den_rt[10] ? R.den_rt[10] : R.den_rt[4]);
     }
+    if (px) runx[0] = main_o, runx[1] = main_m, runx[2] = main_ot, runx[3] = main_mt;
+    }
+    // (2026-11-24) the big meshes' clusters and their micro triangles aren't in runs: the RE_EXT set while any material has it
+    VkPipeline cl_o = runx[0] ? runx[0] : main_o, cl_m = runx[0] ? runx[1] : main_m, cl_ot = runx[0] ? runx[2] : main_ot,
+               cl_mt = runx[0] ? runx[3] : main_mt;
 
     // the cull's draws, one per mesh and LOD: the early list (already in the depth), then the late one (newly seen)
+    memcpy(g_run_x, runx, sizeof g_run_x);
+    g_run_count[0] = g_run_count[1] = 0;
     draws += draw_runs(cmd, 0, main_o, main_m, main_ot, main_mt);
     push.pass = 3;
     vkCmdPushConstants(cmd, R.layout, PUSH_STAGES, 0, sizeof push, &push);
     if (occl) draws += draw_runs(cmd, (VkDeviceSize)R.ncmd * 2 * sizeof(VkDrawIndexedIndirectCommand), main_o, main_m, main_ot, main_mt);
+    memset(g_run_x, 0, sizeof g_run_x);
+    R.runs_plain = g_run_count[0], R.runs_ext = g_run_count[1];
     if (clusters_on || dag_on) { // the big meshes' seen clusters (the imported pipelines: the terminator's fix)
         push.pass = 6;
         vkCmdPushConstants(cmd, R.layout, PUSH_STAGES, 0, sizeof push, &push);
-        draws += cluster_draws(cmd, clusters_on ? (main_mt ? main_mt : main_m ? main_m : main_o) : VK_NULL_HANDLE,
-                               dag_on ? (main_ot ? main_ot : main_o) : VK_NULL_HANDLE, dag_on ? (main_ot ? main_ot : main_o) : VK_NULL_HANDLE);
+        draws += cluster_draws(cmd, clusters_on ? (cl_mt ? cl_mt : cl_m ? cl_m : cl_o) : VK_NULL_HANDLE,
+                               dag_on ? (cl_ot ? cl_ot : cl_o) : VK_NULL_HANDLE, dag_on ? (cl_ot ? cl_ot : cl_o) : VK_NULL_HANDLE);
         if (tess_on) { // (Q17) the micro triangles (each set the prepass drew)
             push.pass = 9;
             vkCmdPushConstants(cmd, R.layout, PUSH_STAGES, 0, sizeof push, &push);
-            VkPipeline tw = tess_twin(main_ot ? main_ot : main_o); // (Q22: its tess.vert copy)
+            VkPipeline tw = tess_twin(cl_ot ? cl_ot : cl_o); // (Q22: its tess.vert copy)
             draws += tess_draws(cmd, tw, 0, R.indices.buffer);
             if (occl && (fr->hiz_pad & 2u)) draws += tess_draws(cmd, tw, 1, R.indices.buffer);
         }
@@ -8221,7 +8828,10 @@ bool render_scene(VkCtx* vk, VkCommandBuffer cmd, World* w, const RenderView* vi
         R.vis_read_n[slot] = R.vis_read[slot].mapped ? n : 0;
     }
 
-    // 3. Selection mask
+    // 3. Selection mask (2026-11-25, item 17: skipped while nothing is selected and the mask was left cleared, read-only)
+    bool mask_hair = R.mask_sel && groom_any_selected(R.mask_world, R.mask_sel, R.mask_sel_n); // (a selected actor's Groom)
+    bool mask_run = R.mask_draws || R.mask_cn || mask_hair || !R.mask_idle;
+    if (mask_run) {
     gpu_transition(cmd, &R.mask, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, col_stage,
                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, true);
     VkRenderingAttachmentInfo ka = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
@@ -8246,24 +8856,42 @@ bool render_scene(VkCtx* vk, VkCommandBuffer cmd, World* w, const RenderView* vi
     ki.pColorAttachments = &ka;
     vkCmdBeginRendering(cmd, &ki);
     set_viewport(cmd, 0, 0, (float)out_w, (float)out_h);
-    if (R.mask_draws) {
+    if (R.mask_draws || R.mask_cn) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, R.mask_pipe);
+        { VkDescriptorSet sets_[2] = { R.set, mat_set() }; vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, R.layout, 0, 2, sets_, 0, NULL); } // (mask.frag: a Masked material's alpha)
         push.pass = 2;
-        vkCmdPushConstants(cmd, R.layout, PUSH_STAGES, 0, sizeof push, &push);
+        uint32_t pad_now = UINT32_MAX;
         for (uint32_t i = 0; i < R.mask_draws; i++) { // the selected slots drawn directly (mesh.vert, pass 2)
-            if (i == R.mask_draws - R.mask_hl) { // the highlight's: the id mask.frag keeps for it (pad 1)
+            if (R.mask_id[i] != pad_now) { // its id (an actor's parts share it; the highlight's: 1)
                 Push hp = push;
-                hp.pad = 1;
+                hp.pad = pad_now = R.mask_id[i];
                 vkCmdPushConstants(cmd, R.layout, PUSH_STAGES, 0, sizeof hp, &hp);
             }
             const Mesh* m = &R.meshes[R.mask_mesh[i]];
             vkCmdDrawIndexed(cmd, m->index_count, 1, m->first_index, m->vertex_offset, R.mask_slot[i]);
         }
+        // the crowds' parts: a draw each, its agents as instances (mesh.vert: the slot pad + instance x stride; mask.frag:
+        // the id's byte from the pass, bit 31 the crowd's mark)
+        for (uint32_t i = 0; i < R.mask_cn; i++) {
+            Push hp = push;
+            hp.pass = 0x80000000u | R.mask_c_id[i] << 16 | R.mask_c_stride[i];
+            hp.pad = R.mask_c_slot[i];
+            vkCmdPushConstants(cmd, R.layout, PUSH_STAGES, 0, sizeof hp, &hp);
+            uint32_t ms = R.mask_c_mesh[i] & 0xFFFFFFu, lod = R.mask_c_mesh[i] >> 24; // (its LOD for its distance)
+            const Mesh* m = lod ? &R.lods[ms][lod] : &R.meshes[ms];
+            vkCmdDrawIndexed(cmd, m->index_count, R.mask_c_count[i], m->first_index, m->vertex_offset, 0);
+        }
         draws++;
+    }
+    if (mask_hair) { // (2026-11-25, item 17) the selected actors' hair, inside their outline
+        { VkDescriptorSet sets_[2] = { R.set, mat_set() }; vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, R.layout, 0, 2, sets_, 0, NULL); }
+        draws += groom_draw_mask(cmd, &push, R.layout, R.mask_hair_pipe, R.mask_world, R.mask_sel, R.mask_sel_n);
     }
     vkCmdEndRendering(cmd);
     gpu_transition(cmd, &R.mask, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, col_stage, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, false);
+    }
+    R.mask_idle = !R.mask_draws && !R.mask_cn && !mask_hair;
     ts(cmd, slot, 5, ALL);
     gpu_mark(cmd, "exposicao");
 

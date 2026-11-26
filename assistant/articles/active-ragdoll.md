@@ -1,6 +1,6 @@
 id: active-ragdoll
 kind: recipe
-title: Ragdoll Ativo: física que segue a animação | Active Ragdoll: physics that follows the animation
+title: Ragdoll Ativo: física que segue a animação | Active Ragdoll: physics that follows the animation | Ragdoll Activo: física que sigue la animación
 keys: ragdoll ativo, active ragdoll, euphoria, ragdoll que segue a animacao, physical animation, animacao fisica, musculos, muscles, forca do ragdoll, ragdoll strength, equilibrio, balance, tropecar, stumble, cair, fall, levantar, get up, levantar sozinho, auto get up, reacao ao golpe, hit reaction, tiro no braco, soco, empurrao, push, perfil muscular, muscle profile, bebado, drunk, mole, limp, quadrupede, quadruped, animal, criatura, creature, set active ragdoll, apply hit reaction, get balance state, is balanced
 --- pt
 O **Ragdoll Ativo** é um ragdoll que continua tentando seguir a animação, como o Euphoria: todos os corpos são simulados, e cada junta tem um **músculo** que gira o corpo de volta para a pose animada. O personagem anda, fica parado e anima normalmente, mas um golpe, um empurrão ou uma queda o movem de verdade. Empurrado demais, ele **tropeça**, depois **cai**, e quando fica parado no chão **levanta sozinho**, misturando de volta para a animação onde caiu.
@@ -32,6 +32,24 @@ The **Active Ragdoll** is a ragdoll that keeps trying to follow the animation, l
 
 ```diagram steps
 Skeletal Mesh + Physics Asset | Simulate Physics: Active Ragdoll | Play | Apply Hit Reaction | falls and gets up by itself
+```
+```blueprint
+Event Begin Play -> Set Active Ragdoll ( Target = self, Enabled = true )
+Event AnyDamage -> Apply Hit Reaction ( Target = self, Bone Name = "spine_03", Impulse = Make Vector(600, 0, 100), Weaken = 0.2, Recover Time = 0.8 )
+Event Key B -> Set Muscle Profile ( Target = self, Profile = "Drunk" )
+```
+--- es
+El **Active Ragdoll** es un ragdoll que sigue intentando seguir la animación, como Euphoria: cada cuerpo se simula y cada articulación tiene un **músculo** que devuelve su cuerpo hacia la pose animada. El personaje camina, se queda quieto y juega como en la animación, pero un golpe, un empujón o una caída lo mueven de verdad. Si lo empujan demasiado fuerte **tropieza**, luego **cae**, y cuando queda quieto **se levanta solo**, mezclándose de nuevo con la animación en el lugar donde cayó.
+- **Activarlo**: en el Skeletal Mesh (con un Physics Asset), Detalles > Simulate Physics > **Active Ragdoll**, o el nodo **Set Active Ragdoll**.
+- **Cualquier esqueleto**: personas, cuadrúpedos, criaturas. Los pies (los extremos más bajos: dos pies, cuatro patas) se encuentran solos.
+- **Fuerza**: **Set Active Ragdoll Strength** (0 flojo, 1 normal, más de 1 rígido), en todo el cuerpo o desde un hueso hacia abajo (un brazo que se afloja), durante un tiempo de mezcla. En el Physics Asset cada cuerpo tiene un **Muscle** (las piernas y la columna sostienen más que los brazos y la cabeza).
+- **Perfiles**: **Set Muscle Profile**: Default, Relaxed, Tense, Protective (brazos firmes), Drunk (suelto, tambaleante), Limp.
+- **Golpes**: **Apply Hit Reaction** (hueso, impulso, Weaken, Recover Time): empuja ese cuerpo y debilita sus músculos y los de abajo, que vuelven con el tiempo. Un golpe fuerte lo derriba.
+- **Equilibrio**: **Get Balance State** (0 Balanced, 1 Stumbling, 2 Fallen, 3 Getting Up) e **Is Balanced**. **Get Up** se levanta ahora; **Set Auto Get Up** activa o desactiva el levantarse solo (desactivado: se queda en el suelo, un KO).
+- **Costo**: ~0,036 ms de CPU por personaje de pie (50 personajes: 1,8 ms en los hilos de la animación). Quietos en el suelo, duermen.
+
+```diagram steps
+Skeletal Mesh + Physics Asset | Simulate Physics: Active Ragdoll | Jugar | Apply Hit Reaction | cae y se levanta solo
 ```
 ```blueprint
 Event Begin Play -> Set Active Ragdoll ( Target = self, Enabled = true )

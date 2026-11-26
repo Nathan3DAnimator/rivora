@@ -12,7 +12,7 @@ A engine acumula luz entre quadros em três lugares: o **cache de superfície** 
 - **Medido** (RTX 3060, 1440p, Épico, um pilar a 2 m/s passando na frente de uma porta acesa): rastro no Fotorrealista 2,6-2,8% → 1,4-1,5%; no Realista 0,75-0,81% → 0,63-0,66%. Cintilação parada e fps iguais.
 - **Câmera andando:** a mudança "vai e volta" (o que pisca, não o que desliza) fica em 0,17% no Realista e 0,36% no Fotorrealista.
 - **Testes:** `ghost_realistic`, `ghost_medium`, `ghost_photoreal` (`--scene house_ghost --max-ghost`), `stable_pan` e `stable_pan_photoreal` (`--cam-move ... --max-pulses`). `tools/stability_bench.ps1` mede os quatro presets.
-Para comparar no jogo, desligue por Blueprint:
+Para comparar no jogo, desligue por Grafo:
 ```blueprint
 Event BeginPlay
   -> Set Console Variable ( Name = "r.TSR.Disocclusion", Value = 0 )
@@ -27,22 +27,22 @@ The engine accumulates light across frames in three places: the **surface cache*
 - **Measured** (RTX 3060, 1440p, Epic, a pillar at 2 m/s passing a lit doorway): the trail in Photoreal 2.6-2.8% → 1.4-1.5%; in Realistic 0.75-0.81% → 0.63-0.66%. Still flicker and fps unchanged.
 - **Moving camera:** the back-and-forth change (what flickers, not what slides) stays at 0.17% in Realistic and 0.36% in Photoreal.
 - **Tests:** `ghost_realistic`, `ghost_medium`, `ghost_photoreal` (`--scene house_ghost --max-ghost`), `stable_pan` and `stable_pan_photoreal` (`--cam-move ... --max-pulses`). `tools/stability_bench.ps1` measures the four presets.
-To compare in the game, turn it off from a Blueprint:
+To compare in the game, turn it off from a Graph:
 ```blueprint
 Event BeginPlay
   -> Set Console Variable ( Name = "r.TSR.Disocclusion", Value = 0 )
 ```
 --- es
 ```diagram steps
-Un actor se mueve y descubre el fondo | TSR: la profundidad del cuadro anterior dice que algo estaba delante | Se descarta el historial de lo que se fue | Denoiser: el píxel nuevo toma la luz de sus vecinos convergidos | Sin estela, sin hervir
+Un actor se mueve y descubre el fondo | TSR: la profundidad del fotograma anterior dice que algo estaba delante | Se descarta el historial de lo que se fue | Denoiser: el píxel nuevo toma la luz de sus vecinos ya convergidos | Sin estela, sin burbujeo
 ```
-El motor acumula luz entre cuadros en tres lugares: la **caché de superficie** y las **sondas** (su historial vive en el mundo, nunca en la pantalla), el **TSR** (antialiasing y escalado temporal) y el **denoiser** del estilo Fotorrealista. Los dos últimos guardan historial por píxel, y ahí nacen las estelas.
-- **Descartar Historial Descubierto** (Project Settings > Rendering, activado por defecto; consola `r.TSR.Disocclusion`): donde un actor en movimiento descubre el fondo, el TSR compara la profundidad del cuadro anterior con la de este punto; si había algo más cerca, el historial (el color de lo que se fue) se descarta y el píxel empieza desde la media 3x3 de este cuadro. Cuesta ~0,03 ms y solo corre mientras algún actor se mueve.
-- **Corrección del Historial del Denoiser** (Fotorrealista y Video-realista; consola `r.Denoiser.HistoryFix`): un píxel que el denoiser acaba de empezar toma la luz de sus vecinos en la misma superficie que ya tienen muchos cuadros (como el history fix de ReBLUR), en vez de uno o dos cuadros de ruido. Cuesta ~0,06 ms.
-- **Medido** (RTX 3060, 1440p, Épico, un pilar a 2 m/s pasando frente a una puerta iluminada): la estela en Fotorrealista 2,6-2,8% → 1,4-1,5%; en Realista 0,75-0,81% → 0,63-0,66%. Parpadeo quieto y fps iguales.
-- **Cámara moviéndose:** el cambio de "ida y vuelta" (lo que parpadea, no lo que se desliza) queda en 0,17% en Realista y 0,36% en Fotorrealista.
+El motor acumula luz entre fotogramas en tres lugares: la **caché de superficie** y las **sondas** (su historial vive en el mundo, nunca en la pantalla), el **TSR** (antialiasing temporal y upscaling) y el **denoiser** Fotorrealista. Los dos últimos guardan un historial por píxel, y ahí nacen las estelas.
+- **Reject Uncovered History** (Project Settings > Rendering, activado por defecto; consola `r.TSR.Disocclusion`): donde un actor en movimiento descubre el fondo, el TSR compara la profundidad del fotograma anterior con la de este punto; si algo más cercano estaba allí, se descarta el historial (el color de lo que se fue) y el píxel parte de la media 3x3 de este fotograma. Cuesta ~0.03 ms y solo se ejecuta mientras algún actor se mueve.
+- **Denoiser History Fix** (Fotorrealista y Videorrealista; consola `r.Denoiser.HistoryFix`): un píxel que el denoiser acaba de empezar toma la luz de sus vecinos de la misma superficie que ya acumulan muchos fotogramas (como el history fix de ReBLUR), en vez de uno o dos fotogramas de ruido. Cuesta ~0.06 ms.
+- **Medido** (RTX 3060, 1440p, Épico, un pilar a 2 m/s pasando por una puerta iluminada): la estela en Fotorrealista 2.6-2.8% → 1.4-1.5%; en Realista 0.75-0.81% → 0.63-0.66%. El parpadeo y los fps siguen igual.
+- **Cámara en movimiento:** el cambio de ida y vuelta (lo que parpadea, no lo que se desliza) se mantiene en 0.17% en Realista y 0.36% en Fotorrealista.
 - **Pruebas:** `ghost_realistic`, `ghost_medium`, `ghost_photoreal` (`--scene house_ghost --max-ghost`), `stable_pan` y `stable_pan_photoreal` (`--cam-move ... --max-pulses`). `tools/stability_bench.ps1` mide los cuatro presets.
-Para comparar en el juego, desactívalo desde un Blueprint:
+Para comparar en el juego, desactívalo desde un Grafo:
 ```blueprint
 Event BeginPlay
   -> Set Console Variable ( Name = "r.TSR.Disocclusion", Value = 0 )

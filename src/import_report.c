@@ -96,7 +96,23 @@ bool imprep_finish(const char* folder_disk, char* text, size_t text_cap) {
     imprep_counts(c);
     if (g_build.times[0]) printf("[RealEngine] Import times: %s\n", g_build.times);
     if (!folder_disk) return false;
-    snprintf(g_build.file, sizeof g_build.file, "%s/ImportReport.txt", folder_disk);
+    // (2026-11-24) not in the Content folder any more (it showed up in the Content Browser): the project's
+    // Saved/ImportReports/<source name>.txt, the project being what holds the Content folder the assets went to
+    char proj[600];
+    snprintf(proj, sizeof proj, "%s", folder_disk);
+    char* cut = NULL;
+    for (char* p = proj; *p; p++)
+        if ((*p == '/' || *p == '\\') && !_strnicmp(p + 1, "Content", 7) && (p[8] == 0 || p[8] == '/' || p[8] == '\\')) cut = p;
+    if (!cut) return false; // (not under a Content folder: no file; the window still shows the report)
+    *cut = 0;
+    char name[260];
+    snprintf(name, sizeof name, "%s", g_build.source[0] ? g_build.source : "Import");
+    char* dot = strrchr(name, '.');
+    if (dot && dot != name) *dot = 0;
+    char dir[700];
+    snprintf(dir, sizeof dir, "%s/Saved/ImportReports", proj);
+    re_make_dirs(dir);
+    snprintf(g_build.file, sizeof g_build.file, "%s/%s.txt", dir, name);
     FILE* f = re_fopen(g_build.file, "wb");
     if (!f) return false;
     fprintf(f, "%s: %s\n", TR("Import Report"), g_build.source);
@@ -116,6 +132,7 @@ bool imprep_finish(const char* folder_disk, char* text, size_t text_cap) {
         }
     }
     fclose(f);
+    printf("[RealEngine] Import report written: %s\n", g_build.file);
     // the lost ones also go to the log (the tests read them)
     for (int i = 0; i < g_build.n; i++)
         if (g_build.items[i].kind == IMPREP_LOST)

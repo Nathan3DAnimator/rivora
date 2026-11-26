@@ -1,6 +1,6 @@
 id: parallax
 kind: concept
-title: Parallax: relevo sem polígonos | Parallax: depth without polygons
+title: Parallax: relevo sem polígonos | Parallax: depth without polygons | Parallax occlusion
 keys: parallax, parallax occlusion, pom, relevo no material, relevo sem poligonos, pedras no material, relevo, profundidade, depth, displacement, deslocamento, height map, mapa de altura, altura, height, calcamento, cobblestones, tijolos, bricks, pedras, stones, rejunte, mortar, superficie afundada, sunken surface, microdeslocamento, micro displacement, geometry tessellation, tesselacao de geometria
 --- pt
 ```diagram steps
@@ -30,3 +30,17 @@ The surface looks sunk where the height is low
 - It costs a few more texture reads, only on that material's pixels (about 0.15 ms with half the screen covered at Epic).
 - **Limits**: the mesh's edge stays straight (no cut silhouette), and Masked or translucent materials don't do parallax.
 - **Real relief** (the silhouette changes): see Geometry Tessellation.
+--- es
+```diagram steps
+Material opaco: un nodo Displacement
+Height: la altura (0 abajo, 1 arriba), Scale: la profundidad
+Displacement a la entrada Displacement del Material Output
+La superficie parece hundida donde la altura es baja
+```
+La **parallax occlusion** hace que una superficie plana parezca tener profundidad: piedras, ladrillos, argamasa hundida. Cada píxel busca a lo largo de la vista dónde el rayo encuentra el mapa de alturas, y lee el material allí.
+- En el material (**Blend Mode Opaque**), conecta un nodo **Displacement** (Shift+A > Vector) a la entrada **Displacement** del **Material Output**. El **Height** del Displacement es la altura: 0 abajo, 1 arriba. **Scale** es la profundidad (1 = 5% de una repetición de UV).
+- Pon la misma altura en un **Bump** sobre la Normal: el parallax da la profundidad, el Bump la luz en los costados de las piedras.
+- El ejemplo **M_ParallaxCobble** hace adoquines con dos Voronoi (F2 − F1).
+- Cuesta unas lecturas de textura más, solo en los píxeles de ese material (cerca de 0,15 ms con la mitad de la pantalla cubierta en Épico).
+- **Límites**: el borde de la malla sigue recto (sin silueta recortada), y los materiales Masked o translúcidos no hacen parallax.
+- **Relieve real** (la silueta cambia): mira Geometry Tessellation.
